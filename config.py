@@ -1,0 +1,72 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+class Config:
+    # Exchange API settings
+    API_KEY = os.getenv("BINANCE_API_KEY", "")
+    SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "")
+    USE_TESTNET = os.getenv("USE_TESTNET", "True").lower() in ("true", "1", "yes")
+    
+    # Product Settings
+    SYMBOL = os.getenv("SYMBOL", "BTC/USDT")
+    TRADE_AMOUNT = float(os.getenv("TRADE_AMOUNT", "0.001"))
+    
+    # Risk parameters
+    RISK_PCT = float(os.getenv("RISK_PCT", "1.0"))
+    MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "5.0"))
+    MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "3"))
+    TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015"))
+    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "2.0"))
+    
+    # Strategy settings
+    HTF_TIMEFRAME = os.getenv("HTF_TIMEFRAME", "1h")
+    LTF_TIMEFRAME = os.getenv("LTF_TIMEFRAME", "5m")
+    SHORT_EMA = int(os.getenv("SHORT_EMA", "9"))
+    LONG_EMA = int(os.getenv("LONG_EMA", "21"))
+    TREND_EMA = int(os.getenv("TREND_EMA", "200"))
+    
+    RSI_PERIOD = int(os.getenv("RSI_PERIOD", "14"))
+    RSI_OVERSOLD = int(os.getenv("RSI_OVERSOLD", "30"))
+    RSI_OVERBOUGHT = int(os.getenv("RSI_OVERBOUGHT", "70"))
+    ATR_PERIOD = int(os.getenv("ATR_PERIOD", "14"))
+    
+    # Machine Learning configurations
+    ML_CONFIRMATION_THRESHOLD = float(os.getenv("ML_CONFIRMATION_THRESHOLD", "0.60"))
+    ML_TRAIN_BARS = int(os.getenv("ML_TRAIN_BARS", "2000"))
+    
+    # Test Mode config
+    TEST_MODE = os.getenv("TEST_MODE", "False").lower() in ("true", "1", "yes")
+    
+    # Telegram notifier settings
+    TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+    @classmethod
+    def validate(cls):
+        has_keys = True
+        if not cls.API_KEY or cls.API_KEY == "your_api_key_here":
+            print("WARNING: BINANCE_API_KEY is using default placeholder. Trading engine will run in DRY-RUN mode.")
+            has_keys = False
+        if not cls.SECRET_KEY or cls.SECRET_KEY == "your_api_secret_here":
+            print("WARNING: BINANCE_SECRET_KEY is using default placeholder. Trading engine will run in DRY-RUN mode.")
+            has_keys = False
+            
+        # Validate critical numeric ranges to prevent account-wipe settings
+        if cls.RISK_PCT > 5.0:
+            print(f"⚠️  WARNING: RISK_PCT={cls.RISK_PCT}% is dangerously high! Recommended: 0.5–2%. Capping at 5%.")
+            cls.RISK_PCT = 5.0
+        if cls.MIN_RISK_REWARD_RATIO < 1.0:
+            print(f"⚠️  WARNING: MIN_RISK_REWARD_RATIO={cls.MIN_RISK_REWARD_RATIO} is below 1.0. This means losses > gains by design. Minimum set to 1.5.")
+            cls.MIN_RISK_REWARD_RATIO = 1.5
+            
+        print("--- PrimeSignal Institutional Settings Loaded ---")
+        print(f"  Target Symbol       : {cls.SYMBOL}")
+        print(f"  Execution Frame     : {cls.LTF_TIMEFRAME} | Trend Frame: {cls.HTF_TIMEFRAME}")
+        print(f"  Account Risk Limit  : {cls.RISK_PCT}% | Max Daily Drawdown: {cls.MAX_DAILY_LOSS_PCT}%")
+        print(f"  SMC Indicators      : RSI ({cls.RSI_PERIOD}), ATR ({cls.ATR_PERIOD}), EMA ({cls.TREND_EMA})")
+        print(f"  ML Confidence Min   : {cls.ML_CONFIRMATION_THRESHOLD * 100:.1f}%")
+        print(f"  Binance Sandbox     : {cls.USE_TESTNET}")
+        print("-------------------------------------------------")
+        return has_keys

@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PrimeSignal Terminal Dashboard</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- TradingView Lightweight Charts -->
+    <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: #0b0f19;
+            color: #e2e8f0;
+        }
+        .terminal-font {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .glow-green {
+            box-shadow: 0 0 15px rgba(34, 197, 94, 0.2);
+            border-color: rgba(34, 197, 94, 0.4);
+        }
+        .glow-red {
+            box-shadow: 0 0 15px rgba(239, 68, 68, 0.2);
+            border-color: rgba(239, 68, 68, 0.4);
+        }
+        .glow-blue {
+            box-shadow: 0 0 15px rgba(59, 130, 246, 0.2);
+            border-color: rgba(59, 130, 246, 0.4);
+        }
+    </style>
+</head>
+<body class="p-6">
+    <div class="max-w-7xl mx-auto space-y-6">
+        
+        <!-- HEADER -->
+        <header class="flex justify-between items-center bg-[#111827] border border-[#1f2937] p-4 rounded-xl shadow-lg">
+            <div class="flex items-center space-x-3">
+                <div class="w-3 h-3 rounded-full bg-green-500 animate-pulse"></div>
+                <div>
+                    <h1 class="text-xl font-bold tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">PRIME_SIGNAL</h1>
+                    <p class="text-xs text-gray-500 font-semibold uppercase tracking-wider">Institutional Trading System</p>
+                </div>
+            </div>
+            <div class="flex space-x-4 items-center">
+                <div class="flex items-center bg-[#1f2937] text-gray-400 text-xs px-3 py-1.5 rounded-md font-semibold tracking-wide border border-[#374151] gap-2">
+                    <span>TARGET:</span>
+                    <select id="symbol-select" class="bg-[#111827] text-blue-400 font-bold border border-[#374151] rounded px-1.5 py-0.5 focus:outline-none cursor-pointer">
+                        <option value="BTC/USDT" selected>BTC/USDT</option>
+                        <option value="ETH/USDT">ETH/USDT</option>
+                        <option value="SOL/USDT">SOL/USDT</option>
+                        <option value="BNB/USDT">BNB/USDT</option>
+                        <option value="ADA/USDT">ADA/USDT</option>
+                        <option value="XRP/USDT">XRP/USDT</option>
+                        <option value="DOGE/USDT">DOGE/USDT</option>
+                        <option value="AVAX/USDT">AVAX/USDT</option>
+                        <option value="LINK/USDT">LINK/USDT</option>
+                        <option value="DOT/USDT">DOT/USDT</option>
+                    </select>
+                </div>
+                <span class="bg-[#1f2937] text-gray-400 text-xs px-3 py-1.5 rounded-md font-semibold tracking-wide border border-[#374151]">
+                    TIMEFRAME: <span id="header-tf" class="text-blue-400 font-bold">5M / 1H</span>
+                </span>
+                <span class="bg-[#22c55e]/10 text-green-400 text-xs px-3 py-1.5 rounded-md font-bold tracking-wide border border-green-500/20">
+                    STATUS: LIVE
+                </span>
+            </div>
+        </header>
+
+        <!-- STATS GRID -->
+        <section class="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <!-- Price Ticker -->
+            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between h-32 relative overflow-hidden">
+                <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Live Index Price</span>
+                <div class="flex items-baseline space-x-1 mt-2">
+                    <span id="price-display" class="text-3xl font-extrabold tracking-tight text-white terminal-font">0.00</span>
+                    <span class="text-xs text-gray-500 font-bold">USDT</span>
+                </div>
+                <div class="text-xs text-green-400 font-bold mt-1" id="price-change-pct">+0.00%</div>
+            </div>
+
+            <!-- Equity Panel -->
+            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between h-32">
+                <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Account Balance</span>
+                <div class="flex flex-col mt-2">
+                    <span id="balance-usdt" class="text-2xl font-bold text-white terminal-font">0.00 USDT</span>
+                    <span id="balance-base" class="text-sm text-gray-400 mt-1 terminal-font">0.000000 <span id="base-coin-label">BTC</span></span>
+                </div>
+            </div>
+
+            <!-- Drawdown & Risk -->
+            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between h-32">
+                <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Daily Drawdown Limit</span>
+                <div class="flex items-baseline space-x-1 mt-2">
+                    <span id="drawdown-display" class="text-3xl font-extrabold text-blue-400 terminal-font">0.00%</span>
+                    <span class="text-xs text-gray-500 font-bold">/ 5.0%</span>
+                </div>
+                <div class="w-full bg-[#1f2937] h-2 rounded-full mt-2">
+                    <div id="drawdown-bar" class="h-full rounded-full transition-all duration-500" style="width: 0%; background:#3b82f6"></div>
+                </div>
+            </div>
+
+            <!-- ML confirmation layer -->
+            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between h-32">
+                <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">ML Confirmation Bias</span>
+                <div class="flex items-baseline space-x-1 mt-2">
+                    <span id="ml-prob" class="text-3xl font-extrabold text-indigo-400 terminal-font">50.0%</span>
+                    <span class="text-xs text-gray-500 font-bold">Conf</span>
+                </div>
+                <div class="text-xs text-gray-400 mt-1" id="ml-status">Neutral market state</div>
+            </div>
+        </section>
+
+        <!-- MIDDLE SECTION (CHART & ACTIVE POSITION) -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Chart Card -->
+            <div class="bg-[#111827] border border-[#1f2937] p-4 rounded-xl lg:col-span-2 flex flex-col">
+                <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-3 mb-4">
+                    <h3 class="text-sm font-bold uppercase tracking-wider text-gray-400">TradingView Candle Chart</h3>
+                    <div class="flex flex-wrap items-center gap-2 text-xs">
+                        <!-- Indicators Checkbox Toggles -->
+                        <div class="flex items-center space-x-2 bg-[#171e2e] border border-[#1f2937] px-2 py-1 rounded-lg">
+                            <label class="flex items-center space-x-1.5 cursor-pointer">
+                                <input type="checkbox" id="toggle-ema9" checked class="w-3.5 h-3.5 rounded accent-[#38bdf8] cursor-pointer">
+                                <span class="text-[10px] text-[#38bdf8] font-bold">EMA 9</span>
+                            </label>
+                            <label class="flex items-center space-x-1.5 cursor-pointer border-l border-[#1f2937] pl-2">
+                                <input type="checkbox" id="toggle-ema21" checked class="w-3.5 h-3.5 rounded accent-[#f97316] cursor-pointer">
+                                <span class="text-[10px] text-[#f97316] font-bold">EMA 21</span>
+                            </label>
+                            <label class="flex items-center space-x-1.5 cursor-pointer border-l border-[#1f2937] pl-2">
+                                <input type="checkbox" id="toggle-vwap" checked class="w-3.5 h-3.5 rounded accent-[#c084fc] cursor-pointer">
+                                <span class="text-[10px] text-[#c084fc] font-bold">VWAP</span>
+                            </label>
+                        </div>
+                        <span class="bg-[#1f2937] text-gray-400 px-2.5 py-1 rounded border border-[#374151]" id="active-ob-indicator">No OB detected</span>
+                        <span class="bg-[#1f2937] text-gray-400 px-2.5 py-1 rounded border border-[#374151]" id="active-fvg-indicator">No FVG detected</span>
+                    </div>
+                </div>
+                <!-- Chart Container -->
+                <div class="relative w-full h-80 rounded-lg overflow-hidden bg-[#0e1320]">
+                    <div id="chart-container" class="w-full h-full"></div>
+                    <!-- Loading Overlay -->
+                    <div id="chart-loading" class="absolute inset-0 flex flex-col items-center justify-center bg-[#0e1320]/80 backdrop-blur-sm z-10 transition-opacity duration-300 hidden">
+                        <div class="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                        <span class="text-xs text-gray-400 font-semibold mt-3 uppercase tracking-wider">Syncing Market Data...</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Active Position Details -->
+            <div id="position-card" class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between">
+                <div>
+                    <h3 class="text-sm font-bold uppercase tracking-wider text-gray-400 mb-4">Active Position Status</h3>
+                    <div id="no-position-view" class="flex flex-col items-center justify-center h-48 border border-dashed border-[#1f2937] rounded-xl text-gray-500">
+                        <p class="text-sm font-semibold">NO ACTIVE POSITION</p>
+                        <p class="text-xs text-gray-600 mt-1">Bot is waiting for trade triggers...</p>
+                    </div>
+                    
+                    <div id="active-position-view" class="hidden space-y-4">
+                        <div class="flex justify-between items-center">
+                            <span class="text-xs font-semibold text-gray-500 uppercase">Direction</span>
+                            <span id="pos-side" class="text-xs px-2.5 py-1 font-bold rounded-md uppercase tracking-wider">HOLD</span>
+                        </div>
+                        <div class="flex justify-between items-center border-t border-[#1f2937] pt-2">
+                            <span class="text-xs font-semibold text-gray-500 uppercase">Entry Price</span>
+                            <span id="pos-entry" class="text-sm font-bold terminal-font text-white">0.00</span>
+                        </div>
+                        <div class="flex justify-between items-center border-t border-[#1f2937] pt-2">
+                            <span class="text-xs font-semibold text-gray-500 uppercase">Stop Loss</span>
+                            <span id="pos-sl" class="text-sm font-bold text-red-400 terminal-font">0.00</span>
+                        </div>
+                        <div class="flex justify-between items-center border-t border-[#1f2937] pt-2">
+                            <span class="text-xs font-semibold text-gray-500 uppercase">Take Profit</span>
+                            <span id="pos-tp" class="text-sm font-bold text-green-400 terminal-font">0.00</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="pnl-box" class="hidden border-t border-[#1f2937] pt-4 mt-4 flex flex-col">
+                    <span class="text-xs font-semibold text-gray-500 uppercase">Running PnL</span>
+                    <div class="flex justify-between items-baseline mt-1">
+                        <span id="pos-pnl-usdt" class="text-2xl font-extrabold terminal-font">0.00 USDT</span>
+                        <span id="pos-pnl-pct" class="text-sm font-bold">+0.00%</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- LOWER SECTION (LOGS TERMINAL & RECENT TRADES) -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Logs Terminal -->
+            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl lg:col-span-2">
+                <h3 class="text-sm font-bold uppercase tracking-wider text-gray-400 mb-3">Live Bot Operation Logs</h3>
+                <div id="logs-container" class="h-48 bg-[#070b13] border border-[#1f2937] p-4 rounded-xl terminal-font text-xs text-green-400 overflow-y-auto space-y-1.5 scrollbar-thin">
+                    <p>[00:00:00] Initializing dashboard client connection...</p>
+                </div>
+            </div>
+
+            <!-- Recent Trades List -->
+            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between">
+                <div>
+                    <h3 class="text-sm font-bold uppercase tracking-wider text-gray-400 mb-3">Recent Trades</h3>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-xs text-left">
+                            <thead>
+                                <tr class="text-gray-500 uppercase border-b border-[#1f2937] pb-2">
+                                    <th class="py-2">Side</th>
+                                    <th class="py-2">Exit Price</th>
+                                    <th class="py-2 text-right">Result</th>
+                                </tr>
+                            </thead>
+                            <tbody id="trades-tbody" class="divide-y divide-[#1f2937] text-gray-300">
+                                <tr>
+                                    <td class="py-2.5 text-gray-500" colspan="3">No trades executed yet.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- JS websocket & Chart logic -->
+    <script>
+        // Redirect browser console logs to the logs container for debugging
+        const originalLog = console.log;
+        const originalError = console.error;
+        const originalWarn = console.warn;
+        
+        let browserLogs = [];
+        let latestBackendLogs = [];
+
+        function appendBrowserLog(type, args) {
+            const timeStr = new Date().toTimeString().split(' ')[0];
+            const msg = `[${timeStr}] [BROWSER ${type.toUpperCase()}] ${Array.from(args).map(x => {
+                try {
+                    if (x instanceof Error) {
+                        return `${x.name}: ${x.message} | Stack: ${x.stack}`;
+                    }
+                    return typeof x === 'object' ? JSON.stringify(x) : String(x);
+                } catch(e) {
+                    return String(x);
+                }
+            }).join(' ')}`;
+            browserLogs.push({ text: msg, isBrowser: true, isError: type === 'error' });
+            if (browserLogs.length > 50) browserLogs.shift();
+            renderLogs();
+        }
+
+        console.log = function() {
+            originalLog.apply(console, arguments);
+            appendBrowserLog('info', arguments);
+        };
+        console.error = function() {
+            originalError.apply(console, arguments);
+            appendBrowserLog('error', arguments);
+        };
+        console.warn = function() {
+            originalWarn.apply(console, arguments);
+            appendBrowserLog('warn', arguments);
+        };
+
+        function renderLogs(backendLogs) {
+            if (backendLogs) {
+                latestBackendLogs = backendLogs.map(l => ({ text: l, isBrowser: false }));
+            }
+            const logsContainer = document.getElementById('logs-container');
+            if (!logsContainer) return;
+            
+            // Combine both backend and browser logs
+            const allLogs = [...latestBackendLogs, ...browserLogs];
+            
+            // Sort by the timestamp string [HH:MM:SS] at the beginning of each log line
+            allLogs.sort((a, b) => {
+                const timeA = a.text.substring(1, 9);
+                const timeB = b.text.substring(1, 9);
+                return timeA.localeCompare(timeB);
+            });
+            
+            logsContainer.innerHTML = '';
+            allLogs.forEach(log => {
+                const p = document.createElement('p');
+                p.innerText = log.text;
+                if (log.isBrowser) {
+                    p.className = log.isError ? 'text-red-400 font-bold' : 'text-cyan-400';
+                } else {
+                    p.className = 'text-green-400';
+                }
+                logsContainer.appendChild(p);
+            });
+            logsContainer.scrollTop = logsContainer.scrollHeight;
+        }
+
+        let chart = null;
+        let candleSeries = null;
+        let ema9Series = null;
+        let ema21Series = null;
+        let vwapSeries = null;
+        
+        let bullishObLine = null;
+        let bearishObLine = null;
+        let entryPriceLine = null;
+        let slPriceLine = null;
+        let tpPriceLine = null;
+
+        function calculateEMA(data, period) {
+            let ema = [];
+            if (data.length === 0) return ema;
+            
+            // Initial SMA
+            let sum = 0;
+            const size = Math.min(period, data.length);
+            for (let i = 0; i < size; i++) {
+                sum += data[i].close;
+            }
+            let sma = sum / size;
+            
+            const k = 2 / (period + 1);
+            
+            for (let i = 0; i < data.length; i++) {
+                if (i < period - 1) {
+                    ema.push({ time: data[i].time, value: data[i].close });
+                } else if (i === period - 1) {
+                    ema.push({ time: data[i].time, value: sma });
+                } else {
+                    const prevEma = ema[i - 1].value;
+                    const currentVal = (data[i].close - prevEma) * k + prevEma;
+                    ema.push({ time: data[i].time, value: currentVal });
+                }
+            }
+            return ema;
+        }
+
+        function calculateVWAP(data) {
+            // Daily session-reset VWAP (resets at midnight UTC)
+            let vwap = [];
+            if (data.length === 0) return vwap;
+
+            let cumVolume = 0;
+            let cumTypicalPriceVolume = 0;
+            let currentDay = null;
+
+            for (let i = 0; i < data.length; i++) {
+                const candle = data[i];
+                // Each candle.time is Unix seconds (UTC)
+                const candleDay = Math.floor(candle.time / 86400); // day bucket
+
+                if (candleDay !== currentDay) {
+                    // New day — reset session accumulators
+                    cumVolume = 0;
+                    cumTypicalPriceVolume = 0;
+                    currentDay = candleDay;
+                }
+
+                const typicalPrice = (candle.high + candle.low + candle.close) / 3;
+                const volume = candle.volume || 0;
+
+                cumVolume += volume;
+                cumTypicalPriceVolume += typicalPrice * volume;
+
+                const value = cumVolume > 0 ? (cumTypicalPriceVolume / cumVolume) : candle.close;
+                vwap.push({ time: candle.time, value: value });
+            }
+            return vwap;
+        }
+
+        function findClosestCandle(formattedHistory, targetTime) {
+            let bestMatch = null;
+            let minDiff = 999999;
+            for (let i = 0; i < formattedHistory.length; i++) {
+                const diff = Math.abs(formattedHistory[i].time - targetTime);
+                if (diff < minDiff && diff <= 300) { // 5 mins matching window
+                    minDiff = diff;
+                    bestMatch = formattedHistory[i];
+                }
+            }
+            return bestMatch;
+        }
+
+        function updateChartMarkers(formattedHistory, state) {
+            if (formattedHistory.length === 0) return;
+            const markers = [];
+            const offsetSeconds = -new Date().getTimezoneOffset() * 60;
+            
+            // 1. Plot historical trades
+            if (state.trades && state.trades.length > 0) {
+                state.trades.forEach(trade => {
+                    if (trade.entry_time) {
+                        const entryUnix = Math.floor(trade.entry_time / 1000) + offsetSeconds;
+                        const match = findClosestCandle(formattedHistory, entryUnix);
+                        if (match) {
+                            markers.push({
+                                time: match.time,
+                                position: 'belowBar',
+                                color: '#10b981',
+                                shape: 'arrowUp',
+                                text: 'Buy ' + (trade.side === 'LONG' ? 'Long' : 'Short Exit')
+                            });
+                        }
+                    }
+                    if (trade.exit_time) {
+                        const exitUnix = Math.floor(trade.exit_time / 1000) + offsetSeconds;
+                        const match = findClosestCandle(formattedHistory, exitUnix);
+                        if (match) {
+                            markers.push({
+                                time: match.time,
+                                position: 'aboveBar',
+                                color: '#ef4444',
+                                shape: 'arrowDown',
+                                text: 'Exit ' + trade.side
+                            });
+                        }
+                    }
+                });
+            }
+            
+            // 2. Plot active trade entry marker
+            if (state.in_position && state.entry_time) {
+                const entryUnix = Math.floor(state.entry_time / 1000) + offsetSeconds;
+                const match = findClosestCandle(formattedHistory, entryUnix);
+                if (match) {
+                    markers.push({
+                        time: match.time,
+                        position: state.position_side === 'LONG' ? 'belowBar' : 'aboveBar',
+                        color: '#3b82f6',
+                        shape: 'arrowUp',
+                        text: 'Active ' + state.position_side
+                    });
+                }
+            }
+            
+            // 3. Plot ML Bias Forecast Marker
+            const latestCandle = formattedHistory[formattedHistory.length - 1];
+            const mlVal = (state.ml_confidence || 0.5) * 100;
+            if (mlVal > 60) {
+                markers.push({
+                    time: latestCandle.time,
+                    position: 'aboveBar',
+                    color: '#22c55e',
+                    shape: 'arrowUp',
+                    text: 'ML: BUY BIAS'
+                });
+            } else if (mlVal < 40) {
+                markers.push({
+                    time: latestCandle.time,
+                    position: 'belowBar',
+                    color: '#ef4444',
+                    shape: 'arrowDown',
+                    text: 'ML: SELL BIAS'
+                });
+            }
+            
+            markers.sort((a, b) => a.time - b.time);
+            
+            // Dedup markers
+            const uniqueMarkers = [];
+            const seenTimes = new Set();
+            for (let i = markers.length - 1; i >= 0; i--) {
+                if (!seenTimes.has(markers[i].time)) {
+                    uniqueMarkers.push(markers[i]);
+                    seenTimes.add(markers[i].time);
+                }
+            }
+            uniqueMarkers.reverse();
+            candleSeries.setMarkers(uniqueMarkers);
+        }
+
+        // --- 1. INITIALIZE TRADINGVIEW CHART ---
+        try {
+            if (typeof LightweightCharts !== 'undefined') {
+                const chartElement = document.getElementById('chart-container');
+                chart = LightweightCharts.createChart(chartElement, {
+                    layout: {
+                        background: { type: LightweightCharts.ColorType.Solid, color: '#0e1320' },
+                        textColor: '#94a3b8',
+                    },
+                    grid: {
+                        verticalLines: { color: '#1f2937' },
+                        horizontalLines: { color: '#1f2937' },
+                    },
+                    leftPriceScale: {
+                        visible: true,
+                        borderColor: '#374151',
+                    },
+                    rightPriceScale: {
+                        visible: false,
+                    },
+                    timeScale: {
+                        borderColor: '#374151',
+                        timeVisible: true,
+                    },
+                });
+
+                candleSeries = chart.addCandlestickSeries({
+                    priceScaleId: 'left',
+                    upColor: '#22c55e',
+                    downColor: '#ef4444',
+                    borderDownColor: '#ef4444',
+                    borderUpColor: '#22c55e',
+                    wickDownColor: '#ef4444',
+                    wickUpColor: '#22c55e',
+                });
+
+                ema9Series = chart.addLineSeries({
+                    priceScaleId: 'left',
+                    color: '#38bdf8', // Cyan
+                    lineWidth: 1.5,
+                    title: 'EMA 9',
+                    lastValueVisible: false, // Hide label from price scale axis
+                });
+
+                ema21Series = chart.addLineSeries({
+                    priceScaleId: 'left',
+                    color: '#f97316', // Orange
+                    lineWidth: 1.5,
+                    title: 'EMA 21',
+                    lastValueVisible: false, // Hide label from price scale axis
+                });
+
+                vwapSeries = chart.addLineSeries({
+                    priceScaleId: 'left',
+                    color: '#c084fc', // Purple/Violet (TradingView Standard)
+                    lineWidth: 1.5,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    title: 'VWAP',
+                    lastValueVisible: false, // Hide label from price scale axis
+                });
+
+                // Toggle visibility event listeners
+                document.getElementById('toggle-ema9').addEventListener('change', (e) => {
+                    ema9Series.applyOptions({ visible: e.target.checked });
+                });
+                document.getElementById('toggle-ema21').addEventListener('change', (e) => {
+                    ema21Series.applyOptions({ visible: e.target.checked });
+                });
+                document.getElementById('toggle-vwap').addEventListener('change', (e) => {
+                    vwapSeries.applyOptions({ visible: e.target.checked });
+                });
+
+                // Handle window resizing
+                window.addEventListener('resize', () => {
+                    chart.resize(chartElement.clientWidth, 320);
+                });
+                chart.resize(chartElement.clientWidth, 320);
+                console.log("TradingView Lightweight Chart initialized successfully.");
+            } else {
+                console.warn("LightweightCharts is not defined. Chart rendering skipped.");
+                document.getElementById('chart-container').innerHTML = `
+                    <div class="flex items-center justify-center h-full text-gray-500 text-xs">
+                        Chart disabled (Unable to load LightweightCharts CDN)
+                    </div>
+                `;
+            }
+        } catch (e) {
+            console.error("Failed to initialize TradingView Chart:", e);
+        }
+
+        // --- 2. WEBSOCKET CONNECTION ---
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
+        
+        let ws;
+        let historyLoaded = false;
+        let currentChartSymbol = "";
+        
+        function connectWS() {
+            try {
+                ws = new WebSocket(wsUrl);
+                
+                ws.onopen = () => {
+                    console.log("WebSocket connected!");
+                    historyLoaded = false;
+                    const chartLoadingEl = document.getElementById('chart-loading');
+                    if (chartLoadingEl) chartLoadingEl.classList.remove('hidden');
+                };
+                
+                ws.onmessage = (event) => {
+                    try {
+                        if (event.data === 'pong') {
+                            return;
+                        }
+                        
+                        const state = JSON.parse(event.data);
+                        
+                        // Sync dropdown value if it doesn't match state.symbol
+                        const symbolSelect = document.getElementById('symbol-select');
+                        if (symbolSelect && state.symbol && symbolSelect.value !== state.symbol) {
+                            symbolSelect.value = state.symbol;
+                        }
+                        
+                        // Sync timeframe label dynamically
+                        const headerTf = document.getElementById('header-tf');
+                        if (headerTf && state.ltf_timeframe && state.htf_timeframe) {
+                            headerTf.innerText = `${state.ltf_timeframe.toUpperCase()} / ${state.htf_timeframe.toUpperCase()}`;
+                        }
+                        
+                        // Check if symbol has changed
+                        if (state.symbol && state.symbol !== currentChartSymbol) {
+                            console.log(`Symbol change detected from ${currentChartSymbol} to ${state.symbol}. Resetting chart...`);
+                            currentChartSymbol = state.symbol;
+                            historyLoaded = false;
+                        }
+                        
+                        // Load or update chart data
+                        if (state.chart_history && state.chart_history.length > 0 && candleSeries) {
+                            try {
+                                const offsetSeconds = -new Date().getTimezoneOffset() * 60;
+                                const formattedHistory = state.chart_history.map(c => ({
+                                    time: Math.floor(c[0] / 1000) + offsetSeconds,
+                                    open: c[1],
+                                    high: c[2],
+                                    low: c[3],
+                                    close: c[4],
+                                    volume: c[5]
+                                }));
+                                
+                                if (!historyLoaded) {
+                                    // --- FULL HISTORY LOAD (on symbol change or first connect) ---
+                                    candleSeries.setData([]);
+                                    if (ema9Series) ema9Series.setData([]);
+                                    if (ema21Series) ema21Series.setData([]);
+                                    if (vwapSeries) vwapSeries.setData([]);
+
+                                    candleSeries.setData(formattedHistory);
+
+                                    // Calculate and load all indicator lines on initial load
+                                    if (ema9Series && ema21Series && vwapSeries) {
+                                        ema9Series.setData(calculateEMA(formattedHistory, 9));
+                                        ema21Series.setData(calculateEMA(formattedHistory, 21));
+                                        vwapSeries.setData(calculateVWAP(formattedHistory));
+                                    }
+
+                                    historyLoaded = true;
+                                    const chartLoadingEl = document.getElementById('chart-loading');
+                                    if (chartLoadingEl) chartLoadingEl.classList.add('hidden');
+                                    chart.timeScale().fitContent(); // Auto-center candles
+                                    console.log("Historical chart data loaded. Bars: " + formattedHistory.length);
+                                } else {
+                                    // --- LIVE UPDATE: only update last candle and last indicator point ---
+                                    const lastCandle = formattedHistory[formattedHistory.length - 1];
+                                    candleSeries.update(lastCandle);
+
+                                    // Efficiently update only the last EMA/VWAP point
+                                    if (ema9Series && ema21Series && vwapSeries && formattedHistory.length >= 21) {
+                                        const ema9Data = calculateEMA(formattedHistory, 9);
+                                        const ema21Data = calculateEMA(formattedHistory, 21);
+                                        const vwapData = calculateVWAP(formattedHistory);
+                                        if (ema9Data.length) ema9Series.update(ema9Data[ema9Data.length - 1]);
+                                        if (ema21Data.length) ema21Series.update(ema21Data[ema21Data.length - 1]);
+                                        if (vwapData.length) vwapSeries.update(vwapData[vwapData.length - 1]);
+                                    }
+                                }
+                                
+                                // Update Markers (Buy / Sell Trades and ML Bias Forecast)
+                                updateChartMarkers(formattedHistory, state);
+                                
+                                // --- UPDATE SUPPORT, RESISTANCE AND ACTIVE TRADE LEVELS ---
+                                const bullishOb = state.active_bullish_ob_level;
+                                const bearishOb = state.active_bearish_ob_level;
+                                
+                                // Clear existing lines first
+                                if (bullishObLine) { candleSeries.removePriceLine(bullishObLine); bullishObLine = null; }
+                                if (bearishObLine) { candleSeries.removePriceLine(bearishObLine); bearishObLine = null; }
+                                if (entryPriceLine) { candleSeries.removePriceLine(entryPriceLine); entryPriceLine = null; }
+                                if (slPriceLine) { candleSeries.removePriceLine(slPriceLine); slPriceLine = null; }
+                                if (tpPriceLine) { candleSeries.removePriceLine(tpPriceLine); tpPriceLine = null; }
+                                
+                                // Draw Active Support
+                                if (bullishOb && bullishOb > 0) {
+                                    bullishObLine = candleSeries.createPriceLine({
+                                        price: bullishOb,
+                                        color: '#10b981', // bright emerald green
+                                        lineWidth: 2,
+                                        lineStyle: LightweightCharts.LineStyle.Dashed,
+                                        axisLabelVisible: true,
+                                        title: 'Support (Bullish OB)',
+                                    });
+                                }
+                                // Draw Active Resistance
+                                if (bearishOb && bearishOb > 0) {
+                                    bearishObLine = candleSeries.createPriceLine({
+                                        price: bearishOb,
+                                        color: '#ef4444', // red
+                                        lineWidth: 2,
+                                        lineStyle: LightweightCharts.LineStyle.Dashed,
+                                        axisLabelVisible: true,
+                                        title: 'Resistance (Bearish OB)',
+                                    });
+                                }
+                                
+                                // Draw active position lines
+                                if (state.in_position) {
+                                    entryPriceLine = candleSeries.createPriceLine({
+                                        price: state.entry_price,
+                                        color: '#3b82f6', // blue
+                                        lineWidth: 2,
+                                        lineStyle: LightweightCharts.LineStyle.Solid,
+                                        axisLabelVisible: true,
+                                        title: 'Entry: ' + state.position_side,
+                                    });
+                                    slPriceLine = candleSeries.createPriceLine({
+                                        price: state.stop_loss,
+                                        color: '#f87171', // soft red
+                                        lineWidth: 2,
+                                        lineStyle: LightweightCharts.LineStyle.Dotted,
+                                        axisLabelVisible: true,
+                                        title: 'Stop Loss (SL)',
+                                    });
+                                    tpPriceLine = candleSeries.createPriceLine({
+                                        price: state.take_profit,
+                                        color: '#34d399', // soft green
+                                        lineWidth: 2,
+                                        lineStyle: LightweightCharts.LineStyle.Dotted,
+                                        axisLabelVisible: true,
+                                        title: 'Take Profit (TP)',
+                                    });
+                                }
+                            } catch (err) {
+                                console.error("Error updating chart data:", err);
+                            }
+                        }
+                        
+                        // Update stats
+                        // Price display with live change color
+                        const priceEl = document.getElementById('price-display');
+                        const newPrice = state.latest_price || 0;
+                        const prevPrice = parseFloat(priceEl.dataset.prev || newPrice);
+                        priceEl.innerText = newPrice.toFixed(2);
+                        priceEl.style.color = newPrice > prevPrice ? '#22c55e' : newPrice < prevPrice ? '#ef4444' : '#ffffff';
+                        priceEl.dataset.prev = newPrice;
+
+                        // Price change percentage vs prev tick
+                        const priceDiffPct = prevPrice > 0 ? ((newPrice - prevPrice) / prevPrice * 100) : 0;
+                        const priceChangEl = document.getElementById('price-change-pct');
+                        if (priceChangEl) {
+                            priceChangEl.innerText = `${priceDiffPct >= 0 ? '+' : ''}${priceDiffPct.toFixed(3)}%`;
+                            priceChangEl.className = `text-xs font-bold mt-1 ${priceDiffPct >= 0 ? 'text-green-400' : 'text-red-400'}`;
+                        }
+
+                        // Balance display — dynamic base coin name from symbol
+                        document.getElementById('balance-usdt').innerText = `${state.balance_usdt ? state.balance_usdt.toFixed(2) : "0.00"} USDT`;
+                        const baseCoin = state.symbol ? state.symbol.split('/')[0] : 'BTC';
+                        const baseCoinLabel = document.getElementById('base-coin-label');
+                        if (baseCoinLabel) baseCoinLabel.innerText = baseCoin;
+                        const baseBalEl = document.getElementById('balance-base');
+                        if (baseBalEl) {
+                            const spans = baseBalEl.querySelectorAll('span');
+                            if (spans.length === 0) {
+                                baseBalEl.childNodes[0].textContent = `${state.balance_base ? state.balance_base.toFixed(6) : "0.000000"} `;
+                            } else {
+                                baseBalEl.firstChild.textContent = `${state.balance_base ? state.balance_base.toFixed(6) : "0.000000"} `;
+                            }
+                        }
+
+                        // Drawdown display with danger color when > 50% of limit
+                        const dd = state.daily_drawdown_pct || 0.0;
+                        const ddEl = document.getElementById('drawdown-display');
+                        ddEl.innerText = `${dd.toFixed(2)}%`;
+                        const ddBarWidth = Math.min(Math.abs(dd) / 5.0 * 100, 100);
+                        const ddBar = document.getElementById('drawdown-bar');
+                        ddBar.style.width = `${ddBarWidth}%`;
+                        // Color: safe=blue, warning=orange, danger=red
+                        if (ddBarWidth > 75) {
+                            ddBar.style.background = '#ef4444'; // red — danger
+                            ddEl.className = 'text-3xl font-extrabold text-red-400 terminal-font';
+                        } else if (ddBarWidth > 50) {
+                            ddBar.style.background = '#f97316'; // orange — warning
+                            ddEl.className = 'text-3xl font-extrabold text-orange-400 terminal-font';
+                        } else {
+                            ddBar.style.background = '#3b82f6'; // blue — safe
+                            ddEl.className = 'text-3xl font-extrabold text-blue-400 terminal-font';
+                        }
+                        
+                        // ML display
+                        const mlVal = (state.ml_confidence || 0.5) * 100;
+                        document.getElementById('ml-prob').innerText = `${mlVal.toFixed(1)}%`;
+                        const mlStatus = document.getElementById('ml-status');
+                        if (mlVal > 60) {
+                            mlStatus.innerText = "Strong Bullish Bias";
+                            mlStatus.className = "text-xs text-green-400 mt-1 font-semibold";
+                        } else if (mlVal < 40) {
+                            mlStatus.innerText = "Strong Bearish Bias";
+                            mlStatus.className = "text-xs text-red-400 mt-1 font-semibold";
+                        } else {
+                            mlStatus.innerText = "Neutral market state";
+                            mlStatus.className = "text-xs text-gray-500 mt-1";
+                        }
+                        
+                        // Structure indicators
+                        document.getElementById('active-ob-indicator').innerText = state.active_ob || "No OB detected";
+                        document.getElementById('active-fvg-indicator').innerText = state.active_fvg || "No FVG detected";
+                        
+                        // Update logs
+                        if (state.logs) {
+                            renderLogs(state.logs);
+                        }
+                        
+                        // Update active position
+                        const posCard = document.getElementById('position-card');
+                        const noPosView = document.getElementById('no-position-view');
+                        const posView = document.getElementById('active-position-view');
+                        const pnlBox = document.getElementById('pnl-box');
+                        
+                        if (state.in_position) {
+                            noPosView.classList.add('hidden');
+                            posView.classList.remove('hidden');
+                            pnlBox.classList.remove('hidden');
+                            
+                            const side = state.position_side;
+                            const sideEl = document.getElementById('pos-side');
+                            if (sideEl) sideEl.innerText = side;
+                            
+                            if (side === "LONG") {
+                                if (sideEl) sideEl.className = "text-xs px-2.5 py-1 font-bold rounded-md uppercase tracking-wider bg-green-500/10 text-green-400 border border-green-500/20";
+                                if (posCard) posCard.className = "bg-[#111827] border p-5 rounded-xl flex flex-col justify-between glow-green";
+                            } else {
+                                if (sideEl) sideEl.className = "text-xs px-2.5 py-1 font-bold rounded-md uppercase tracking-wider bg-red-500/10 text-red-400 border border-red-500/20";
+                                if (posCard) posCard.className = "bg-[#111827] border p-5 rounded-xl flex flex-col justify-between glow-red";
+                            }
+                            
+                            document.getElementById('pos-entry').innerText = state.entry_price ? state.entry_price.toFixed(2) : "0.00";
+                            document.getElementById('pos-sl').innerText = state.stop_loss ? state.stop_loss.toFixed(2) : "0.00";
+                            document.getElementById('pos-tp').innerText = state.take_profit ? state.take_profit.toFixed(2) : "0.00";
+                            
+                            const pnlUsdt = state.current_pnl_usdt || 0.0;
+                            const pnlPct = state.current_pnl_pct || 0.0;
+                            
+                            const pnlUsdtEl = document.getElementById('pos-pnl-usdt');
+                            const pnlPctEl = document.getElementById('pos-pnl-pct');
+                            
+                            if (pnlUsdtEl) pnlUsdtEl.innerText = `${pnlUsdt >= 0 ? '+' : ''}${pnlUsdt.toFixed(2)} USDT`;
+                            if (pnlPctEl) pnlPctEl.innerText = `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`;
+                            
+                            if (pnlUsdt >= 0) {
+                                if (pnlUsdtEl) pnlUsdtEl.className = "text-2xl font-extrabold terminal-font text-green-400";
+                                if (pnlPctEl) pnlPctEl.className = "text-sm font-bold text-green-400";
+                            } else {
+                                if (pnlUsdtEl) pnlUsdtEl.className = "text-2xl font-extrabold terminal-font text-red-400";
+                                if (pnlPctEl) pnlPctEl.className = "text-sm font-bold text-red-400";
+                            }
+                        } else {
+                            if (noPosView) noPosView.classList.remove('hidden');
+                            if (posView) posView.classList.add('hidden');
+                            if (pnlBox) pnlBox.classList.add('hidden');
+                            if (posCard) posCard.className = "bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between";
+                        }
+                        
+                        // Update trades table
+                        const tbody = document.getElementById('trades-tbody');
+                        if (tbody) {
+                            if (state.trades && state.trades.length > 0) {
+                                tbody.innerHTML = '';
+                                state.trades.forEach(trade => {
+                                    const tr = document.createElement('tr');
+                                    
+                                    const sideTd = document.createElement('td');
+                                    sideTd.className = `py-2.5 font-bold ${trade.side === 'LONG' ? 'text-green-400' : 'text-red-400'}`;
+                                    sideTd.innerText = trade.side;
+                                    
+                                    const priceTd = document.createElement('td');
+                                    priceTd.className = "py-2.5 terminal-font";
+                                    priceTd.innerText = trade.exit_price ? trade.exit_price.toFixed(2) : "0.00";
+                                    
+                                    const pnlTd = document.createElement('td');
+                                    pnlTd.className = `py-2.5 text-right font-bold terminal-font ${trade.pnl_usdt >= 0 ? 'text-green-400' : 'text-red-400'}`;
+                                    pnlTd.innerText = `${trade.pnl_pct >= 0 ? '+' : ''}${trade.pnl_pct.toFixed(2)}%`;
+                                    
+                                    tr.appendChild(sideTd);
+                                    tr.appendChild(priceTd);
+                                    tr.appendChild(pnlTd);
+                                    tbody.appendChild(tr);
+                                });
+                            } else {
+                                tbody.innerHTML = '<tr><td class="py-2.5 text-gray-500" colspan="3">No trades executed yet.</td></tr>';
+                            }
+                        }
+                    } catch (e) {
+                        console.error("Error parsing WebSocket message content:", e);
+                    }
+                };
+                
+                ws.onclose = () => {
+                    console.log("WebSocket closed. Attempting reconnect...");
+                    setTimeout(connectWS, 2000);
+                };
+                
+                ws.onerror = (err) => {
+                    console.error("WebSocket error:", err);
+                    ws.close();
+                };
+            } catch (e) {
+                console.error("Failed to connect to WebSocket:", e);
+            }
+        }
+        
+        // --- 3. HANDLE SYMBOL SELECTION CHANGES ---
+        document.getElementById('symbol-select').addEventListener('change', async (e) => {
+            const newSymbol = e.target.value;
+            console.log("Requesting symbol change to: " + newSymbol);
+            const chartLoadingEl = document.getElementById('chart-loading');
+            if (chartLoadingEl) chartLoadingEl.classList.remove('hidden');
+            try {
+                const response = await fetch('/api/change_symbol', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol: newSymbol })
+                });
+                if (!response.ok) {
+                    if (chartLoadingEl) chartLoadingEl.classList.add('hidden');
+                    alert(`Failed to request symbol change: Server returned status ${response.status} (${response.statusText}).\n\nPlease make sure you closed and restarted the bot in your terminal window.`);
+                    return;
+                }
+                const res = await response.json();
+                if (res.status === 'success') {
+                    console.log("Symbol change successfully requested.");
+                    historyLoaded = false; // Reset to allow full chart reloading
+                } else {
+                    if (chartLoadingEl) chartLoadingEl.classList.add('hidden');
+                    alert("Failed to request symbol change: " + (res.message || "Unknown error"));
+                }
+            } catch (err) {
+                if (chartLoadingEl) chartLoadingEl.classList.add('hidden');
+                console.error("Error sending symbol change request:", err);
+            }
+        });
+        
+        connectWS();
+        
+        // Ping to keep connection active
+        setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                try {
+                    ws.send("ping");
+                } catch (e) {
+                    console.error("Error sending ping:", e);
+                }
+            }
+        }, 15000);
+    </script>
+</body>
+</html>

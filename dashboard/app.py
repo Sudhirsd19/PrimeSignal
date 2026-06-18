@@ -1,0 +1,177 @@
+import asyncio
+import json
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+from starlette.requests import Request
+from pydantic import BaseModel
+from config import Config
+import os
+
+app = FastAPI(title="PrimeSignal Trading Dashboard")
+
+# Templates path setup
+templates_dir = os.path.join(os.path.dirname(__file__), "templates")
+templates = Jinja2Templates(directory=templates_dir)
+
+# Request schema for changing symbols
+class SymbolRequest(BaseModel):
+    symbol: str
+
+# Global Memory State Store
+class DashboardState:
+    latest_price = 0.0
+    balance_usdt = 10000.0
+    balance_base = 0.0
+    in_position = False
+    position_side = "HOLD"
+    entry_price = 0.0
+    stop_loss = 0.0
+    take_profit = 0.0
+    current_pnl_usdt = 0.0
+    current_pnl_pct = 0.0
+    
+    trades = []
+    logs = []
+    
+    daily_drawdown_pct = 0.0
+    ml_confidence = 0.5
+    active_ob = "No OB"
+    active_fvg = "No FVG"
+    active_ob_level = 0.0
+    active_ob_type = "NONE"
+    active_bullish_ob_level = 0.0
+    active_bearish_ob_level = 0.0
+    chart_history = []
+    
+    symbol_change_requested = None # Holds new symbol if requested by UI
+    active_websockets = set()
+
+@app.get("/", response_class=HTMLResponse)
+async def get_dashboard(request: Request):
+    """Renders the main terminal dashboard page."""
+    return templates.TemplateResponse(request, "index.html", {})
+
+@app.post("/api/change_symbol")
+async def change_symbol(req: SymbolRequest):
+    symbol = req.symbol.strip().upper()
+    if "/" not in symbol:
+        return {"status": "error", "message": "Invalid symbol. Use format e.g. BTC/USDT"}
+    
+    DashboardState.symbol_change_requested = symbol
+    return {"status": "success", "message": f"Symbol change to {symbol} requested successfully."}
+
+@app.get("/api/state")
+async def get_state():
+    """Rest API endpoint for current state."""
+    return {
+        "latest_price": DashboardState.latest_price,
+        "balance_usdt": DashboardState.balance_usdt,
+        "balance_base": DashboardState.balance_base,
+        "in_position": DashboardState.in_position,
+        "position_side": DashboardState.position_side,
+        "entry_price": DashboardState.entry_price,
+        "stop_loss": DashboardState.stop_loss,
+        "take_profit": DashboardState.take_profit,
+        "current_pnl_usdt": DashboardState.current_pnl_usdt,
+        "current_pnl_pct": DashboardState.current_pnl_pct,
+        "daily_drawdown_pct": DashboardState.daily_drawdown_pct,
+        "ml_confidence": DashboardState.ml_confidence,
+        "active_ob": DashboardState.active_ob,
+        "active_fvg": DashboardState.active_fvg,
+        "active_ob_level": DashboardState.active_ob_level,
+        "active_ob_type": DashboardState.active_ob_type,
+        "symbol": Config.SYMBOL,
+        "trades_count": len(DashboardState.trades)
+    }
+
+@app.get("/api/trades")
+async def get_trades():
+    return DashboardState.trades
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    DashboardState.active_websockets.add(websocket)
+    try:
+        # Send initial state immediately
+        await send_state_to_ws(websocket)
+        
+        while True:
+            # Keep connection alive, listen for any client messages
+            data = await websocket.receive_text()
+            # Respond to ping
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        DashboardState.active_websockets.remove(websocket)
+    except Exception:
+        if websocket in DashboardState.active_websockets:
+            DashboardState.active_websockets.remove(websocket)
+
+async def send_state_to_ws(websocket):
+    """Sends current state dict as JSON to a specific WebSocket client."""
+    state_payload = {
+        "latest_price": DashboardState.latest_price,
+        "balance_usdt": DashboardState.balance_usdt,
+        "balance_base": DashboardState.balance_base,
+        "in_position": DashboardState.in_position,
+        "position_side": DashboardState.position_side,
+        "entry_price": DashboardState.entry_price,
+        "stop_loss": DashboardState.stop_loss,
+        "take_profit": DashboardState.take_profit,
+        "current_pnl_usdt": DashboardState.current_pnl_usdt,
+        "current_pnl_pct": DashboardState.current_pnl_pct,
+        "daily_drawdown_pct": DashboardState.daily_drawdown_pct,
+        "ml_confidence": DashboardState.ml_confidence,
+        "active_ob": DashboardState.active_ob,
+        "active_fvg": DashboardState.active_fvg,
+        "active_ob_level": DashboardState.active_ob_level,
+        "active_ob_type": DashboardState.active_ob_type,
+        "active_bullish_ob_level": DashboardState.active_bullish_ob_level,
+        "active_bearish_ob_level": DashboardState.active_bearish_ob_level,
+        "symbol": Config.SYMBOL,
+        "ltf_timeframe": Config.LTF_TIMEFRAME,
+        "htf_timeframe": Config.HTF_TIMEFRAME,
+        "trades": DashboardState.trades[-5:],  # Last 5 trades
+        "logs": DashboardState.logs[-10:],     # Last 10 logs
+        "chart_history": DashboardState.chart_history
+    }
+    await websocket.send_text(json.dumps(state_payload))
+
+async def broadcast_state_loop():
+    """Background task that broadcasts state updates to all connected WebSockets."""
+    while True:
+        if DashboardState.active_websockets:
+            # Create a copy of the set to avoid modification errors during iteration
+            sockets = list(DashboardState.active_websockets)
+            for ws in sockets:
+                try:
+                    await send_state_to_ws(ws)
+                except Exception as e:
+                    print(f"[WS] Broadcast error, dropping client: {e}")
+                    DashboardState.active_websockets.discard(ws)
+        await asyncio.sleep(1.0) # Update once per second
+
+@app.on_event("startup")
+async def startup_event():
+    # Start the websocket broadcast background task
+    asyncio.create_task(broadcast_state_loop())
+
+def add_log_message(msg):
+    import datetime
+    import sys
+    time_str = datetime.datetime.now().strftime("%H:%M:%S")
+    log_entry = f"[{time_str}] {msg}"
+    DashboardState.logs.append(log_entry)
+    
+    encoding = sys.stdout.encoding or 'utf-8'
+    try:
+        print(log_entry)
+    except UnicodeEncodeError:
+        safe_entry = log_entry.encode(encoding, errors='replace').decode(encoding)
+        print(safe_entry)
+        
+    if len(DashboardState.logs) > 100:
+        DashboardState.logs.pop(0)
