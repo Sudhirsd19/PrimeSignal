@@ -64,8 +64,8 @@
                 <span class="bg-[#1f2937] text-gray-400 text-xs px-3 py-1.5 rounded-md font-semibold tracking-wide border border-[#374151]">
                     TIMEFRAME: <span id="header-tf" class="text-blue-400 font-bold">5M / 1H</span>
                 </span>
-                <span class="bg-[#22c55e]/10 text-green-400 text-xs px-3 py-1.5 rounded-md font-bold tracking-wide border border-green-500/20">
-                    STATUS: LIVE
+                <span id="ws-status" class="bg-red-500/10 text-red-400 text-xs px-3 py-1.5 rounded-md font-bold tracking-wide border border-red-500/20">
+                    STATUS: OFFLINE
                 </span>
             </div>
         </header>
@@ -575,6 +575,11 @@
                 
                 ws.onopen = () => {
                     console.log("WebSocket connected!");
+                    const statusEl = document.getElementById('ws-status');
+                    if (statusEl) {
+                        statusEl.innerText = "STATUS: LIVE";
+                        statusEl.className = "bg-[#22c55e]/10 text-green-400 text-xs px-3 py-1.5 rounded-md font-bold tracking-wide border border-green-500/20";
+                    }
                     historyLoaded = false;
                     const chartLoadingEl = document.getElementById('chart-loading');
                     if (chartLoadingEl) chartLoadingEl.classList.remove('hidden');
@@ -887,6 +892,11 @@
                 
                 ws.onclose = () => {
                     console.log("WebSocket closed. Attempting reconnect...");
+                    const statusEl = document.getElementById('ws-status');
+                    if (statusEl) {
+                        statusEl.innerText = "STATUS: OFFLINE";
+                        statusEl.className = "bg-red-500/10 text-red-400 text-xs px-3 py-1.5 rounded-md font-bold tracking-wide border border-red-500/20";
+                    }
                     setTimeout(connectWS, 2000);
                 };
                 

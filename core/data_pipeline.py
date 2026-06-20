@@ -73,7 +73,7 @@ class RealTimeDataPipeline:
         retry_delay = 2.0
         while self.websocket_active:
             try:
-                async with websockets.connect(url) as websocket:
+                async with websockets.connect(url, ping_interval=20, ping_timeout=20) as websocket:
                     self.current_websocket = websocket
                     print("[DATA] WebSocket Connected successfully!")
                     retry_delay = 2.0  # Reset retry delay
