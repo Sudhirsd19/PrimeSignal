@@ -124,7 +124,16 @@ class ExecutionEngine:
                 sleep_time = delay * (2 ** (attempt - 1))
                 print(f"[EXECUTION] API error ({e}). Retrying in {sleep_time:.1f}s (Attempt {attempt}/{retries})...")
                 await asyncio.sleep(sleep_time)
+            except ccxt.BaseError as e:
+                # All CCXT-specific errors inherit from BaseError (not retryable)
+                print(f"[EXECUTION] CCXT Error (not retryable): {type(e).__name__}: {e}")
+                break
             except Exception as e:
-                print(f"[EXECUTION] Unexpected execution engine error: {e}")
+                # Unexpected exception - log fully for debugging
+                import traceback
+                print(f"[EXECUTION] CRITICAL: Unexpected exception in {func.__name__}:")
+                print(f"[EXECUTION]   Error type: {type(e).__name__}")
+                print(f"[EXECUTION]   Error message: {e}")
+                traceback.print_exc()
                 break
         return None

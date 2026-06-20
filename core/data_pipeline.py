@@ -105,7 +105,9 @@ class RealTimeDataPipeline:
                                 
                                 # If a lower-timeframe candle just closed, trigger strategy evaluation
                                 if is_closed and self.on_candle_close_callback:
-                                    asyncio.create_task(self.on_candle_close_callback())
+                                    task = asyncio.create_task(self.on_candle_close_callback())
+                                    # Attach error handler to prevent silent failures
+                                    task.add_done_callback(lambda t: self._handle_callback_exception(t))
                                     
                             elif timeframe == Config.HTF_TIMEFRAME:
                                 self._update_candle_cache(self.htf_candles, candle, is_closed)
@@ -143,6 +145,18 @@ class RealTimeDataPipeline:
         # Keep cache length bounded to prevent memory issues
         if len(cache_list) > 1000:
             cache_list.pop(0)
+
+    def _handle_callback_exception(self, task):
+        """Handle exceptions from async callback task to prevent silent failures."""
+        if task.cancelled():
+            print("[DATA] Candle close callback was cancelled")
+        else:
+            try:
+                task.result()  # This will raise if an exception occurred
+            except Exception as e:
+                import traceback
+                print(f"[ERROR] Exception in on_candle_close callback: {e}")
+                traceback.print_exc()
 
     def stop(self):
         self.websocket_active = False

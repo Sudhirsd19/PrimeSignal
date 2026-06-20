@@ -47,6 +47,13 @@ class PrimeSignalBot:
         # Dry-run virtual balance (used when no API keys are set)
         self._dry_run_balance_usdt = 10000.0   # starting paper balance
         
+        # CRITICAL FIX: Initialize DashboardState with dry-run balance
+        # This ensures position sizing always has a valid equity value
+        if not self.has_keys:
+            DashboardState.balance_usdt = self._dry_run_balance_usdt
+            DashboardState.balance_base = 0.0
+            print("[INIT] ✅ Dry-run mode: Virtual balance initialized to $10,000 USDT")
+        
         # Link callbacks
         self.pipeline.on_candle_close_callback = self.on_candle_close
 
@@ -66,7 +73,11 @@ class PrimeSignalBot:
             if balance:
                 DashboardState.balance_usdt = balance.get('total', {}).get('USDT', 10000.0)
                 DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
-                
+        else:
+            # Ensure dry-run balance is synced to DashboardState
+            DashboardState.balance_usdt = self._dry_run_balance_usdt
+            DashboardState.balance_base = 0.0
+        
         # Train ML Model on historical candles
         ltf_history = self.pipeline.ltf_candles
         if ltf_history:
@@ -175,9 +186,13 @@ class PrimeSignalBot:
         tp = metadata['take_profit']
         
         # Determine dynamic size
+        print(f"[DEBUG] Position size calculation:")
+        print(f"[DEBUG]   Balance: {DashboardState.balance_usdt}")
+        print(f"[DEBUG]   Entry: {entry_price:.2f}, SL: {sl:.2f}")
         pos_size = self.risk.calculate_position_size(DashboardState.balance_usdt, entry_price, sl)
+        print(f"[DEBUG]   Result: {pos_size:.6f}")
         if pos_size <= 0.0:
-            add_log_message("Trade aborted: Risk manager returned zero position size.")
+            add_log_message("❌ Trade aborted: Risk manager returned zero position size.")
             return
             
         if signal == "BUY":
