@@ -1,13 +1,14 @@
 import asyncio
 import json
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+import os
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+from fastapi.security import APIKeyHeader
 from starlette.requests import Request
 from pydantic import BaseModel
 from config import Config
-import os
 
 app = FastAPI(title="PrimeSignal Trading Dashboard")
 
@@ -22,6 +23,18 @@ templates = Jinja2Templates(directory=templates_dir)
 # Request schema for changing symbols
 class SymbolRequest(BaseModel):
     symbol: str
+
+# ─── ATTACK-1 FIX: API Key Auth for mutating endpoints ──────────────────────
+# Without this, anyone on the internet can POST /api/change_symbol and spam
+# the bot with symbol changes, triggering WebSocket restarts and CPU spikes.
+# Set DASHBOARD_SECRET env var on Render. Omit to disable auth in dev mode.
+_DASHBOARD_SECRET = os.getenv("DASHBOARD_SECRET", "")
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+async def verify_dashboard_key(key: str = Depends(_api_key_header)):
+    """Only enforces auth if DASHBOARD_SECRET is set in environment."""
+    if _DASHBOARD_SECRET and key != _DASHBOARD_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid dashboard API key. Set X-API-Key header.")
 
 # Global Memory State Store
 class DashboardState:
@@ -57,7 +70,7 @@ async def get_dashboard(request: Request):
     """Renders the main terminal dashboard page."""
     return templates.TemplateResponse(request, "index.html", {})
 
-@app.post("/api/change_symbol")
+@app.post("/api/change_symbol", dependencies=[Depends(verify_dashboard_key)])
 async def change_symbol(req: SymbolRequest):
     symbol = req.symbol.strip().upper()
     if "/" not in symbol:

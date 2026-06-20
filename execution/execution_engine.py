@@ -48,9 +48,13 @@ class ExecutionEngine:
         return await self.execute_with_retry(self.public_client.fetch_ohlcv, symbol, timeframe, None, limit)
 
 
-    async def place_order(self, side, order_type, amount, price=None, max_slippage_pct=0.005, symbol=None):
+    async def place_order(self, side, order_type, amount, price=None, max_slippage_pct=0.005, symbol=None, is_exit_order=False):
         """
         Routes orders with slippage checks and retry logic.
+
+        is_exit_order (bool): If True, bypasses slippage guard. Exit orders
+            MUST always execute regardless of slippage — blocking an exit during
+            a flash crash leaves the position completely unprotected.
         """
         if symbol is None:
             symbol = Config.SYMBOL
@@ -79,8 +83,10 @@ class ExecutionEngine:
         except Exception as e:
             print(f"[EXECUTION] WARNING: Could not check minimum order size ({e}). Proceeding anyway.")
 
-        # 1. Slippage check for market orders
-        if order_type.upper() == "MARKET":
+        # 1. Slippage check for market ENTRY orders only
+        # ATTACK-5 FIX: Exit orders bypass slippage guard entirely. We must close
+        # the position at any available price — slippage is acceptable on exit.
+        if order_type.upper() == "MARKET" and not is_exit_order:
             ticker = await self.execute_with_retry(self.public_client.fetch_ticker, symbol)
             if not ticker:
                 print("[EXECUTION] Order aborted: Unable to fetch live price ticker for slippage check.")

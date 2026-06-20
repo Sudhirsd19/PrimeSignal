@@ -501,7 +501,10 @@ class PrimeSignalBot:
         order = None
         if self.has_keys:
             side = 'buy' if self.position_side == 'SHORT' else 'sell'
-            order = await self.execution.place_order(side, 'market', self.position_size, price=exit_price)
+            # ATTACK-5 FIX: Pass is_exit_order=True to bypass slippage guard.
+            # Exit orders MUST execute regardless of slippage — blocking an exit
+            # during a flash crash leaves the position unprotected indefinitely.
+            order = await self.execution.place_order(side, 'market', self.position_size, price=exit_price, is_exit_order=True)
         else:
             order = {'id': 'MOCK_EXIT_ORDER_ID', 'price': exit_price, 'status': 'filled'}
             
@@ -523,6 +526,11 @@ class PrimeSignalBot:
                 'exit_time': int(time.time() * 1000)
             }
             DashboardState.trades.append(trade_record)
+
+            # ATTACK-2 FIX: Bound trades list at 500 entries to prevent unbounded
+            # memory growth in long-running paper trading sessions.
+            if len(DashboardState.trades) > 500:
+                DashboardState.trades = DashboardState.trades[-500:]
 
             # BUG FIX #8: Dry-run — credit virtual balance with exit proceeds
             if not self.has_keys:
@@ -559,6 +567,16 @@ class PrimeSignalBot:
         4. Re-initializes pipeline caches and starts WebSocket feed.
         5. Retrains the Machine Learning confirmation model on the new coin's history.
         """
+        # ATTACK-7 FIX: Guard against concurrent symbol changes.
+        # If the previous WebSocket loop is still running (not yet cancelled),
+        # deferring is safer than starting a second pipeline that will mix
+        # candle data from two different symbols into the same cache.
+        ws_task = getattr(self.pipeline, 'websocket_task', None)
+        if ws_task and not ws_task.done():
+            add_log_message(f"[SYMBOL] Previous pipeline still shutting down. Deferring change to {new_symbol}...")
+            DashboardState.symbol_change_requested = new_symbol  # re-queue for next monitor tick
+            return
+
         if self.in_position:
             add_log_message(f"Force-closing active {self.position_side} position on {Config.SYMBOL} before switching to {new_symbol}...")
             await self.exit_position("SYMBOL_CHANGE")
