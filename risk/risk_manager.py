@@ -71,25 +71,26 @@ class RiskManager:
         self.current_drawdown_pct = 0.0
         print(f"[RISK] Daily equity checkpoint reset to {current_equity:.2f} USDT")
 
-    def update_trailing_stop(self, entry_price, extreme_price, stop_loss, position_side="LONG"):
+    def update_trailing_stop(self, entry_price, extreme_price, stop_loss, curr_atr, position_side="LONG"):
         """
-        Calculates trailing stop loss adjustments.
+        Calculates ATR-based trailing stop loss adjustments.
 
         Args:
             entry_price   : Original entry price of the position.
             extreme_price : For LONG → highest price reached since entry.
                             For SHORT → lowest price reached since entry.
             stop_loss     : Current stop loss level.
+            curr_atr      : Current Average True Range.
             position_side : "LONG" or "SHORT"
 
         Returns:
             New stop loss value (moves only in profit direction, never against it).
         """
-        if stop_loss is None:
-            return None
+        if stop_loss is None or curr_atr is None:
+            return stop_loss
 
-        # Trailing offset = fixed percentage of the extreme price reached
-        trailing_offset = extreme_price * Config.TRAILING_STOP_PCT
+        # Trailing offset = multiple of the current ATR
+        trailing_offset = curr_atr * Config.TRAILING_ATR_MULT
 
         if position_side.upper() == "LONG":
             # New stop = extreme high minus trailing offset

@@ -58,11 +58,11 @@ def check_signal(ohlcv_data):
     print(f"Strategy Check:")
     print(f"  Closed Price (last): {closes[-2]} | Short EMA ({Config.SHORT_EMA}): {curr_short:.2f} | Long EMA ({Config.LONG_EMA}): {curr_long:.2f}")
     
-    # Golden Cross: Short EMA crosses ABOVE Long EMA
+    # Golden Cross LONG trigger: ema9[-3] <= ema21[-3] and ema9[-2] > ema21[-2]
     if prev_short <= prev_long and curr_short > curr_long:
         return "BUY"
     
-    # Death Cross: Short EMA crosses BELOW Long EMA
+    # Death Cross SHORT trigger: ema9[-3] >= ema21[-3] and ema9[-2] < ema21[-2]
     if prev_short >= prev_long and curr_short < curr_long:
         return "SELL"
         

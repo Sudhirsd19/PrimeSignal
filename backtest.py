@@ -37,6 +37,10 @@ async def main():
             timeframe=Config.HTF_TIMEFRAME, 
             limit=htf_limit
         )
+        if htf_ohlcv is None:
+            print("ERROR: Failed to fetch historical data")
+            await execution.close()
+            return
         
         # Fetch LTF (5m) history (1000 limit)
         ltf_limit = 1000
@@ -46,6 +50,10 @@ async def main():
             timeframe=Config.LTF_TIMEFRAME, 
             limit=ltf_limit
         )
+        if ltf_ohlcv is None:
+            print("ERROR: Failed to fetch historical data")
+            await execution.close()
+            return
         await execution.close()
     
     if not htf_ohlcv or not ltf_ohlcv:
@@ -70,7 +78,7 @@ async def main():
     if trained:
         print("[ML] Confirmation model trained and active.")
     else:
-        print("[ML] WARNING: Confirmation model training failed. Proceeding without ML validation.")
+        print("[ML] WARNING: ML confirmation model training failed — trading without ML filter.")
         ml_confirmator = None
 
     # 3. Setup Backtest Engine
@@ -116,9 +124,15 @@ async def main():
     print(f"Profit Factor        | {metrics_ml['profit_factor']:.2f}             | {metrics_raw['profit_factor']:.2f}")
     print(f"Max Peak Drawdown    | {metrics_ml['max_drawdown_pct']:.2f}%           | {metrics_raw['max_drawdown_pct']:.2f}%")
     print(f"Annualized Sharpe    | {metrics_ml['sharpe_ratio']:.2f}            | {metrics_raw['sharpe_ratio']:.2f}")
+    print("----------------------------------------------------")
+    print(f"Strict Win Rate      | {metrics_ml['strict_win_rate']:.2f}%           | {metrics_raw['strict_win_rate']:.2f}%")
+    print(f"Strict Profit Factor | {metrics_ml['strict_pf']:.2f}             | {metrics_raw['strict_pf']:.2f}")
+    print(f"Relaxed Win Rate     | {metrics_ml['relaxed_win_rate']:.2f}%           | {metrics_raw['relaxed_win_rate']:.2f}%")
+    print(f"Relaxed Profit Factor| {metrics_ml['relaxed_pf']:.2f}             | {metrics_raw['relaxed_pf']:.2f}")
     print("====================================================")
 
 if __name__ == "__main__":
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())
+

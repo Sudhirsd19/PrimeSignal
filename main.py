@@ -2,6 +2,9 @@ import asyncio
 import sys
 import uvicorn
 import time
+import datetime
+import json
+from pathlib import Path
 
 # Reconfigure stdout/stderr to utf-8 on Windows to prevent UnicodeEncodeError
 if sys.platform == 'win32':
@@ -15,7 +18,7 @@ from config import Config
 from execution.execution_engine import ExecutionEngine
 from core.data_pipeline import RealTimeDataPipeline
 from strategies.multi_timeframe import MultiTimeframeSMCStrategy
-from strategies.indicators import prepare_dataframe
+from strategies.indicators import prepare_dataframe, calculate_atr
 from ml.confirmation import MLSignalConfirmator
 from risk.risk_manager import RiskManager
 from alerts.notifier import TelegramNotifier
@@ -29,51 +32,62 @@ class PrimeSignalBot:
         self.execution = ExecutionEngine()
         self.pipeline = RealTimeDataPipeline(self.execution)
         self.strategy = MultiTimeframeSMCStrategy()
-        self.ml = MLSignalConfirmator()
         self.risk = RiskManager()
         self.notifier = TelegramNotifier()
         
-        # Internal State tracking
-        self.in_position = False
-        self.position_side = "HOLD"
-        self.entry_price = 0.0
-        self.stop_loss = 0.0
-        self.take_profit = 0.0
-        self.highest_price_reached = 0.0
-        self.lowest_price_reached = 999999.0
-        self.position_size = 0.0
-        self.entry_time = 0
+        self.ml_models = {sym: MLSignalConfirmator() for sym in Config.SUPPORTED_SYMBOLS}
+        
+        # Internal State tracking (Per Symbol)
+        self.in_position = {sym: False for sym in Config.SUPPORTED_SYMBOLS}
+        self.position_side = {sym: "HOLD" for sym in Config.SUPPORTED_SYMBOLS}
+        self.entry_price = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.stop_loss = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.take_profit = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.highest_price_reached = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.lowest_price_reached = {sym: 999999.0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.position_size = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.position_mode = {sym: "STRICT" for sym in Config.SUPPORTED_SYMBOLS}
+        self.entry_time = {sym: 0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.last_trade_time = {sym: 0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.last_zone_traded = {sym: None for sym in Config.SUPPORTED_SYMBOLS}
+        self.volatility_pause_until = {sym: 0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.partial_tp_taken = {sym: False for sym in Config.SUPPORTED_SYMBOLS}
+        self.take_profit_1r = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.tp2_taken = {sym: False for sym in Config.SUPPORTED_SYMBOLS}
+        self.take_profit_2r = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.consecutive_losses = 0
+        self.global_pause_until = 0
+        self.relaxed_losses = 0
+        self.relaxed_disabled_until = 0
+        self.relaxed_trades_today = 0
+        self.trades_today = 0
+        self.last_trade_day = datetime.datetime.now(datetime.timezone.utc).date()
+        self.trade_history = []
+        self.cluster_loss_pause_until = 0
+        self.cluster_risk_penalty = False
+        self.global_last_trade_time = 0
+        self.traded_zones_cache = {}
 
         # Dry-run virtual balance (used when no API keys are set)
         self._dry_run_balance_usdt = 10000.0   # starting paper balance
         
-        # CRITICAL FIX: Initialize DashboardState with dry-run balance
-        # This ensures position sizing always has a valid equity value
         if not self.has_keys:
             DashboardState.balance_usdt = self._dry_run_balance_usdt
             DashboardState.balance_base = 0.0
             print("[INIT] ✅ Dry-run mode: Virtual balance initialized to $10,000 USDT")
 
-        # CRITICAL-3 FIX: Lock to prevent concurrent candle processing.
-        # Without this, two candle closes firing while a previous evaluation is
-        # still running (e.g. awaiting balance fetch) would both see
-        # in_position=False and place duplicate orders.
-        self._candle_lock = asyncio.Lock()
+        # Per-symbol locks to prevent concurrent candle processing on the same symbol
+        self._candle_locks = {sym: asyncio.Lock() for sym in Config.SUPPORTED_SYMBOLS}
+        self._pending_candle_evaluations = {sym: False for sym in Config.SUPPORTED_SYMBOLS}
+        self._last_reset_date = datetime.datetime.now(datetime.timezone.utc).date()
         
         # Link callbacks
         self.pipeline.on_candle_close_callback = self.on_candle_close
 
-    # ─── CRITICAL-5 FIX: State Persistence ─────────────────────────────────
-    # Saves bot position state to disk so a server restart (common on Render
-    # free tier) can recover the open position instead of leaving it unprotected.
-    import json as _json
-    from pathlib import Path as _Path
-    _STATE_FILE = _Path("bot_state.json")
+    _STATE_FILE = Path("bot_state.json")
 
     def save_state(self):
         """Persist current position state to disk for crash recovery."""
-        import json
-        from pathlib import Path
         state = {
             'in_position': self.in_position,
             'position_side': self.position_side,
@@ -87,66 +101,61 @@ class PrimeSignalBot:
             '_dry_run_balance_usdt': self._dry_run_balance_usdt,
         }
         try:
-            Path("bot_state.json").write_text(json.dumps(state))
+            self._STATE_FILE.write_text(json.dumps(state))
         except Exception as e:
             print(f"[STATE] Failed to save state: {e}")
 
     def load_state(self):
         """Restore position state from disk after a restart."""
-        import json
-        from pathlib import Path
-        state_file = Path("bot_state.json")
-        if not state_file.exists():
+        if not self._STATE_FILE.exists():
             return
         try:
-            state = json.loads(state_file.read_text())
-            self.in_position = state.get('in_position', False)
-            self.position_side = state.get('position_side', 'HOLD')
-            self.entry_price = state.get('entry_price', 0.0)
-            self.stop_loss = state.get('stop_loss', 0.0)
-            self.take_profit = state.get('take_profit', 0.0)
-            self.position_size = state.get('position_size', 0.0)
-            self.entry_time = state.get('entry_time', 0)
-            self.highest_price_reached = state.get('highest_price_reached', 0.0)
-            self.lowest_price_reached = state.get('lowest_price_reached', 999999.0)
+            state = json.loads(self._STATE_FILE.read_text())
+            
+            # Helper to safely load dict state, falling back to default if new symbols were added
+            def safe_load(key, default_val):
+                loaded_dict = state.get(key, {})
+                return {sym: loaded_dict.get(sym, default_val) for sym in Config.SUPPORTED_SYMBOLS}
+
+            self.in_position = safe_load('in_position', False)
+            self.position_side = safe_load('position_side', 'HOLD')
+            self.entry_price = safe_load('entry_price', 0.0)
+            self.stop_loss = safe_load('stop_loss', 0.0)
+            self.take_profit = safe_load('take_profit', 0.0)
+            self.position_size = safe_load('position_size', 0.0)
+            self.entry_time = safe_load('entry_time', 0)
+            self.highest_price_reached = safe_load('highest_price_reached', 0.0)
+            self.lowest_price_reached = safe_load('lowest_price_reached', 999999.0)
             self._dry_run_balance_usdt = state.get('_dry_run_balance_usdt', 10000.0)
-            # Sync to dashboard
-            DashboardState.in_position = self.in_position
-            DashboardState.position_side = self.position_side
-            DashboardState.entry_price = self.entry_price
-            DashboardState.stop_loss = self.stop_loss
-            DashboardState.take_profit = self.take_profit
+            
+            # Sync to dashboard for active UI symbol
+            sym = Config.SYMBOL
+            DashboardState.in_position = self.in_position[sym]
+            DashboardState.position_side = self.position_side[sym]
+            DashboardState.entry_price = self.entry_price[sym]
+            DashboardState.stop_loss = self.stop_loss[sym]
+            DashboardState.take_profit = self.take_profit[sym]
             DashboardState.balance_usdt = self._dry_run_balance_usdt
-            if self.in_position:
-                add_log_message(f"[STATE] Recovered {self.position_side} position from disk: entry={self.entry_price:.2f}, SL={self.stop_loss:.2f}, TP={self.take_profit:.2f}")
+            
+            open_positions = sum(1 for s in Config.SUPPORTED_SYMBOLS if self.in_position[s])
+            if open_positions > 0:
+                add_log_message(f"[STATE] Recovered {open_positions} open positions from disk.")
             else:
                 add_log_message("[STATE] State file loaded — no open position to recover.")
         except Exception as e:
             print(f"[STATE] Failed to load state: {e}")
 
     async def initialize(self):
-        """
-        Initializes websocket connections, loads history, and trains the ML classifier.
-        Also restores any previously saved position state from disk.
-        """
-        add_log_message("Starting system initialization...")
+        add_log_message("Starting system initialization for all supported symbols...")
 
-        # CRITICAL-5 FIX: Restore persisted state before starting
-        # This recovers any open position after a server restart
         self.load_state()
-
         await self.pipeline.start()
-        
-        # Wait a moment for websocket connection to load initial ticks
         await asyncio.sleep(3)
         
         # Initial Balance load
         if self.has_keys:
             balance = await self.execution.fetch_balance()
             if balance:
-                # MINOR-4 FIX: Validate balance before assigning — a zero/None
-                # result (wrong account type, API error) would silently set an
-                # incorrect equity and allow oversized position sizing.
                 usdt_balance = balance.get('total', {}).get('USDT', None)
                 if usdt_balance and usdt_balance > 0:
                     DashboardState.balance_usdt = usdt_balance
@@ -154,515 +163,712 @@ class PrimeSignalBot:
                     add_log_message(f"[WARNING] Balance fetch returned {usdt_balance}. Check account type. Keeping last known value.")
                 DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
         else:
-            # Ensure dry-run balance is synced to DashboardState
             DashboardState.balance_usdt = self._dry_run_balance_usdt
             DashboardState.balance_base = 0.0
         
-        # Train ML Model on historical candles
-        ltf_history = self.pipeline.ltf_candles
-        if ltf_history:
-            df = prepare_dataframe(ltf_history)
-            add_log_message("Training ML confirmation model on historical price ticks...")
-            trained = self.ml.train(df)
-            if trained:
-                add_log_message("ML Model training completed successfully.")
-            else:
-                add_log_message("ML Model training skipped (insufficient warm-up history).")
+        # Train ML Models on historical candles for each symbol
+        for sym in Config.SUPPORTED_SYMBOLS:
+            ltf_history = self.pipeline.ltf_candles[sym]
+            if ltf_history:
+                df = prepare_dataframe(ltf_history)
+                trained = self.ml_models[sym].train(df)
+                if not trained:
+                    self.ml_models[sym] = None
+        
+        add_log_message("ML Models initialized (optional filtering mode).")
 
-        # Initial price check
-        DashboardState.latest_price = self.pipeline.latest_price
-        DashboardState.chart_history = self.pipeline.ltf_candles[-100:]
-        if ltf_history:
-            DashboardState.ml_confidence = self.ml.predict_bias(df)
-        add_log_message(f"System ready. Watching {Config.SYMBOL} at {DashboardState.latest_price} USDT")
+        DashboardState.latest_price = self.pipeline.latest_prices.get(Config.SYMBOL, 0.0)
+        DashboardState.chart_history = self.pipeline.ltf_candles[Config.SYMBOL][-100:] if self.pipeline.ltf_candles[Config.SYMBOL] else []
+        add_log_message(f"System ready. Multi-symbol watch active. UI viewing {Config.SYMBOL}")
 
-    async def on_candle_close(self):
-        """
-        Callback executed every time a lower-timeframe (LTF) candle closes.
-        Runs strategy generation, ML validation, risk checking, and execution.
-
-        CRITICAL-3 FIX: Uses an asyncio.Lock to prevent concurrent execution.
-        If a previous candle evaluation is still running (e.g. awaiting an API
-        call), the new candle is skipped instead of creating a duplicate trade.
-        """
-        if self._candle_lock.locked():
-            add_log_message("[LOCK] Candle fired while previous evaluation still running — skipping to prevent duplicate orders.")
+    async def on_candle_close(self, symbol):
+        if self._candle_locks[symbol].locked():
+            if not self._pending_candle_evaluations[symbol]:
+                self._pending_candle_evaluations[symbol] = True
             return
 
-        async with self._candle_lock:
-            await self._on_candle_close_impl()
+        async with self._candle_locks[symbol]:
+            await self._on_candle_close_impl(symbol)
+            
+            while self._pending_candle_evaluations[symbol]:
+                self._pending_candle_evaluations[symbol] = False
+                await self._on_candle_close_impl(symbol)
 
-    async def _on_candle_close_impl(self):
-        """Internal candle close handler — called exclusively inside _candle_lock."""
-        add_log_message("LTF Candle closed. Running strategy check...")
-        
-        # 1. Update balances on candle close
+    async def get_open_positions_info(self):
+        count = 0
+        total_risk_pct = 0.0
+        longs_count = 0
+        shorts_count = 0
+        current_eq = self._dry_run_balance_usdt if not self.has_keys else DashboardState.balance_usdt
+
+        for sym in Config.SUPPORTED_SYMBOLS:
+            if self.in_position[sym]:
+                count += 1
+                if self.position_side[sym] == "LONG":
+                    longs_count += 1
+                elif self.position_side[sym] == "SHORT":
+                    shorts_count += 1
+                risk_usdt = self.position_size[sym] * abs(self.entry_price[sym] - self.stop_loss[sym])
+                if current_eq > 0:
+                    total_risk_pct += (risk_usdt / current_eq)
+                else:
+                    total_risk_pct += getattr(Config, 'RISK_PCT', 0.01)
+        return count, total_risk_pct, longs_count, shorts_count
+
+    def calculate_total_equity(self):
+        current_equity = self._dry_run_balance_usdt
+        for sym in Config.SUPPORTED_SYMBOLS:
+            if self.in_position[sym]:
+                live_price = self.pipeline.latest_prices.get(sym, self.entry_price[sym])
+                if self.position_side[sym] == "LONG":
+                    current_equity += self.position_size[sym] * live_price
+                elif self.position_side[sym] == "SHORT":
+                    unrealized_pnl = self.position_size[sym] * (self.entry_price[sym] - live_price)
+                    current_equity += (self.position_size[sym] * self.entry_price[sym]) + unrealized_pnl
+        return current_equity
+
+    async def _on_candle_close_impl(self, symbol):
+        if time.time() < self.global_pause_until:
+            return
+            
+        # Update balance via API if live
         if self.has_keys:
             balance = await self.execution.fetch_balance()
             if balance:
-                # MINOR-4 FIX: Validate balance before assigning
                 usdt_balance = balance.get('total', {}).get('USDT', None)
                 if usdt_balance and usdt_balance > 0:
                     DashboardState.balance_usdt = usdt_balance
-                else:
-                    add_log_message(f"[WARNING] Candle balance refresh returned {usdt_balance}. Keeping last known value.")
                 DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
                 
-        # 2. Check drawdown circuit breakers
-        if not self.has_keys:
-            current_equity = self._dry_run_balance_usdt
-            if self.in_position:
-                if self.position_side == "LONG":
-                    current_equity += self.position_size * self.pipeline.latest_price
-                elif self.position_side == "SHORT":
-                    unrealized_pnl = self.position_size * (self.entry_price - self.pipeline.latest_price)
-                    current_equity += (self.position_size * self.entry_price) + unrealized_pnl
-        else:
-            current_equity = DashboardState.balance_usdt + (DashboardState.balance_base * self.pipeline.latest_price)
+        # Check drawdown circuit breakers
+        current_equity = DashboardState.balance_usdt if self.has_keys else self.calculate_total_equity()
             
         if not self.risk.check_circuit_breaker(current_equity):
             add_log_message("Trading halted: Daily drawdown limit reached.")
             await self.notifier.send_message("❌ TRADING HALTED: Daily loss circuit breaker triggered.")
             return
 
-        # Sync daily drawdown percentage to dashboard
         DashboardState.daily_drawdown_pct = self.risk.current_drawdown_pct
 
-        # 3. Build dataframes for strategy evaluation
-        htf_df = prepare_dataframe(self.pipeline.htf_candles)
-        ltf_df = prepare_dataframe(self.pipeline.ltf_candles)
+        ltf_df = self.pipeline.ltf_candles[symbol]
         
-        # Update ML confidence bias metric for the dashboard
-        DashboardState.ml_confidence = self.ml.predict_bias(ltf_df)
+        # Check high volatility kill switch
+        if not ltf_df.empty:
+            last_candle = ltf_df.iloc[-1]
+            move_pct = abs(last_candle['close'] - last_candle['open']) / last_candle['open']
+            if move_pct > getattr(Config, 'MAX_CANDLE_MOVE_PCT', 0.015):
+                avg_vol = ltf_df['volume'].rolling(14).mean().iloc[-1] if len(ltf_df) > 14 else 0.0
+                if last_candle['volume'] < 1.5 * avg_vol:
+                    self.volatility_pause_until[symbol] = len(ltf_df) + getattr(Config, 'VOLATILITY_PAUSE_CANDLES', 2)
+                    add_log_message(f"[{symbol}] Trading paused: High volatility detected ({move_pct*100:.2f}% move) on LOW volume.")
+                else:
+                    add_log_message(f"[{symbol}] High volatility ({move_pct*100:.2f}%) on HIGH volume. Institutional move allowed.")
+
+        if len(ltf_df) < self.volatility_pause_until.get(symbol, 0):
+            return
+
         
-        # Update chart history
-        DashboardState.chart_history = self.pipeline.ltf_candles[-100:]
+        # Session and Execution Delay Filters
+        import datetime
+        current_hour = datetime.datetime.now(datetime.timezone.utc).hour
+        is_low_volume_session = not (12 <= current_hour <= 21)
         
-        # 4. Generate Signal
-        signal, metadata = self.strategy.generate_signal(htf_df, ltf_df)
+        if self.has_keys:
+            open_time = ltf_df.iloc[-1]['time'] / 1000.0 if 'time' in ltf_df.columns else ltf_df.index[-1].timestamp()
+            close_time = open_time + (5 * 60)
+            delay = time.time() - close_time
+            if delay > 10:
+                add_log_message(f"[{symbol}] Trade skipped: Execution delay ({delay:.1f}s) > 10s. Stale signal protection.")
+                return
+            
+        signal, metadata = self.strategy.generate_signal(
+            self.pipeline.htf_candles[symbol],
+            ltf_df,
+            relaxed=False
+        )
+        relaxed_used = False
         
-        # Update dashboard state indicators
-        DashboardState.active_ob = metadata.get('reason', 'No OB/FVG')
-        DashboardState.active_ob_level = metadata.get('active_ob_level', 0.0)
-        DashboardState.active_ob_type = metadata.get('active_ob_type', 'NONE')
-        DashboardState.active_bullish_ob_level = metadata.get('active_bullish_ob_level', 0.0)
-        DashboardState.active_bearish_ob_level = metadata.get('active_bearish_ob_level', 0.0)
+        # Dual-Pass Execution
+        if signal == "HOLD":
+            open_count, _, _, _ = await self.get_open_positions_info()
+            
+            # Reset daily trades
+            current_date = datetime.datetime.utcnow().date()
+            if current_date != self.last_trade_day:
+                self.trades_today = 0
+                self.last_trade_day = current_date
+                
+            if open_count < 2 and (time.time() - self.global_last_trade_time) >= 20 * 60 and time.time() > self.global_pause_until:
+                if self.relaxed_trades_today < 2 and time.time() > self.relaxed_disabled_until:
+                    super_relaxed = False
+                    if (time.time() - self.global_last_trade_time) >= 30 * 60 and metadata.get('market_regime') != 'HIGH_VOL':
+                        super_relaxed = True
+                        
+                    signal, metadata = self.strategy.generate_signal(
+                        self.pipeline.htf_candles[symbol],
+                        ltf_df,
+                        relaxed=True,
+                        super_relaxed=super_relaxed
+                    )
+                    if signal != "HOLD":
+                        relaxed_used = True
+
+
+        if symbol == Config.SYMBOL:
+            DashboardState.active_ob = metadata.get('reason', 'No OB/FVG')
+            DashboardState.active_ob_level = metadata.get('active_ob_level', 0.0)
+            DashboardState.active_ob_type = metadata.get('active_ob_type', 'NONE')
+            DashboardState.active_bullish_ob_level = metadata.get('active_bullish_ob_level', 0.0)
+            DashboardState.active_bearish_ob_level = metadata.get('active_bearish_ob_level', 0.0)
+            if self.ml_models[symbol] is not None:
+                DashboardState.ml_confidence = self.ml_models[symbol].predict_bias(ltf_df)
+            else:
+                DashboardState.ml_confidence = 0.5
+            DashboardState.chart_history = self.pipeline.ltf_candles[symbol][-100:]
         
         if signal == "HOLD":
+            # Log debug checks for rejection reason
+            debug = metadata.get('debug_checks', {})
+            reason_str = f"Trend: {debug.get('trend', 'FAIL')}, Zone: {debug.get('zone', 'FAIL')}, Trigger: {debug.get('trigger', 'FAIL')}, VWAP: {debug.get('vwap', 'FAIL')}, Vol: {debug.get('volatility', 'FAIL')}"
+            print(f"[NO TRADE] [{symbol}] Reason: {metadata.get('reason')} | {reason_str}")
             return
             
-        add_log_message(f"Raw strategy signal generated: {signal} ({metadata.get('reason')})")
+        # Session Volume Block
+        if is_low_volume_session:
+            avg_vol = ltf_df['volume'].rolling(20).mean().iloc[-2] if len(ltf_df) > 20 else 0.0
+            if ltf_df['volume'].iloc[-1] < 1.2 * avg_vol:
+                add_log_message(f"[{symbol}] Trade skipped: Outside 12-22 UTC and volume not > 1.2x average.")
+                return
+                
+        # 4H Bias logic
+        htf_4h_df = self.pipeline.htf_4h_candles.get(symbol)
+        if htf_4h_df is not None and len(htf_4h_df) > 50:
+            import pandas as pd
+            if isinstance(htf_4h_df, list): htf_4h_df = pd.DataFrame(htf_4h_df, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
+            ema_4h = htf_4h_df['close'].ewm(span=50, adjust=False).mean().iloc[-1]
+            if signal == "BUY" and htf_4h_df['close'].iloc[-1] < ema_4h:
+                metadata['score'] = metadata.get('score', 3) - 0.5
+            elif signal == "SELL" and htf_4h_df['close'].iloc[-1] > ema_4h:
+                metadata['score'] = metadata.get('score', 3) - 0.5
+                
+        add_log_message(f"[{symbol}] Raw strategy signal: {signal} ({metadata.get('reason')})")
         
-        # 5. Check if we already have an active position matching the signal
-        if self.in_position:
-            if self.position_side == "LONG" and signal == "SELL":
-                add_log_message("Trend reversal: Closing LONG position.")
-                await self.exit_position("SIGNAL_REVERSAL")
-            elif self.position_side == "SHORT" and signal == "BUY":
-                add_log_message("Trend reversal: Closing SHORT position.")
-                await self.exit_position("SIGNAL_REVERSAL")
+        # Position Reversal logic
+        if self.in_position[symbol]:
+            if self.position_side[symbol] == "LONG" and signal == "SELL":
+                add_log_message(f"[{symbol}] Trend reversal: Closing LONG position.")
+                await self.exit_position(symbol, "SIGNAL_REVERSAL")
+            elif self.position_side[symbol] == "SHORT" and signal == "BUY":
+                add_log_message(f"[{symbol}] Trend reversal: Closing SHORT position.")
+                await self.exit_position(symbol, "SIGNAL_REVERSAL")
+            return
+
+        # BTC Correlation Filter
+        if signal == "BUY" and symbol != "BTC/USDT":
+            btc_df = self.pipeline.ltf_candles.get("BTC/USDT")
+            if btc_df is not None and not btc_df.empty:
+                btc_last = btc_df.iloc[-1]
+                btc_drop = (btc_last['open'] - btc_last['close']) / btc_last['open']
+                if btc_drop > 0.01:
+                    add_log_message(f"[{symbol}] Trade blocked: BTC dropped > 1% in last 5m. Blocking altcoin longs.")
+                    return
+        
+        # Daily Trade Limit
+        if self.trades_today >= 6:
+            add_log_message(f"[{symbol}] Trade skipped: Max 6 trades per day reached.")
+            return
+
+        # Cluster Loss Cooldown
+        if time.time() < getattr(self, 'cluster_loss_pause_until', 0):
+            add_log_message(f"[{symbol}] Trade skipped: Cluster loss cooldown active.")
+            return
+
+        # Cooldown Check
+        if time.time() - self.last_trade_time.get(symbol, 0) < getattr(Config, 'COOLDOWN_MINUTES', 15) * 60:
+            add_log_message(f"[{symbol}] Trade skipped due to cooldown.")
+            return
+
+        # Same Zone Check with Traded Zones Cache
+        zone_id = metadata.get('zone_id')
+        cache_key = f"{symbol}_{zone_id}"
+        if zone_id and self.traded_zones_cache.get(cache_key):
+            add_log_message(f"[{symbol}] Trade skipped: already traded in this zone ({zone_id}).")
+            return
+            
+        # Clear out old cache (basic cleanup - ideally based on candle count but here based on simple dict size)
+        if len(self.traded_zones_cache) > 1000:
+            self.traded_zones_cache.clear()
+            
+        # ML Confidence Scaler & Soft Session Filter
+        prob = 1.0
+        ml_confidence_weight = 0
+        if self.ml_models[symbol] is not None:
+            prob = self.ml_models[symbol].predict_bias(ltf_df)
+            if symbol == Config.SYMBOL:
+                DashboardState.ml_confidence = prob
+            add_log_message(f"[{symbol}] ML confidence score: {prob:.2f}")
+            
+            # Task 7: ML TP Logic
+            risk_usdt = abs(metadata.get('stop_loss', entry_price) - entry_price)
+            if prob > 0.65:
+                metadata['tp2'] = entry_price + (2.5 * risk_usdt) if signal == "BUY" else entry_price - (2.5 * risk_usdt)
+                ml_confidence_weight = 1
+            elif prob < 0.55:
+                metadata['tp2'] = entry_price + (1.5 * risk_usdt) if signal == "BUY" else entry_price - (1.5 * risk_usdt)
+                ml_confidence_weight = -1
             else:
-                add_log_message(f"Ignoring {signal} signal: Already holding a {self.position_side} position.")
+                metadata['tp2'] = entry_price + (2.0 * risk_usdt) if signal == "BUY" else entry_price - (2.0 * risk_usdt)
+
+        entry_price = ltf_df['close'].iloc[-2]
+        if is_low_volume_session:
+            avg_vol = ltf_df['volume'].rolling(14).mean().iloc[-1] if len(ltf_df) > 14 else 0.0
+            if ltf_df['volume'].iloc[-1] < 0.6 * avg_vol:
+                prob *= 0.5
+                add_log_message(f"[{symbol}] Low volume session filter triggered, confidence reduced to {prob:.2f}")
+                
+                # Override TP2 to 1.5R instead of 2R
+                risk_usdt = abs(metadata.get('stop_loss', entry_price) - entry_price)
+                if signal == "BUY":
+                    metadata['take_profit'] = entry_price + (1.5 * risk_usdt)
+                    metadata['tp2'] = metadata['take_profit']
+                elif signal == "SELL":
+                    metadata['take_profit'] = entry_price - (1.5 * risk_usdt)
+                    metadata['tp2'] = metadata['take_profit']
+            
+        # Task 5: Smart Risk Allocation (Final Edge)
+        score = metadata.get('score', 3)
+        if score >= 4.5: trade_risk_pct = 0.0125
+        elif score >= 3.5: trade_risk_pct = 0.01
+        else: trade_risk_pct = 0.0075
+        
+        if getattr(self, 'cluster_risk_penalty', False):
+            trade_risk_pct *= 0.5
+            add_log_message(f"[{symbol}] Cluster Loss Penalty: Risk slashed by 50%.")
+            
+        # Runner Logic Metadata
+        metadata['tp1_size'] = 0.50
+        metadata['tp2_size'] = 0.30
+        metadata['runner_size'] = 0.20
+        
+        # Task 10: Equity Protection
+        if not hasattr(self, 'hourly_peak_equity'):
+            self.hourly_peak_equity = current_equity
+            self.last_hour_ts = time.time()
+        
+        if time.time() - self.last_hour_ts > 3600:
+            self.hourly_peak_equity = current_equity
+            self.last_hour_ts = time.time()
+            self.hourly_dd_penalty = False
+            
+        if current_equity > self.hourly_peak_equity:
+            self.hourly_peak_equity = current_equity
+            
+        hourly_dd_pct = (self.hourly_peak_equity - current_equity) / self.hourly_peak_equity
+        if hourly_dd_pct > 0.03:
+            self.hourly_dd_penalty = True
+        if hourly_dd_pct < 0.01:
+            self.hourly_dd_penalty = False
+            
+        if getattr(self, 'hourly_dd_penalty', False):
+            trade_risk_pct *= 0.5
+            add_log_message(f"[{symbol}] Equity Protection: Hourly DD > 3%. Risk slashed by 50%.")
+
+        open_count, total_risk, longs_count, shorts_count = await self.get_open_positions_info()
+        max_risk_cap = getattr(Config, 'MAX_PORTFOLIO_RISK_PCT', 0.06)
+        
+        if signal == "BUY" and longs_count >= 2:
+            add_log_message(f"[{symbol}] Trade skipped: Max 2 LONG positions already open.")
+            return
+        if signal == "SELL" and shorts_count >= 2:
+            add_log_message(f"[{symbol}] Trade skipped: Max 2 SHORT positions already open.")
+            return
+        
+        # Task 10: Priority Ranking
+        priority_score = (score * 0.7) + (prob * 0.3)
+        
+        if priority_score < 3.5 and total_risk + trade_risk_pct > max_risk_cap - 0.04:
+            add_log_message(f"[{symbol}] Trade skipped: Priority score {priority_score:.1f} < 3.5. Reserving cap space.")
+            return
+        if priority_score < 4.5 and total_risk + trade_risk_pct > max_risk_cap - 0.02:
+            add_log_message(f"[{symbol}] Trade skipped: Priority score {priority_score:.1f} < 4.5. Reserving cap space.")
+            return
+        if total_risk + trade_risk_pct > max_risk_cap:
+            add_log_message(f"[{symbol}] Trade blocked: Absolute exposure limit reached.")
+            return
+        
+        
+        # Liquidity & Spread Filter
+        ticker = await self.execution.fetch_ticker_data(symbol)
+        if not ticker:
             return
             
-        # 6. ML Confirmation Filter
-        confirmed, prob = self.ml.confirm_signal(ltf_df, signal)
-        DashboardState.ml_confidence = prob
+        bid = ticker.get('bid')
+        ask = ticker.get('ask')
+        vol = ticker.get('quoteVolume', 0)
         
-        if not confirmed:
-            add_log_message(f"Trade filtered by ML confirmation filter. Bias score: {prob:.2f} (Required: {Config.ML_CONFIRMATION_THRESHOLD:.2f})")
-            return
+        if bid and ask and bid > 0 and ask > 0:
+            spread = (ask - bid) / ((ask + bid) / 2)
+            max_spread = 0.0015
+            if spread > max_spread:
+                add_log_message(f"[{symbol}] Rejected: High spread ({spread*100:.3f}%)")
+                return
+                
+        min_vol = 30000000 if relaxed_used else getattr(Config, 'MIN_24H_VOL_USDT', 50000000)
+        if vol < min_vol:
+            all_tickers = await self.execution.fetch_all_tickers()
+            is_top_20 = False
+            if all_tickers:
+                sorted_tickers = sorted([t for t in all_tickers.values() if t.get('quoteVolume')], key=lambda x: x.get('quoteVolume', 0), reverse=True)
+                top_20 = [t['symbol'] for t in sorted_tickers[:20]]
+                if symbol in top_20:
+                    is_top_20 = True
             
-        add_log_message(f"Trade confirmed by ML filter. Bias score: {prob:.2f}. Proceeding to risk checks...")
+            if not is_top_20:
+                add_log_message(f"[{symbol}] Rejected: Low volume ({vol:,.0f} USDT) and not in top 20.")
+                return
         
-        # 7. Execute orders based on signal
-        # BUG FIX #4: Use the last CLOSED candle close price for entry.
-        # Strategy computed SL/TP relative to ltf_df['close'].iloc[-2].
-        # Using live ticker (latest_price) creates SL distance mismatch.
-        entry_price = prepare_dataframe(self.pipeline.ltf_candles)['close'].iloc[-2]
+        # Slippage Check
+        live_price = ticker.get('last', entry_price)
+        if abs(live_price - entry_price) / entry_price > getattr(Config, 'MAX_SLIPPAGE_PCT', 0.002):
+            add_log_message(f"[{symbol}] Trade skipped: Slippage too high. Signal: {entry_price}, Live: {live_price}")
+            return
+        entry_price = live_price  # Execute at live price
+        
         sl = metadata['stop_loss']
         tp = metadata['take_profit']
         
-        # Determine dynamic size
-        print(f"[DEBUG] Position size calculation:")
-        print(f"[DEBUG]   Balance: {DashboardState.balance_usdt}")
-        print(f"[DEBUG]   Entry: {entry_price:.2f}, SL: {sl:.2f}")
-        pos_size = self.risk.calculate_position_size(DashboardState.balance_usdt, entry_price, sl)
-        print(f"[DEBUG]   Result: {pos_size:.6f}")
+        pos_size = self.risk.calculate_position_size(current_equity, entry_price, sl)
+        
+        # Scale pos_size by the dynamic trade_risk_pct (default calculate_position_size uses Config.RISK_PCT)
+        # So we adjust it relative to default RISK_PCT
+        pos_size = pos_size * (trade_risk_pct / getattr(Config, 'RISK_PCT', 0.02))
         if pos_size <= 0.0:
-            add_log_message("❌ Trade aborted: Risk manager returned zero position size.")
             return
             
         if signal == "BUY":
-            add_log_message(f"Executing BUY (LONG) entry order. Size: {pos_size:.6f} | SL: {sl:.2f} | TP: {tp:.2f}")
-            
+            add_log_message(f"[{symbol}] Executing BUY (LONG). Size: {pos_size:.6f} | SL: {sl:.2f} | TP: {tp:.2f}")
             order = None
             if self.has_keys:
-                order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price)
+                order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol)
             else:
-                # BUG FIX #8: Dry-run — simulate balance deduction
                 position_cost = pos_size * entry_price
                 if position_cost <= self._dry_run_balance_usdt:
                     self._dry_run_balance_usdt -= position_cost
-                    DashboardState.balance_usdt = self._dry_run_balance_usdt
                     order = {'id': 'MOCK_BUY_ORDER_ID', 'price': entry_price, 'status': 'filled'}
-                else:
-                    add_log_message(f"[DRY-RUN] Insufficient simulated balance ({self._dry_run_balance_usdt:.2f} USDT) for this trade.")
-                    order = None
                 
             if order:
-                self.in_position = True
-                self.position_side = "LONG"
-                self.entry_price = entry_price
-                self.stop_loss = sl
-                self.take_profit = tp
-                self.highest_price_reached = entry_price
-                self.position_size = pos_size
-                self.entry_time = int(time.time() * 1000)
+                self.in_position[symbol] = True
+                self.position_side[symbol] = "LONG"
+                self.entry_price[symbol] = entry_price
+                self.stop_loss[symbol] = sl
+                self.take_profit[symbol] = tp
+                self.highest_price_reached[symbol] = entry_price
+                self.position_size[symbol] = pos_size
+                self.entry_time[symbol] = int(time.time() * 1000)
+                self.last_trade_time[symbol] = time.time()
+                self.position_mode[symbol] = metadata.get('mode', 'STRICT')
+                self.position_mode[symbol] = metadata.get('mode', 'STRICT')
+                self.last_zone_traded[symbol] = metadata.get('zone_id')
+                self.trades_today += 1
+                self.global_last_trade_time = time.time()
+                if metadata.get('mode') == 'RELAXED':
+                    self.relaxed_trades_today += 1
                 
-                # Sync dashboard state
-                DashboardState.in_position = True
-                DashboardState.position_side = "LONG"
-                DashboardState.entry_price = entry_price
-                DashboardState.stop_loss = sl
-                DashboardState.take_profit = tp
+                if symbol == Config.SYMBOL:
+                    DashboardState.in_position = True
+                    DashboardState.position_side = "LONG"
+                    DashboardState.entry_price = entry_price
+                    DashboardState.stop_loss = sl
+                    DashboardState.take_profit = tp
 
-                # CRITICAL-5 FIX: Persist state so restart can recover position
                 self.save_state()
-                
-                await self.notifier.send_message(
-                    f"🟢 *BUY (LONG) Order Executed*\n"
-                    f"Price: {entry_price:.2f} USDT\n"
-                    f"Size: {pos_size:.6f}\n"
-                    f"Stop Loss: {sl:.2f}\n"
-                    f"Take Profit: {tp:.2f}\n"
-                    f"Reason: {metadata.get('reason')}"
-                )
+                await self.notifier.send_message(msg_str)
                 
         elif signal == "SELL":
-            add_log_message(f"Executing SELL (SHORT) entry order. Size: {pos_size:.6f} | SL: {sl:.2f} | TP: {tp:.2f}")
-            
+            msg_str = (
+                f"🔴 *SELL (SHORT) {symbol}*\\n"
+                f"Mode: {metadata.get('mode', 'STRICT')}\\n"
+                f"Setup Type: {metadata.get('setup_type', 'NONE')}\\n"
+                f"Entry: {entry_price:.4f}\\n"
+                f"Stop Loss: {sl:.4f}\\n"
+                f"TP1 (1R): {metadata.get('tp1', 0.0):.4f}\\n"
+                f"TP2 (2R): {metadata.get('tp2', 0.0):.4f}\\n"
+                f"Position Size: {pos_size:.6f}\\n"
+                f"Confidence: {prob:.2f}\\n"
+                f"Reason: {metadata.get('reason', 'N/A')}"
+            )
+            add_log_message(f"[{symbol}] " + msg_str.replace('\\n', ' | '))
             order = None
             if self.has_keys:
-                order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price)
+                order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol)
             else:
-                # BUG FIX #8: Dry-run short — simulate margin hold (use balance as collateral)
                 collateral = pos_size * entry_price
                 if collateral <= self._dry_run_balance_usdt:
                     self._dry_run_balance_usdt -= collateral
-                    DashboardState.balance_usdt = self._dry_run_balance_usdt
                     order = {'id': 'MOCK_SELL_ORDER_ID', 'price': entry_price, 'status': 'filled'}
-                else:
-                    add_log_message(f"[DRY-RUN] Insufficient simulated balance for SHORT collateral.")
-                    order = None
                 
             if order:
-                self.in_position = True
-                self.position_side = "SHORT"
-                self.entry_price = entry_price
-                self.stop_loss = sl
-                self.take_profit = tp
-                self.lowest_price_reached = entry_price
-                self.position_size = pos_size
-                self.entry_time = int(time.time() * 1000)
+                self.in_position[symbol] = True
+                self.position_side[symbol] = "SHORT"
+                self.entry_price[symbol] = entry_price
+                self.stop_loss[symbol] = sl
+                self.take_profit[symbol] = tp
+                self.lowest_price_reached[symbol] = entry_price
+                self.position_size[symbol] = pos_size
+                self.entry_time[symbol] = int(time.time() * 1000)
+                self.last_trade_time[symbol] = time.time()
+                self.position_mode[symbol] = metadata.get('mode', 'STRICT')
+                self.position_mode[symbol] = metadata.get('mode', 'STRICT')
+                self.last_zone_traded[symbol] = metadata.get('zone_id')
+                self.trades_today += 1
+                self.global_last_trade_time = time.time()
+                if metadata.get('mode') == 'RELAXED':
+                    self.relaxed_trades_today += 1
+                self.partial_tp_taken[symbol] = False
+                self.tp2_taken[symbol] = False
+                r_amount = abs(sl - entry_price)
+                self.take_profit_1r[symbol] = entry_price + r_amount if signal == "BUY" else entry_price - r_amount
+                self.take_profit_2r[symbol] = metadata.get('tp2', entry_price + (2*r_amount) if signal == "BUY" else entry_price - (2*r_amount))
+                # Remove static full TP to allow runner, or set it to 10R
+                self.take_profit[symbol] = entry_price + (10*r_amount) if signal == "BUY" else entry_price - (10*r_amount)
                 
-                # Sync dashboard state
-                DashboardState.in_position = True
-                DashboardState.position_side = "SHORT"
-                DashboardState.entry_price = entry_price
-                DashboardState.stop_loss = sl
-                DashboardState.take_profit = tp
+                if symbol == Config.SYMBOL:
+                    DashboardState.in_position = True
+                    DashboardState.position_side = "SHORT"
+                    DashboardState.entry_price = entry_price
+                    DashboardState.stop_loss = sl
+                    DashboardState.take_profit = tp
 
-                # CRITICAL-5 FIX: Persist state so restart can recover position
                 self.save_state()
-                
-                await self.notifier.send_message(
-                    f"🔴 *SELL (SHORT) Order Executed*\n"
-                    f"Price: {entry_price:.2f} USDT\n"
-                    f"Size: {pos_size:.6f}\n"
-                    f"Stop Loss: {sl:.2f}\n"
-                    f"Take Profit: {tp:.2f}\n"
-                    f"Reason: {metadata.get('reason')}"
-                )
+                await self.notifier.send_message(msg_str)
 
     async def run_live_risk_monitor(self):
-        """
-        Periodic task running every second to check trailing stops, 
-        take profits, and manage live position state updates.
-        """
         while True:
             try:
-                # Check if symbol change was requested via UI
                 if DashboardState.symbol_change_requested:
                     new_symbol = DashboardState.symbol_change_requested
                     DashboardState.symbol_change_requested = None
                     await self.change_bot_symbol(new_symbol)
 
-                # Midnight daily equity reset (UTC)
-                import datetime
                 now_utc = datetime.datetime.now(datetime.timezone.utc)
-                if now_utc.hour == 0 and now_utc.minute == 0 and now_utc.second < 2:
-                    if not self.has_keys:
-                        current_eq = self._dry_run_balance_usdt
-                        if self.in_position:
-                            if self.position_side == "LONG":
-                                current_eq += self.position_size * self.pipeline.latest_price
-                            elif self.position_side == "SHORT":
-                                unrealized_pnl = self.position_size * (self.entry_price - self.pipeline.latest_price)
-                                current_eq += (self.position_size * self.entry_price) + unrealized_pnl
-                    else:
-                        current_eq = DashboardState.balance_usdt + (DashboardState.balance_base * self.pipeline.latest_price)
+                if now_utc.date() != self._last_reset_date:
+                    current_eq = DashboardState.balance_usdt if self.has_keys else self.calculate_total_equity()
                     self.risk.reset_daily_equity(current_eq)
-                    add_log_message("[RISK] Daily equity checkpoint reset at UTC midnight.")
+                    self._last_reset_date = now_utc.date()
+                    add_log_message(f"[RISK] Daily equity checkpoint reset at UTC midnight.")
 
-                # Update latest price to dashboard
-                DashboardState.latest_price = self.pipeline.latest_price
-                
-                # Update simulated balance_usdt to represent total equity (cash + position value)
+                for symbol in Config.SUPPORTED_SYMBOLS:
+                    if self.in_position[symbol] and self.pipeline.latest_prices.get(symbol, 0.0) > 0:
+                        curr_price = self.pipeline.latest_prices[symbol]
+                        
+                        ltf_df = prepare_dataframe(self.pipeline.ltf_candles[symbol])
+                        curr_atr = calculate_atr(ltf_df, Config.ATR_PERIOD).iloc[-1] if not ltf_df.empty else 0.001
+                        
+                        if self.position_side[symbol] == "LONG":
+                            self.highest_price_reached[symbol] = max(self.highest_price_reached[symbol], curr_price)
+                            
+                            # TP1 (50%)
+                            if not self.partial_tp_taken[symbol] and curr_price >= self.take_profit_1r[symbol]:
+                                add_log_message(f"[{symbol}] TP1 (1R) hit. Booking 50% profit.")
+                                tp1_size = self.position_size[symbol] * (0.50 / 1.0)
+                                if self.has_keys:
+                                    await self.execution.place_order('sell', 'market', tp1_size, symbol=symbol, is_exit_order=True)
+                                else:
+                                    self._dry_run_balance_usdt += tp1_size * curr_price
+                                self.position_size[symbol] -= tp1_size
+                                self.partial_tp_taken[symbol] = True
+                                
+                                if self.entry_price[symbol] > self.stop_loss[symbol]:
+                                    self.stop_loss[symbol] = self.entry_price[symbol]
+                                    if symbol == Config.SYMBOL: DashboardState.stop_loss = self.entry_price[symbol]
+                                    add_log_message(f"[{symbol}] Stop Loss moved to breakeven.")
+                                    
+                            # TP2 (30%)
+                            if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price >= self.take_profit_2r[symbol]:
+                                add_log_message(f"[{symbol}] TP2 hit. Booking 30% profit. Runner trails.")
+                                tp2_size = self.position_size[symbol] * (0.30 / 0.50)
+                                if self.has_keys:
+                                    await self.execution.place_order('sell', 'market', tp2_size, symbol=symbol, is_exit_order=True)
+                                else:
+                                    self._dry_run_balance_usdt += tp2_size * curr_price
+                                self.position_size[symbol] -= tp2_size
+                                self.tp2_taken[symbol] = True
+
+                            if self.partial_tp_taken[symbol]:
+                                new_sl = self.risk.update_trailing_stop(self.entry_price[symbol], self.highest_price_reached[symbol], self.stop_loss[symbol], curr_atr, "LONG")
+                                if new_sl > self.stop_loss[symbol]:
+                                    self.stop_loss[symbol] = new_sl
+                                    if symbol == Config.SYMBOL: DashboardState.stop_loss = new_sl
+                                
+                            if curr_price >= self.take_profit[symbol]:
+                                await self.exit_position(symbol, "TAKE_PROFIT")
+                            elif curr_price <= self.stop_loss[symbol]:
+                                await self.exit_position(symbol, "TRAILING_STOP")
+                                
+                        elif self.position_side[symbol] == "SHORT":
+                            self.lowest_price_reached[symbol] = min(self.lowest_price_reached[symbol], curr_price)
+                            
+                            # TP1 (50%)
+                            if not self.partial_tp_taken[symbol] and curr_price <= self.take_profit_1r[symbol]:
+                                add_log_message(f"[{symbol}] TP1 (1R) hit. Booking 50% profit.")
+                                tp1_size = self.position_size[symbol] * (0.50 / 1.0)
+                                if self.has_keys:
+                                    await self.execution.place_order('buy', 'market', tp1_size, symbol=symbol, is_exit_order=True)
+                                else:
+                                    self._dry_run_balance_usdt += tp1_size * (self.entry_price[symbol] - curr_price) + (tp1_size * self.entry_price[symbol])
+                                self.position_size[symbol] -= tp1_size
+                                self.partial_tp_taken[symbol] = True
+                                
+                                if self.entry_price[symbol] < self.stop_loss[symbol]:
+                                    self.stop_loss[symbol] = self.entry_price[symbol]
+                                    if symbol == Config.SYMBOL: DashboardState.stop_loss = self.entry_price[symbol]
+                                    add_log_message(f"[{symbol}] Stop Loss moved to breakeven.")
+                                    
+                            # TP2 (30%)
+                            if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price <= self.take_profit_2r[symbol]:
+                                add_log_message(f"[{symbol}] TP2 hit. Booking 30% profit. Runner trails.")
+                                tp2_size = self.position_size[symbol] * (0.30 / 0.50)
+                                if self.has_keys:
+                                    await self.execution.place_order('buy', 'market', tp2_size, symbol=symbol, is_exit_order=True)
+                                else:
+                                    self._dry_run_balance_usdt += tp2_size * (self.entry_price[symbol] - curr_price) + (tp2_size * self.entry_price[symbol])
+                                self.position_size[symbol] -= tp2_size
+                                self.tp2_taken[symbol] = True
+
+                            if self.partial_tp_taken[symbol]:
+                                new_sl = self.risk.update_trailing_stop(self.entry_price[symbol], self.lowest_price_reached[symbol], self.stop_loss[symbol], curr_atr, "SHORT")
+                                if new_sl < self.stop_loss[symbol]:
+                                    self.stop_loss[symbol] = new_sl
+                                    if symbol == Config.SYMBOL: DashboardState.stop_loss = new_sl
+                                
+                            if curr_price <= self.take_profit[symbol]:
+                                await self.exit_position(symbol, "TAKE_PROFIT")
+                            elif curr_price >= self.stop_loss[symbol]:
+                                await self.exit_position(symbol, "TRAILING_STOP")
+
+                # Update UI for selected Config.SYMBOL
+                sym = Config.SYMBOL
+                DashboardState.latest_price = self.pipeline.latest_prices.get(sym, 0.0)
                 if not self.has_keys:
-                    eq = self._dry_run_balance_usdt
-                    if self.in_position:
-                        if self.position_side == "LONG":
-                            eq += self.position_size * self.pipeline.latest_price
-                            DashboardState.balance_base = self.position_size
-                        elif self.position_side == "SHORT":
-                            unrealized_pnl = self.position_size * (self.entry_price - self.pipeline.latest_price)
-                            eq += (self.position_size * self.entry_price) + unrealized_pnl
-                            DashboardState.balance_base = 0.0
-                    else:
-                        DashboardState.balance_base = 0.0
-                    DashboardState.balance_usdt = eq
-                
-                # Update chart history in real-time
-                if self.pipeline.ltf_candles:
-                    DashboardState.chart_history = self.pipeline.ltf_candles[-100:]
-                
-                if self.in_position and self.pipeline.latest_price > 0:
-                    curr_price = self.pipeline.latest_price
+                    DashboardState.balance_usdt = self.calculate_total_equity()
                     
-                    # Compute running unrealized PnL
-                    if self.position_side == "LONG":
-                        self.highest_price_reached = max(self.highest_price_reached, curr_price)
-                        # Check trailing stop-loss updates
-                        new_sl = self.risk.update_trailing_stop(self.entry_price, self.highest_price_reached, self.stop_loss, "LONG")
-                        if new_sl > self.stop_loss:
-                            self.stop_loss = new_sl
-                            DashboardState.stop_loss = new_sl
-                            add_log_message(f"[RISK] Trailing stop updated to {new_sl:.2f}")
-                            
-                        # Check stop hit
-                        if curr_price <= self.stop_loss:
-                            add_log_message(f"🚨 Trailing Stop hit at {curr_price:.2f}. Liquidating position.")
-                            await self.exit_position("TRAILING_STOP")
-                        # Check profit target hit
-                        elif curr_price >= self.take_profit:
-                            add_log_message(f"🎯 Take profit target hit at {curr_price:.2f}. Liquidating position.")
-                            await self.exit_position("TAKE_PROFIT")
-                            
-                        # Update unrealized PnL
-                        pnl_pct = (curr_price - self.entry_price) / self.entry_price * 100.0
-                        pnl_usdt = self.position_size * (curr_price - self.entry_price)
-                        DashboardState.current_pnl_pct = pnl_pct
-                        DashboardState.current_pnl_usdt = pnl_usdt
-                    elif self.position_side == "SHORT":
-                        self.lowest_price_reached = min(self.lowest_price_reached, curr_price)
-                        # Check trailing stop-loss updates
-                        new_sl = self.risk.update_trailing_stop(self.entry_price, self.lowest_price_reached, self.stop_loss, "SHORT")
-                        if new_sl < self.stop_loss:
-                            self.stop_loss = new_sl
-                            DashboardState.stop_loss = new_sl
-                            add_log_message(f"[RISK] Trailing stop updated to {new_sl:.2f}")
-                            
-                        # Check stop hit (price goes ABOVE stop loss)
-                        if curr_price >= self.stop_loss:
-                            add_log_message(f"🚨 Trailing Stop hit at {curr_price:.2f}. Liquidating position.")
-                            await self.exit_position("TRAILING_STOP")
-                        # Check profit target hit (price goes BELOW take profit)
-                        elif curr_price <= self.take_profit:
-                            add_log_message(f"🎯 Take profit target hit at {curr_price:.2f}. Liquidating position.")
-                            await self.exit_position("TAKE_PROFIT")
-                            
-                        # Update unrealized PnL
-                        pnl_pct = (self.entry_price - curr_price) / self.entry_price * 100.0
-                        pnl_usdt = self.position_size * (self.entry_price - curr_price)
-                        DashboardState.current_pnl_pct = pnl_pct
-                        DashboardState.current_pnl_usdt = pnl_usdt
+                if self.pipeline.ltf_candles[sym]:
+                    DashboardState.chart_history = self.pipeline.ltf_candles[sym][-100:]
+                
+                if self.in_position[sym] and self.pipeline.latest_prices.get(sym, 0.0) > 0:
+                    curr_price = self.pipeline.latest_prices[sym]
+                    if self.position_side[sym] == "LONG":
+                        pnl_pct = (curr_price - self.entry_price[sym]) / self.entry_price[sym] * 100.0
+                        pnl_usdt = self.position_size[sym] * (curr_price - self.entry_price[sym])
+                    else:
+                        pnl_pct = (self.entry_price[sym] - curr_price) / self.entry_price[sym] * 100.0
+                        pnl_usdt = self.position_size[sym] * (self.entry_price[sym] - curr_price)
+                    DashboardState.current_pnl_pct = pnl_pct
+                    DashboardState.current_pnl_usdt = pnl_usdt
+                else:
+                    DashboardState.current_pnl_pct = 0.0
+                    DashboardState.current_pnl_usdt = 0.0
+
             except Exception as e:
-                # MINOR-7 FIX: Print full traceback so bugs in SL/TP monitoring
-                # are never silently swallowed
                 import traceback
                 print(f"[RISK MONITOR] Error: {e}")
                 traceback.print_exc()
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5.0)
 
-    async def exit_position(self, reason):
-        """Helper to force exit current position due to stop/limit triggers."""
-        exit_price = self.pipeline.latest_price
+    async def exit_position(self, symbol, reason):
+        exit_price = self.pipeline.latest_prices.get(symbol, self.entry_price[symbol])
         order = None
         if self.has_keys:
-            side = 'buy' if self.position_side == 'SHORT' else 'sell'
-            # ATTACK-5 FIX: Pass is_exit_order=True to bypass slippage guard.
-            # Exit orders MUST execute regardless of slippage — blocking an exit
-            # during a flash crash leaves the position unprotected indefinitely.
-            order = await self.execution.place_order(side, 'market', self.position_size, price=exit_price, is_exit_order=True)
+            side = 'buy' if self.position_side[symbol] == 'SHORT' else 'sell'
+            order = await self.execution.place_order(side, 'market', self.position_size[symbol], price=exit_price, is_exit_order=True, symbol=symbol)
         else:
             order = {'id': 'MOCK_EXIT_ORDER_ID', 'price': exit_price, 'status': 'filled'}
             
         if order:
-            if self.position_side == "LONG":
-                pnl_pct = (exit_price - self.entry_price) / self.entry_price * 100.0
-                pnl_usdt = self.position_size * (exit_price - self.entry_price)
-            else: # SHORT
-                pnl_pct = (self.entry_price - exit_price) / self.entry_price * 100.0
-                pnl_usdt = self.position_size * (self.entry_price - exit_price)
+            if self.position_side[symbol] == "LONG":
+                pnl_pct = (exit_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
+                pnl_usdt = self.position_size[symbol] * (exit_price - self.entry_price[symbol])
+                if not self.has_keys:
+                    self._dry_run_balance_usdt += self.position_size[symbol] * exit_price
+            else:
+                pnl_pct = (self.entry_price[symbol] - exit_price) / self.entry_price[symbol] * 100.0
+                pnl_usdt = self.position_size[symbol] * (self.entry_price[symbol] - exit_price)
+                if not self.has_keys:
+                    self._dry_run_balance_usdt += (self.position_size[symbol] * self.entry_price[symbol]) + pnl_usdt
                 
             trade_record = {
-                'side': self.position_side,
-                'entry_price': self.entry_price,
+                'symbol': symbol,
+                'side': self.position_side[symbol],
+                'entry_price': self.entry_price[symbol],
                 'exit_price': exit_price,
                 'pnl_usdt': pnl_usdt,
                 'pnl_pct': pnl_pct,
-                'entry_time': self.entry_time,
+                'entry_time': self.entry_time[symbol],
                 'exit_time': int(time.time() * 1000)
             }
             DashboardState.trades.append(trade_record)
-
-            # ATTACK-2 FIX: Bound trades list at 500 entries to prevent unbounded
-            # memory growth in long-running paper trading sessions.
             if len(DashboardState.trades) > 500:
                 DashboardState.trades = DashboardState.trades[-500:]
 
-            # BUG FIX #8: Dry-run — credit virtual balance with exit proceeds
-            if not self.has_keys:
-                if self.position_side == "LONG":
-                    # Return: cash from selling position at exit price
-                    self._dry_run_balance_usdt += self.position_size * exit_price
-                else:
-                    # Return: collateral + short profit (or minus loss)
-                    self._dry_run_balance_usdt += (self.position_size * self.entry_price) + pnl_usdt
-                DashboardState.balance_usdt = self._dry_run_balance_usdt
-                add_log_message(f"[DRY-RUN] Virtual balance after exit: {self._dry_run_balance_usdt:.2f} USDT")
-            
-            self.in_position = False
-            self.position_side = "HOLD"
-            self.position_size = 0.0
-            DashboardState.in_position = False
-            DashboardState.position_side = "HOLD"
+            # Task 5: Cluster Loss Tracking
+            is_loss = pnl_usdt < 0
+            self.trade_history.append(is_loss)
+            if len(self.trade_history) > 6:
+                self.trade_history.pop(0)
+                
+            if len(self.trade_history) >= 2 and all(self.trade_history[-2:]):
+                self.cluster_loss_pause_until = time.time() + (2 * 3600)
+                add_log_message("🚨 [SAFETY] 2 consecutive losses. Trading paused globally for 2 hours.")
+                self.trade_history.clear()
+            elif len(self.trade_history) >= 6 and sum(self.trade_history) >= 3:
+                self.cluster_risk_penalty = True
+                add_log_message("🚨 [SAFETY] 3 losses in last 6 trades. Global risk slashed by 50%.")
+            else:
+                self.cluster_risk_penalty = False
 
-            # CRITICAL-5 FIX: Clear saved state after position is closed
-            self.save_state()
+            self.in_position[symbol] = False
+            self.position_side[symbol] = "HOLD"
+            self.position_size[symbol] = 0.0
             
+            if symbol == Config.SYMBOL:
+                DashboardState.in_position = False
+                DashboardState.position_side = "HOLD"
+
+            self.save_state()
             await self.notifier.send_message(
-                f"🚨 *POSITION LIQUIDATED ({reason})*\n"
-                f"Exit Price: {exit_price:.2f} USDT\n"
-                f"PnL: {pnl_pct:+.2f}% ({pnl_usdt:+.2f} USDT)"
+                f"🚨 *{symbol} LIQUIDATED ({reason})*\nExit Price: {exit_price:.2f}\nPnL: {pnl_pct:+.2f}% ({pnl_usdt:+.2f} USDT)"
             )
 
     async def change_bot_symbol(self, new_symbol):
-        """
-        Dynamically changes the bot's trading asset:
-        1. Stops the current pipeline.
-        2. Resets open position and dashboard states.
-        3. Updates symbol config.
-        4. Re-initializes pipeline caches and starts WebSocket feed.
-        5. Retrains the Machine Learning confirmation model on the new coin's history.
-        """
-        # ATTACK-7 FIX: Guard against concurrent symbol changes.
-        # If the previous WebSocket loop is still running (not yet cancelled),
-        # deferring is safer than starting a second pipeline that will mix
-        # candle data from two different symbols into the same cache.
-        ws_task = getattr(self.pipeline, 'websocket_task', None)
-        if ws_task and not ws_task.done() and not self.pipeline.websocket_active:
-            add_log_message(f"[SYMBOL] Previous pipeline still shutting down. Deferring change to {new_symbol}...")
-            DashboardState.symbol_change_requested = new_symbol  # re-queue for next monitor tick
+        if new_symbol not in Config.SUPPORTED_SYMBOLS:
+            add_log_message(f"Symbol {new_symbol} is not tracked by the background pipeline.")
             return
 
-        if self.in_position:
-            add_log_message(f"Force-closing active {self.position_side} position on {Config.SYMBOL} before switching to {new_symbol}...")
-            await self.exit_position("SYMBOL_CHANGE")
-            
-        add_log_message(f"Initiating symbol change request to {new_symbol}...")
-        
-        # 1. Stop current websocket pipeline
-        self.pipeline.stop()
-        await asyncio.sleep(0.1) # tiny sleep for WS task shutdown buffer
-        
-        # 2. Reset bot state
-        self.in_position = False
-        self.position_side = "HOLD"
-        self.position_size = 0.0
-        self.entry_price = 0.0
-        self.stop_loss = 0.0
-        self.take_profit = 0.0
-        
-        # Reset Dashboard state
-        DashboardState.in_position = False
-        DashboardState.position_side = "HOLD"
-        DashboardState.entry_price = 0.0
-        DashboardState.stop_loss = 0.0
-        DashboardState.take_profit = 0.0
-        DashboardState.active_ob = "No OB"
-        DashboardState.active_fvg = "No FVG"
-        DashboardState.active_bullish_ob_level = 0.0
-        DashboardState.active_bearish_ob_level = 0.0
-        DashboardState.chart_history = []
-        DashboardState.trades = []
-        
-        # 3. Update symbol config
+        add_log_message(f"Dashboard view switched to {new_symbol}.")
         Config.SYMBOL = new_symbol
-        # Adjust default dry-run trade amount for safety
-        if "BTC" in new_symbol:
-            Config.TRADE_AMOUNT = 0.001
-        elif "ETH" in new_symbol:
-            Config.TRADE_AMOUNT = 0.02
+        
+        DashboardState.in_position = self.in_position[new_symbol]
+        DashboardState.position_side = self.position_side[new_symbol]
+        DashboardState.entry_price = self.entry_price[new_symbol]
+        DashboardState.stop_loss = self.stop_loss[new_symbol]
+        DashboardState.take_profit = self.take_profit[new_symbol]
+        DashboardState.latest_price = self.pipeline.latest_prices.get(new_symbol, 0.0)
+        DashboardState.chart_history = self.pipeline.ltf_candles[new_symbol][-100:] if self.pipeline.ltf_candles[new_symbol] else []
+        
+        if self.ml_models[new_symbol] is not None and self.pipeline.ltf_candles[new_symbol]:
+            df = prepare_dataframe(self.pipeline.ltf_candles[new_symbol])
+            DashboardState.ml_confidence = self.ml_models[new_symbol].predict_bias(df)
         else:
-            Config.TRADE_AMOUNT = 1.0 # default fallback for other altcoins
-            
-        # 4. Restart pipeline
-        self.pipeline.ltf_candles = []
-        self.pipeline.htf_candles = []
-        self.pipeline.latest_price = 0.0
-        
-        # Re-start pipeline (will fetch history and connect websocket)
-        await self.pipeline.start()
-        
-        # Immediately set latest_price from the last candle close in history to avoid 0.0 lag state
-        if self.pipeline.ltf_candles:
-            self.pipeline.latest_price = self.pipeline.ltf_candles[-1][4]
-        
-        # 6. Retrain ML Model on the new coin's historical data
-        ltf_history = self.pipeline.ltf_candles
-        if ltf_history:
-            df = prepare_dataframe(ltf_history)
-            add_log_message(f"Retraining ML confirmation model on historical {new_symbol} ticks...")
-            trained = self.ml.train(df)
-            if trained:
-                add_log_message("ML Model retrained successfully.")
-                DashboardState.ml_confidence = self.ml.predict_bias(df)
-            else:
-                add_log_message("ML Model retraining skipped (insufficient warm-up history).")
-                
-        # Update dashboard state indicators
-        DashboardState.latest_price = self.pipeline.latest_price
-        DashboardState.chart_history = self.pipeline.ltf_candles[-100:]
-        add_log_message(f"Symbol successfully changed. Watching {Config.SYMBOL} at {DashboardState.latest_price} USDT")
+            DashboardState.ml_confidence = 0.5
 
     async def shutdown(self):
         add_log_message("Shutting down exchange sessions gracefully...")
         await self.execution.close()
         self.pipeline.stop()
 
-# CRITICAL-2 FIX: Removed dead main() and run_bot_loops() functions.
-# main() was never called and referenced a non-existent method
-# (bot.run_risk_monitor_task instead of bot.run_live_risk_monitor).
-# run_bot_loops() was also never called. Both are replaced by start_all().
-
 async def start_all():
     import dashboard.app as dashboard_module
-
     bot = PrimeSignalBot()
-
-    # Register bot with dashboard so startup event can launch it
     dashboard_module.bot_instance = bot
 
     import os
@@ -678,7 +884,6 @@ async def start_all():
         await bot.shutdown()
 
 if __name__ == "__main__":
-    # MINOR-6 FIX: WindowsSelectorEventLoopPolicy deprecated in Python 3.12+
     if sys.platform == 'win32' and sys.version_info < (3, 12):
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 

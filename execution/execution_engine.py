@@ -21,6 +21,9 @@ class ExecutionEngine:
             print("[EXECUTION] Sandbox mode enabled (Binance Testnet)")
         else:
             print("[EXECUTION] WARNING: Live mainnet enabled. Operating with real funds.")
+            
+        self._tickers_cache = {}
+        self._tickers_cache_time = 0
 
     async def close(self):
         await self.public_client.close()
@@ -38,6 +41,23 @@ class ExecutionEngine:
         if ticker:
             return ticker['last']
         return None
+
+    async def fetch_ticker_data(self, symbol=None):
+        """Fetch full ticker data including bid, ask, and quoteVolume."""
+        if symbol is None:
+            symbol = Config.SYMBOL
+        return await self.execute_with_retry(self.public_client.fetch_ticker, symbol)
+        
+    async def fetch_all_tickers(self):
+        """Fetch all tickers with a 60-second cache to find top volume symbols."""
+        import time
+        now = time.time()
+        if now - self._tickers_cache_time > 60 or not self._tickers_cache:
+            tickers = await self.execute_with_retry(self.public_client.fetch_tickers)
+            if tickers:
+                self._tickers_cache = tickers
+                self._tickers_cache_time = now
+        return self._tickers_cache
 
     async def fetch_ohlcv(self, symbol=None, timeframe=None, limit=100):
         """Fetch historical candlestick data (OHLCV) from public client."""

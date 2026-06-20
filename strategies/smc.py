@@ -38,6 +38,45 @@ def detect_fvgs(df):
                     'timestamp': df.index[i-1]
                 }
                 
+    # --- MITIGATION PASS FOR FVGS ---
+    for i in range(len(fvg_list)):
+        fvg = fvg_list[i]
+        if fvg is None:
+            continue
+        
+        fvg['partially_mitigated'] = False
+        for k in range(i + 1, min(len(df), i + 150)):
+            candle = df.iloc[k]
+            
+            # Check if price touches the FVG zone
+            if candle['low'] <= fvg['top'] and candle['high'] >= fvg['bottom']:
+                fvg['mitigated'] = True
+                
+                # Check for smart partial mitigation (wick rejection)
+                candle_range = candle['high'] - candle['low']
+                is_partial = False
+                
+                if candle_range > 0:
+                    avg_vol = df['volume'].iloc[max(0, k-14):k].mean()
+                    if fvg['type'] == 'BULLISH':
+                        lower_body = min(candle['open'], candle['close'])
+                        wick_len = lower_body - candle['low']
+                        if candle['close'] > fvg['bottom'] and (wick_len / candle_range) >= 0.30 and candle['volume'] >= 1.2 * avg_vol:
+                            is_partial = True
+                            
+                    elif fvg['type'] == 'BEARISH':
+                        upper_body = max(candle['open'], candle['close'])
+                        wick_len = candle['high'] - upper_body
+                        if candle['close'] < fvg['top'] and (wick_len / candle_range) >= 0.30 and candle['volume'] >= 1.2 * avg_vol:
+                            is_partial = True
+
+                fvg['partially_mitigated'] = is_partial
+                
+                # If it's fully mitigated (not partial), or closes through the zone completely, it's dead
+                if not is_partial:
+                    break
+        fvg_list[i] = fvg
+
     return pd.Series(fvg_list, index=df.index)
 
 
@@ -53,14 +92,17 @@ def detect_order_blocks(df, lookback=50):
     
     # Precompute rolling average body size to avoid recalculating inside the loop (massive speedup!)
     avg_bodies = abs(df['close'] - df['open']).rolling(14).mean()
+    avg_vols = df['volume'].rolling(14).mean()
     
     for i in range(5, len(df)):
         # Calculate displacement / momentum: candle size relative to Average True Range
         candle_body = abs(df.iloc[i]['close'] - df.iloc[i]['open'])
         avg_body = avg_bodies.iloc[i]
+        candle_vol = df.iloc[i]['volume']
+        avg_vol = avg_vols.iloc[i]
         
         # If we have a strong bullish move
-        if df.iloc[i]['close'] > df.iloc[i]['open'] and candle_body > 1.5 * avg_body:
+        if df.iloc[i]['close'] > df.iloc[i]['open'] and candle_body > 1.5 * avg_body and candle_vol >= 1.5 * avg_vol:
             # Look back to find the last bearish candle
             for j in range(i-1, i-5, -1):
                 if df.iloc[j]['close'] < df.iloc[j]['open']:
@@ -74,7 +116,7 @@ def detect_order_blocks(df, lookback=50):
                     break
                     
         # If we have a strong bearish move
-        elif df.iloc[i]['close'] < df.iloc[i]['open'] and candle_body > 1.5 * avg_body:
+        elif df.iloc[i]['close'] < df.iloc[i]['open'] and candle_body > 1.5 * avg_body and candle_vol >= 1.5 * avg_vol:
             # Look back to find the last bullish candle
             for j in range(i-1, i-5, -1):
                 if df.iloc[j]['close'] > df.iloc[j]['open']:
@@ -88,33 +130,42 @@ def detect_order_blocks(df, lookback=50):
                     break
 
     # --- MITIGATION PASS ---
-    # An OB is 'mitigated' only when price has FULLY traded through the zone
-    # (closed beyond the OB's far edge), meaning the imbalance is consumed.
-    #
-    # Bullish OB  : mitigated when a candle closes BELOW the OB bottom
-    #               (price punched through the entire demand zone)
-    # Bearish OB  : mitigated when a candle closes ABOVE the OB top
-    #               (price punched through the entire supply zone)
-    #
-    # BUG FIX: Previously used ob['top']/ob['bottom'] as thresholds which
-    # fired on the very NEXT candle, marking every OB immediately stale.
+    # An OB is 'mitigated' when price touches the zone.
     for i in range(len(ob_list)):
         ob = ob_list[i]
         if ob is None:
             continue
-        # Cap lookforward at 150 bars (MINOR-3 FIX: prevents O(N²) lag on large caches)
+            
+        ob['partially_mitigated'] = False
+        # Cap lookforward at 150 bars to prevent lag
         for k in range(i + 1, min(len(df), i + 150)):
             candle = df.iloc[k]
-            if ob['type'] == 'BULLISH':
-                # Mitigated when price closes BELOW OB bottom (zone fully consumed)
-                if candle['close'] < ob['bottom']:
-                    ob_list[i] = dict(ob, mitigated=True)
+            # Price touches the zone boundaries
+            if candle['low'] <= ob['top'] and candle['high'] >= ob['bottom']:
+                ob['mitigated'] = True
+                
+                candle_range = candle['high'] - candle['low']
+                is_partial = False
+                
+                if candle_range > 0:
+                    avg_vol = df['volume'].iloc[max(0, k-14):k].mean()
+                    if ob['type'] == 'BULLISH':
+                        lower_body = min(candle['open'], candle['close'])
+                        wick_len = lower_body - candle['low']
+                        if candle['close'] > ob['bottom'] and (wick_len / candle_range) >= 0.30 and candle['volume'] >= 1.2 * avg_vol:
+                            is_partial = True
+                            
+                    elif ob['type'] == 'BEARISH':
+                        upper_body = max(candle['open'], candle['close'])
+                        wick_len = candle['high'] - upper_body
+                        if candle['close'] < ob['top'] and (wick_len / candle_range) >= 0.30 and candle['volume'] >= 1.2 * avg_vol:
+                            is_partial = True
+                            
+                ob['partially_mitigated'] = is_partial
+                
+                if not is_partial:
                     break
-            elif ob['type'] == 'BEARISH':
-                # Mitigated when price closes ABOVE OB top (zone fully consumed)
-                if candle['close'] > ob['top']:
-                    ob_list[i] = dict(ob, mitigated=True)
-                    break
+        ob_list[i] = ob
                     
     return pd.Series(ob_list, index=df.index)
 

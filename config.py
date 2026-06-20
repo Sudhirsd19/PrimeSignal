@@ -11,13 +11,15 @@ class Config:
     
     # Product Settings
     SYMBOL = os.getenv("SYMBOL", "BTC/USDT")
+    SUPPORTED_SYMBOLS = os.getenv("SUPPORTED_SYMBOLS", "BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,AVAX/USDT,LINK/USDT,MATIC/USDT,DOT/USDT,LTC/USDT,TRX/USDT,SHIB/USDT,NEAR/USDT,ATOM/USDT,UNI/USDT,ETC/USDT,FIL/USDT,APT/USDT").split(",")
     TRADE_AMOUNT = float(os.getenv("TRADE_AMOUNT", "0.001"))
     
     # Risk parameters
     RISK_PCT = float(os.getenv("RISK_PCT", "1.0"))
     MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "5.0"))
     MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "3"))
-    TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015"))
+    TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015")) # Deprecated in favor of ATR
+    TRAILING_ATR_MULT = float(os.getenv("TRAILING_ATR_MULT", "2.0"))
     MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "2.0"))
     
     # Strategy settings
@@ -31,6 +33,17 @@ class Config:
     RSI_OVERSOLD = int(os.getenv("RSI_OVERSOLD", "30"))
     RSI_OVERBOUGHT = int(os.getenv("RSI_OVERBOUGHT", "70"))
     ATR_PERIOD = int(os.getenv("ATR_PERIOD", "14"))
+    MIN_ATR_PCT = float(os.getenv("MIN_ATR_PCT", "0.0015"))
+    MAX_ZONE_AGE_CANDLES = int(os.getenv("MAX_ZONE_AGE_CANDLES", "50"))
+    ZONE_BUFFER_PCT = float(os.getenv("ZONE_BUFFER_PCT", "0.001"))
+    VWAP_TOLERANCE = float(os.getenv("VWAP_TOLERANCE", "0.001"))
+    MAX_SPREAD_PCT = float(os.getenv("MAX_SPREAD_PCT", "0.001"))
+    MIN_24H_VOL_USDT = float(os.getenv("MIN_24H_VOL_USDT", "50000000"))
+    MAX_CANDLE_MOVE_PCT = float(os.getenv("MAX_CANDLE_MOVE_PCT", "0.015"))
+    VOLATILITY_PAUSE_CANDLES = int(os.getenv("VOLATILITY_PAUSE_CANDLES", "2"))
+    COOLDOWN_MINUTES = int(os.getenv("COOLDOWN_MINUTES", "15"))
+    MAX_SLIPPAGE_PCT = float(os.getenv("MAX_SLIPPAGE_PCT", "0.002"))
+    FEE_RATE = float(os.getenv("FEE_RATE", "0.001"))
     
     # Machine Learning configurations
     ML_CONFIRMATION_THRESHOLD = float(os.getenv("ML_CONFIRMATION_THRESHOLD", "0.60"))

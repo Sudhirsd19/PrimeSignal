@@ -65,6 +65,39 @@ def calculate_vwap(df):
     vwap = cum_tp_vol / cum_vol.replace(0, 1e-9)
     return vwap
 
+def calculate_adx(df, period=14):
+    """
+    Calculates Average Directional Index (ADX) and DMI using Wilder's smoothing.
+    Returns DataFrame with columns: ['plus_di', 'minus_di', 'adx']
+    """
+    if len(df) < period:
+        return pd.DataFrame({'plus_di': [0.0]*len(df), 'minus_di': [0.0]*len(df), 'adx': [0.0]*len(df)}, index=df.index)
+        
+    high_diff = df['high'].diff()
+    low_diff = -df['low'].diff()
+    
+    plus_dm = np.where((high_diff > low_diff) & (high_diff > 0), high_diff, 0.0)
+    minus_dm = np.where((low_diff > high_diff) & (low_diff > 0), low_diff, 0.0)
+    
+    # Calculate True Range
+    high_low = df['high'] - df['low']
+    high_close = (df['high'] - df['close'].shift(1)).abs()
+    low_close = (df['low'] - df['close'].shift(1)).abs()
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    
+    # Wilder's Smoothing: EMA with alpha=1/period
+    smoothed_plus_dm = pd.Series(plus_dm, index=df.index).ewm(alpha=1/period, adjust=False).mean()
+    smoothed_minus_dm = pd.Series(minus_dm, index=df.index).ewm(alpha=1/period, adjust=False).mean()
+    smoothed_tr = tr.ewm(alpha=1/period, adjust=False).mean()
+    
+    plus_di = 100 * (smoothed_plus_dm / smoothed_tr.replace(0, 1e-9))
+    minus_di = 100 * (smoothed_minus_dm / smoothed_tr.replace(0, 1e-9))
+    
+    dx = 100 * (abs(plus_di - minus_di) / (plus_di + minus_di).replace(0, 1e-9))
+    adx = dx.ewm(alpha=1/period, adjust=False).mean()
+    
+    return pd.DataFrame({'plus_di': plus_di, 'minus_di': minus_di, 'adx': adx})
+
 def prepare_dataframe(ohlcv_data):
     """
     Converts list of list OHLCV candles to a pandas DataFrame.

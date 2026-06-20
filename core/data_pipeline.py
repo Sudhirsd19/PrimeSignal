@@ -8,12 +8,13 @@ class RealTimeDataPipeline:
     def __init__(self, execution_engine):
         self.execution = execution_engine
         
-        # In-memory OHLCV caches
-        self.ltf_candles = []  # list of [timestamp, open, high, low, close, volume]
-        self.htf_candles = []
+        # In-memory OHLCV caches keyed by symbol
+        self.ltf_candles = {sym: [] for sym in Config.SUPPORTED_SYMBOLS}
+        self.htf_candles = {sym: [] for sym in Config.SUPPORTED_SYMBOLS}
+        self.htf_4h_candles = {sym: [] for sym in Config.SUPPORTED_SYMBOLS}
         
         # Live status
-        self.latest_price = 0.0
+        self.latest_prices = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.websocket_active = False
         self.websocket_task = None
         self.current_websocket = None
@@ -25,29 +26,43 @@ class RealTimeDataPipeline:
         """
         Warm up caches with historical data from the exchange.
         """
-        print("[DATA] Warming up historical candle caches...")
-        
-        # Fetch HTF history
-        htf_ohlcv = await self.execution.fetch_ohlcv(
-            symbol=Config.SYMBOL, 
-            timeframe=Config.HTF_TIMEFRAME, 
-            limit=Config.TREND_EMA + 50
-        )
-        if htf_ohlcv:
-            self.htf_candles = htf_ohlcv
-            print(f"  Loaded {len(self.htf_candles)} historical HTF ({Config.HTF_TIMEFRAME}) candles.")
-            
-        # Fetch LTF history — 500 bars needed:
-        # • ML training needs 200+ clean samples after NaN warmup rows (~40 rows) are dropped
-        # • SMC OB lookback scans last 50 bars; more history = more structure context
-        ltf_ohlcv = await self.execution.fetch_ohlcv(
-            symbol=Config.SYMBOL,
-            timeframe=Config.LTF_TIMEFRAME,
-            limit=500
-        )
-        if ltf_ohlcv:
-            self.ltf_candles = ltf_ohlcv
-            print(f"  Loaded {len(self.ltf_candles)} historical LTF ({Config.LTF_TIMEFRAME}) candles.")
+        print("[DATA] Warming up historical candle caches for all symbols...")
+        for symbol in Config.SUPPORTED_SYMBOLS:
+            # Fetch HTF history
+            htf_ohlcv = await self.execution.fetch_ohlcv(
+                symbol=symbol, 
+                timeframe=Config.HTF_TIMEFRAME, 
+                limit=Config.TREND_EMA + 50
+            )
+            if htf_ohlcv is not None:
+                self.htf_candles[symbol] = htf_ohlcv
+            else:
+                print(f"ERROR: Failed to fetch historical data (HTF) for {symbol}")
+                
+            # Fetch 4H history
+            htf_4h_ohlcv = await self.execution.fetch_ohlcv(
+                symbol=symbol, 
+                timeframe='4h', 
+                limit=50
+            )
+            if htf_4h_ohlcv is not None:
+                self.htf_4h_candles[symbol] = htf_4h_ohlcv
+            else:
+                print(f"ERROR: Failed to fetch historical data (4H) for {symbol}")
+                
+            # Fetch LTF history — 500 bars needed:
+            # • ML training needs 200+ clean samples after NaN warmup rows (~40 rows) are dropped
+            # • SMC OB lookback scans last 50 bars; more history = more structure context
+            ltf_ohlcv = await self.execution.fetch_ohlcv(
+                symbol=symbol,
+                timeframe=Config.LTF_TIMEFRAME,
+                limit=500
+            )
+            if ltf_ohlcv is not None:
+                self.ltf_candles[symbol] = ltf_ohlcv
+            else:
+                print(f"ERROR: Failed to fetch historical data (LTF) for {symbol}")
+        print("[DATA] Historical caches warmed up.")
 
     async def start(self):
         """
@@ -55,20 +70,21 @@ class RealTimeDataPipeline:
         """
         await self.initialize_history()
         
-        # Binance stream symbol must be lowercase and without '/'
-        stream_symbol = Config.SYMBOL.replace('/', '').lower()
-        
-        # Stream URLs for both timeframes
-        ltf_stream = f"{stream_symbol}@kline_{Config.LTF_TIMEFRAME}"
-        htf_stream = f"{stream_symbol}@kline_{Config.HTF_TIMEFRAME}"
-        
-        url = f"wss://stream.binance.com:9443/ws/{ltf_stream}/{htf_stream}"
+        streams = []
+        for symbol in Config.SUPPORTED_SYMBOLS:
+            stream_symbol = symbol.replace('/', '').lower()
+            streams.append(f"{stream_symbol}@kline_{Config.LTF_TIMEFRAME}")
+            streams.append(f"{stream_symbol}@kline_{Config.HTF_TIMEFRAME}")
+            streams.append(f"{stream_symbol}@kline_4h")
+            
+        streams_joined = '/'.join(streams)
+        url = f"wss://stream.binance.com:9443/stream?streams={streams_joined}"
         
         self.websocket_task = asyncio.create_task(self._websocket_loop(url))
 
     async def _websocket_loop(self, url):
         self.websocket_active = True
-        print(f"[DATA] Connecting to Binance WebSocket feed: {url}")
+        print(f"[DATA] Connecting to Binance WebSocket feed...")
         
         retry_delay = 2.0
         while self.websocket_active:
@@ -82,11 +98,24 @@ class RealTimeDataPipeline:
                         if not self.websocket_active:
                             break
                         data = json.loads(message)
-                        event_type = data.get('e')
+                        
+                        if 'data' in data:
+                            kline_data = data['data']
+                        else:
+                            # fallback for single stream connection
+                            kline_data = data
+
+                        event_type = kline_data.get('e')
                         
                         if event_type == 'kline':
-                            kline = data['k']
+                            kline = kline_data['k']
                             timeframe = kline['i']
+                            symbol_raw = kline['s'] # e.g. 'BTCUSDT'
+                            
+                            # Map back to SUPPORTED_SYMBOLS
+                            symbol = next((s for s in Config.SUPPORTED_SYMBOLS if s.replace('/', '') == symbol_raw), None)
+                            if not symbol:
+                                continue
                             
                             # Parse kline details
                             candle = [
@@ -100,17 +129,19 @@ class RealTimeDataPipeline:
                             is_closed = kline['x']
                             
                             if timeframe == Config.LTF_TIMEFRAME:
-                                self.latest_price = candle[4]
-                                self._update_candle_cache(self.ltf_candles, candle, is_closed)
+                                self.latest_prices[symbol] = candle[4]
+                                self._update_candle_cache(self.ltf_candles[symbol], candle, is_closed)
                                 
                                 # If a lower-timeframe candle just closed, trigger strategy evaluation
                                 if is_closed and self.on_candle_close_callback:
-                                    task = asyncio.create_task(self.on_candle_close_callback())
+                                    task = asyncio.create_task(self.on_candle_close_callback(symbol))
                                     # Attach error handler to prevent silent failures
                                     task.add_done_callback(lambda t: self._handle_callback_exception(t))
                                     
                             elif timeframe == Config.HTF_TIMEFRAME:
-                                self._update_candle_cache(self.htf_candles, candle, is_closed)
+                                self._update_candle_cache(self.htf_candles[symbol], candle, is_closed)
+                            elif timeframe == '4h':
+                                self._update_candle_cache(self.htf_4h_candles[symbol], candle, is_closed)
                                 
             except websockets.exceptions.ConnectionClosed:
                 print(f"[DATA] WebSocket disconnected. Reconnecting in {retry_delay:.1f}s...")
