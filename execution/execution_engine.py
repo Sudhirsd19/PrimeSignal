@@ -54,7 +54,31 @@ class ExecutionEngine:
         """
         if symbol is None:
             symbol = Config.SYMBOL
-            
+
+        # 0. Enforce exchange LOT_SIZE precision (CRITICAL-4 fix)
+        # Binance rejects orders where amount does not match step size filter.
+        try:
+            # Load markets data if not already loaded (needed for precision info)
+            if not self.trade_client.markets:
+                await self.trade_client.load_markets()
+            precise_amount = float(self.trade_client.amount_to_precision(symbol, amount))
+            if precise_amount != amount:
+                print(f"[EXECUTION] Quantity rounded for exchange precision: {amount} → {precise_amount}")
+            amount = precise_amount
+        except Exception as e:
+            print(f"[EXECUTION] WARNING: Could not apply precision rounding ({e}). Using raw amount.")
+
+        # Check minimum order size
+        try:
+            markets = self.trade_client.markets
+            if markets and symbol in markets:
+                min_amount = markets[symbol].get('limits', {}).get('amount', {}).get('min', 0) or 0
+                if amount < min_amount:
+                    print(f"[EXECUTION] Order rejected: Amount {amount:.8f} is below minimum {min_amount} for {symbol}")
+                    return None
+        except Exception as e:
+            print(f"[EXECUTION] WARNING: Could not check minimum order size ({e}). Proceeding anyway.")
+
         # 1. Slippage check for market orders
         if order_type.upper() == "MARKET":
             ticker = await self.execute_with_retry(self.public_client.fetch_ticker, symbol)

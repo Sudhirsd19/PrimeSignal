@@ -102,7 +102,8 @@ def detect_order_blocks(df, lookback=50):
         ob = ob_list[i]
         if ob is None:
             continue
-        for k in range(i + 1, len(df)):
+        # Cap lookforward at 150 bars (MINOR-3 FIX: prevents O(N²) lag on large caches)
+        for k in range(i + 1, min(len(df), i + 150)):
             candle = df.iloc[k]
             if ob['type'] == 'BULLISH':
                 # Mitigated when price closes BELOW OB bottom (zone fully consumed)

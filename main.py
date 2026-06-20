@@ -53,15 +53,88 @@ class PrimeSignalBot:
             DashboardState.balance_usdt = self._dry_run_balance_usdt
             DashboardState.balance_base = 0.0
             print("[INIT] ✅ Dry-run mode: Virtual balance initialized to $10,000 USDT")
+
+        # CRITICAL-3 FIX: Lock to prevent concurrent candle processing.
+        # Without this, two candle closes firing while a previous evaluation is
+        # still running (e.g. awaiting balance fetch) would both see
+        # in_position=False and place duplicate orders.
+        self._candle_lock = asyncio.Lock()
         
         # Link callbacks
         self.pipeline.on_candle_close_callback = self.on_candle_close
 
+    # ─── CRITICAL-5 FIX: State Persistence ─────────────────────────────────
+    # Saves bot position state to disk so a server restart (common on Render
+    # free tier) can recover the open position instead of leaving it unprotected.
+    import json as _json
+    from pathlib import Path as _Path
+    _STATE_FILE = _Path("bot_state.json")
+
+    def save_state(self):
+        """Persist current position state to disk for crash recovery."""
+        import json
+        from pathlib import Path
+        state = {
+            'in_position': self.in_position,
+            'position_side': self.position_side,
+            'entry_price': self.entry_price,
+            'stop_loss': self.stop_loss,
+            'take_profit': self.take_profit,
+            'position_size': self.position_size,
+            'entry_time': self.entry_time,
+            'highest_price_reached': self.highest_price_reached,
+            'lowest_price_reached': self.lowest_price_reached,
+            '_dry_run_balance_usdt': self._dry_run_balance_usdt,
+        }
+        try:
+            Path("bot_state.json").write_text(json.dumps(state))
+        except Exception as e:
+            print(f"[STATE] Failed to save state: {e}")
+
+    def load_state(self):
+        """Restore position state from disk after a restart."""
+        import json
+        from pathlib import Path
+        state_file = Path("bot_state.json")
+        if not state_file.exists():
+            return
+        try:
+            state = json.loads(state_file.read_text())
+            self.in_position = state.get('in_position', False)
+            self.position_side = state.get('position_side', 'HOLD')
+            self.entry_price = state.get('entry_price', 0.0)
+            self.stop_loss = state.get('stop_loss', 0.0)
+            self.take_profit = state.get('take_profit', 0.0)
+            self.position_size = state.get('position_size', 0.0)
+            self.entry_time = state.get('entry_time', 0)
+            self.highest_price_reached = state.get('highest_price_reached', 0.0)
+            self.lowest_price_reached = state.get('lowest_price_reached', 999999.0)
+            self._dry_run_balance_usdt = state.get('_dry_run_balance_usdt', 10000.0)
+            # Sync to dashboard
+            DashboardState.in_position = self.in_position
+            DashboardState.position_side = self.position_side
+            DashboardState.entry_price = self.entry_price
+            DashboardState.stop_loss = self.stop_loss
+            DashboardState.take_profit = self.take_profit
+            DashboardState.balance_usdt = self._dry_run_balance_usdt
+            if self.in_position:
+                add_log_message(f"[STATE] Recovered {self.position_side} position from disk: entry={self.entry_price:.2f}, SL={self.stop_loss:.2f}, TP={self.take_profit:.2f}")
+            else:
+                add_log_message("[STATE] State file loaded — no open position to recover.")
+        except Exception as e:
+            print(f"[STATE] Failed to load state: {e}")
+
     async def initialize(self):
         """
         Initializes websocket connections, loads history, and trains the ML classifier.
+        Also restores any previously saved position state from disk.
         """
         add_log_message("Starting system initialization...")
+
+        # CRITICAL-5 FIX: Restore persisted state before starting
+        # This recovers any open position after a server restart
+        self.load_state()
+
         await self.pipeline.start()
         
         # Wait a moment for websocket connection to load initial ticks
@@ -71,7 +144,14 @@ class PrimeSignalBot:
         if self.has_keys:
             balance = await self.execution.fetch_balance()
             if balance:
-                DashboardState.balance_usdt = balance.get('total', {}).get('USDT', 10000.0)
+                # MINOR-4 FIX: Validate balance before assigning — a zero/None
+                # result (wrong account type, API error) would silently set an
+                # incorrect equity and allow oversized position sizing.
+                usdt_balance = balance.get('total', {}).get('USDT', None)
+                if usdt_balance and usdt_balance > 0:
+                    DashboardState.balance_usdt = usdt_balance
+                else:
+                    add_log_message(f"[WARNING] Balance fetch returned {usdt_balance}. Check account type. Keeping last known value.")
                 DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
         else:
             # Ensure dry-run balance is synced to DashboardState
@@ -100,14 +180,32 @@ class PrimeSignalBot:
         """
         Callback executed every time a lower-timeframe (LTF) candle closes.
         Runs strategy generation, ML validation, risk checking, and execution.
+
+        CRITICAL-3 FIX: Uses an asyncio.Lock to prevent concurrent execution.
+        If a previous candle evaluation is still running (e.g. awaiting an API
+        call), the new candle is skipped instead of creating a duplicate trade.
         """
+        if self._candle_lock.locked():
+            add_log_message("[LOCK] Candle fired while previous evaluation still running — skipping to prevent duplicate orders.")
+            return
+
+        async with self._candle_lock:
+            await self._on_candle_close_impl()
+
+    async def _on_candle_close_impl(self):
+        """Internal candle close handler — called exclusively inside _candle_lock."""
         add_log_message("LTF Candle closed. Running strategy check...")
         
         # 1. Update balances on candle close
         if self.has_keys:
             balance = await self.execution.fetch_balance()
             if balance:
-                DashboardState.balance_usdt = balance.get('total', {}).get('USDT', 10000.0)
+                # MINOR-4 FIX: Validate balance before assigning
+                usdt_balance = balance.get('total', {}).get('USDT', None)
+                if usdt_balance and usdt_balance > 0:
+                    DashboardState.balance_usdt = usdt_balance
+                else:
+                    add_log_message(f"[WARNING] Candle balance refresh returned {usdt_balance}. Keeping last known value.")
                 DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
                 
         # 2. Check drawdown circuit breakers
@@ -228,6 +326,9 @@ class PrimeSignalBot:
                 DashboardState.entry_price = entry_price
                 DashboardState.stop_loss = sl
                 DashboardState.take_profit = tp
+
+                # CRITICAL-5 FIX: Persist state so restart can recover position
+                self.save_state()
                 
                 await self.notifier.send_message(
                     f"🟢 *BUY (LONG) Order Executed*\n"
@@ -271,6 +372,9 @@ class PrimeSignalBot:
                 DashboardState.entry_price = entry_price
                 DashboardState.stop_loss = sl
                 DashboardState.take_profit = tp
+
+                # CRITICAL-5 FIX: Persist state so restart can recover position
+                self.save_state()
                 
                 await self.notifier.send_message(
                     f"🔴 *SELL (SHORT) Order Executed*\n"
@@ -384,7 +488,11 @@ class PrimeSignalBot:
                         DashboardState.current_pnl_pct = pnl_pct
                         DashboardState.current_pnl_usdt = pnl_usdt
             except Exception as e:
-                print(f"Error in risk monitor loop: {e}")
+                # MINOR-7 FIX: Print full traceback so bugs in SL/TP monitoring
+                # are never silently swallowed
+                import traceback
+                print(f"[RISK MONITOR] Error: {e}")
+                traceback.print_exc()
             await asyncio.sleep(1.0)
 
     async def exit_position(self, reason):
@@ -432,6 +540,9 @@ class PrimeSignalBot:
             self.position_size = 0.0
             DashboardState.in_position = False
             DashboardState.position_side = "HOLD"
+
+            # CRITICAL-5 FIX: Clear saved state after position is closed
+            self.save_state()
             
             await self.notifier.send_message(
                 f"🚨 *POSITION LIQUIDATED ({reason})*\n"
@@ -523,41 +634,10 @@ class PrimeSignalBot:
         await self.execution.close()
         self.pipeline.stop()
 
-async def main():
-    bot = PrimeSignalBot()
-    await bot.initialize()
-    
-    # Configure FastAPI server
-    config = uvicorn.Config(app, host="127.0.0.1", port=8000, log_level="info")
-    server = uvicorn.Server(config)
-    
-    try:
-        # Run bot logic, risk monitor, and API server concurrently
-        await asyncio.gather(
-            server.serve(),
-            bot.run_risk_monitor_task(), # We map bot risk loop here
-            return_exceptions=True
-        )
-    except KeyboardInterrupt:
-        pass
-    finally:
-        await bot.shutdown()
-
-# Add runner mapping helper
-async def run_bot_loops(bot):
-    try:
-        print("[BOT] Initializing bot...")
-        await bot.initialize()
-        print("[BOT] Initialization complete. Starting risk monitor loop...")
-        await asyncio.gather(
-            bot.run_live_risk_monitor()
-        )
-    except asyncio.CancelledError:
-        pass
-    except Exception as e:
-        import traceback
-        print(f"[BOT] FATAL ERROR in run_bot_loops: {e}")
-        traceback.print_exc()
+# CRITICAL-2 FIX: Removed dead main() and run_bot_loops() functions.
+# main() was never called and referenced a non-existent method
+# (bot.run_risk_monitor_task instead of bot.run_live_risk_monitor).
+# run_bot_loops() was also never called. Both are replaced by start_all().
 
 async def start_all():
     import dashboard.app as dashboard_module
@@ -580,7 +660,8 @@ async def start_all():
         await bot.shutdown()
 
 if __name__ == "__main__":
-    if sys.platform == 'win32':
+    # MINOR-6 FIX: WindowsSelectorEventLoopPolicy deprecated in Python 3.12+
+    if sys.platform == 'win32' and sys.version_info < (3, 12):
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
     try:

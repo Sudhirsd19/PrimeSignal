@@ -57,7 +57,7 @@ def calculate_vwap(df):
     cum_tp_vol = pd.Series(0.0, index=df.index)
     cum_vol = pd.Series(0.0, index=df.index)
 
-    for date in set(date_groups):
+    for date in sorted(set(date_groups)):  # sorted() ensures chronological order for correct cumsum
         mask = date_groups == date
         cum_tp_vol[mask] = (typical_price[mask] * volume[mask]).cumsum()
         cum_vol[mask] = volume[mask].cumsum()
