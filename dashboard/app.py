@@ -11,6 +11,10 @@ import os
 
 app = FastAPI(title="PrimeSignal Trading Dashboard")
 
+# Global bot instance — set by main.py before server starts
+bot_instance = None
+_bot_task = None
+
 # Templates path setup
 templates_dir = os.path.join(os.path.dirname(__file__), "templates")
 templates = Jinja2Templates(directory=templates_dir)
@@ -156,8 +160,29 @@ async def broadcast_state_loop():
 
 @app.on_event("startup")
 async def startup_event():
+    global _bot_task
     # Start the websocket broadcast background task
     asyncio.create_task(broadcast_state_loop())
+    # Launch bot loop if bot_instance is registered
+    if bot_instance is not None:
+        print("[STARTUP] Launching bot trading loop from FastAPI startup event...")
+        _bot_task = asyncio.create_task(_run_bot(bot_instance))
+    else:
+        print("[STARTUP] WARNING: bot_instance not registered. Bot will NOT run.")
+
+async def _run_bot(bot):
+    """Wrapper that runs bot initialization and risk monitor loop."""
+    try:
+        print("[BOT] Initializing bot...")
+        await bot.initialize()
+        print("[BOT] Initialization complete. Entering risk monitor loop...")
+        await bot.run_live_risk_monitor()
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        import traceback
+        print(f"[BOT] FATAL ERROR: {e}")
+        traceback.print_exc()
 
 def add_log_message(msg):
     import datetime

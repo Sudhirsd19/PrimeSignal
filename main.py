@@ -531,35 +531,43 @@ async def main():
 # Add runner mapping helper
 async def run_bot_loops(bot):
     try:
+        print("[BOT] Initializing bot...")
         await bot.initialize()
+        print("[BOT] Initialization complete. Starting risk monitor loop...")
         await asyncio.gather(
             bot.run_live_risk_monitor()
         )
     except asyncio.CancelledError:
         pass
+    except Exception as e:
+        import traceback
+        print(f"[BOT] FATAL ERROR in run_bot_loops: {e}")
+        traceback.print_exc()
 
 async def start_all():
+    import dashboard.app as dashboard_module
+
     bot = PrimeSignalBot()
-    
+
+    # Register bot with dashboard so startup event can launch it
+    dashboard_module.bot_instance = bot
+
     import os
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8000"))
-    
+
     config = uvicorn.Config(app, host=host, port=port, log_level="info")
     server = uvicorn.Server(config)
-    
+
     try:
-        await asyncio.gather(
-            server.serve(),
-            run_bot_loops(bot)
-        )
+        await server.serve()
     finally:
         await bot.shutdown()
 
 if __name__ == "__main__":
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-        
+
     try:
         asyncio.run(start_all())
     except KeyboardInterrupt:
