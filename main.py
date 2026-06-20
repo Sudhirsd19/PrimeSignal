@@ -572,7 +572,7 @@ class PrimeSignalBot:
         # deferring is safer than starting a second pipeline that will mix
         # candle data from two different symbols into the same cache.
         ws_task = getattr(self.pipeline, 'websocket_task', None)
-        if ws_task and not ws_task.done():
+        if ws_task and not ws_task.done() and not self.pipeline.websocket_active:
             add_log_message(f"[SYMBOL] Previous pipeline still shutting down. Deferring change to {new_symbol}...")
             DashboardState.symbol_change_requested = new_symbol  # re-queue for next monitor tick
             return
