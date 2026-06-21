@@ -299,9 +299,9 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             if valid_entry and market_regime == 'HIGH_VOL':
                 if entry_type == 'FVG': valid_entry = False
                 elif entry_type == 'OB' and not strong_trend: valid_entry = False
-                
-            if valid_entry and vol_pass:
 
+            # FIX #3: Removed redundant vol_pass check - vol_pass already validated at line 146
+            if valid_entry:
                 if entry_type in ["OB", "FVG"]:
                     ob_sl = zone_bottom * 0.998
                 else:

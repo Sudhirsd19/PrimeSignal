@@ -14,16 +14,19 @@ class RiskManager:
         """
         if account_equity <= 0:
             return 0.0
-            
+
         # 1. Calculate USDT budget to risk
         usdt_risk = account_equity * (Config.RISK_PCT / 100.0)
-        
+
         # 2. Calculate stop distance
         stop_distance = abs(entry_price - stop_loss)
-        
+
+        # FIX #6: Add diagnostic logging for zero-distance fallback
         if stop_distance <= 0:
-            # Fallback size if no stop loss distance is calculated
-            print("WARNING: Stop distance is zero or negative. Falling back to default trade size.")
+            print(f"⚠️ RISK MANAGER WARNING: Stop distance is zero or negative")
+            print(f"   Entry Price: {entry_price}")
+            print(f"   Stop Loss: {stop_loss}")
+            print(f"   Falling back to default trade size: {Config.TRADE_AMOUNT}")
             return Config.TRADE_AMOUNT
             
         # 3. Calculate position size (amount in crypto asset, e.g. BTC)

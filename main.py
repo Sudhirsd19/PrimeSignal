@@ -399,6 +399,10 @@ class PrimeSignalBot:
         if len(self.traded_zones_cache) > 1000:
             self.traded_zones_cache.clear()
             
+        # FIX #2: Define entry_price BEFORE ML block uses it
+        entry_price = ltf_df['close'].iloc[-2]
+        add_log_message(f"[{symbol}] Entry price set: {entry_price:.4f}")
+
         # ML Confidence Scaler & Soft Session Filter
         prob = 1.0
         ml_confidence_weight = 0
@@ -407,8 +411,8 @@ class PrimeSignalBot:
             if symbol == Config.SYMBOL:
                 DashboardState.ml_confidence = prob
             add_log_message(f"[{symbol}] ML confidence score: {prob:.2f}")
-            
-            # Task 7: ML TP Logic
+
+            # Task 7: ML TP Logic - now entry_price is defined
             risk_usdt = abs(metadata.get('stop_loss', entry_price) - entry_price)
             if prob > 0.65:
                 metadata['tp2'] = entry_price + (2.5 * risk_usdt) if signal == "BUY" else entry_price - (2.5 * risk_usdt)
@@ -418,8 +422,6 @@ class PrimeSignalBot:
                 ml_confidence_weight = -1
             else:
                 metadata['tp2'] = entry_price + (2.0 * risk_usdt) if signal == "BUY" else entry_price - (2.0 * risk_usdt)
-
-        entry_price = ltf_df['close'].iloc[-2]
         if is_low_volume_session:
             avg_vol = ltf_df['volume'].rolling(14).mean().iloc[-1] if len(ltf_df) > 14 else 0.0
             if ltf_df['volume'].iloc[-1] < 0.6 * avg_vol:
@@ -555,7 +557,7 @@ class PrimeSignalBot:
                 if position_cost <= self._dry_run_balance_usdt:
                     self._dry_run_balance_usdt -= position_cost
                     order = {'id': 'MOCK_BUY_ORDER_ID', 'price': entry_price, 'status': 'filled'}
-                
+
             if order:
                 self.in_position[symbol] = True
                 self.position_side[symbol] = "LONG"
@@ -573,7 +575,7 @@ class PrimeSignalBot:
                 self.global_last_trade_time = time.time()
                 if metadata.get('mode') == 'RELAXED':
                     self.relaxed_trades_today += 1
-                
+
                 if symbol == Config.SYMBOL:
                     DashboardState.in_position = True
                     DashboardState.position_side = "LONG"
@@ -582,7 +584,25 @@ class PrimeSignalBot:
                     DashboardState.take_profit = tp
 
                 self.save_state()
+                # FIX #1: Define msg_str in BUY branch before sending notification
+                msg_str = (
+                    f"🟢 *BUY (LONG) {symbol}*\\n"
+                    f"Mode: {metadata.get('mode', 'STRICT')}\\n"
+                    f"Setup Type: {metadata.get('setup_type', 'NONE')}\\n"
+                    f"Entry: {entry_price:.4f}\\n"
+                    f"Stop Loss: {sl:.4f}\\n"
+                    f"TP1 (1R): {metadata.get('tp1', 0.0):.4f}\\n"
+                    f"TP2 (2R): {metadata.get('tp2', 0.0):.4f}\\n"
+                    f"Position Size: {pos_size:.6f}\\n"
+                    f"Confidence: {prob:.2f}\\n"
+                    f"Reason: {metadata.get('reason', 'N/A')}"
+                )
+                add_log_message(f"[{symbol}] " + msg_str.replace('\\n', ' | '))
                 await self.notifier.send_message(msg_str)
+            else:
+                # FIX #4: Log order rejection with reason
+                add_log_message(f"[{symbol}] ❌ BUY order REJECTED (check execution logs for reason: slippage/min-amount/liquidity)")
+                await self.notifier.send_message(f"⚠️ BUY REJECTED {symbol}: Order failed to execute. Check bot logs.")
                 
         elif signal == "SELL":
             msg_str = (
@@ -776,7 +796,11 @@ class PrimeSignalBot:
             await asyncio.sleep(5.0)
 
     async def exit_position(self, symbol, reason):
-        exit_price = self.pipeline.latest_prices.get(symbol, self.entry_price[symbol])
+        # FIX #5: Better fallback for exit_price to avoid 0.0 values
+        exit_price = self.pipeline.latest_prices.get(symbol) or self.entry_price[symbol]
+        if exit_price <= 0 or not exit_price:
+            exit_price = self.entry_price[symbol]
+        add_log_message(f"[{symbol}] Exiting at price: {exit_price:.4f} (reason: {reason})")
         order = None
         if self.has_keys:
             side = 'buy' if self.position_side[symbol] == 'SHORT' else 'sell'
