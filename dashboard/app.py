@@ -198,8 +198,16 @@ async def _run_bot(bot):
                 print("[TEST TRIGGER] Caches not warmed up yet. Cannot test.")
                 return
             
+            # Force close any previously recovered open trade to start demo clean
+            if bot.in_position[symbol]:
+                await bot.exit_position(symbol, "FORCE_CLOSE_PREVIOUS_DEMO")
+                await asyncio.sleep(2)
+            
             latest_close = bot.pipeline.ltf_candles[symbol][-1][4]
             bot.pipeline.latest_prices[symbol] = latest_close
+            
+            # Inject extremely high volume to last candle to bypass low volume session filters
+            bot.pipeline.ltf_candles[symbol][-1][5] = 9999999999.0
             
             # Temporary settings to ensure trade execution
             from config import Config
