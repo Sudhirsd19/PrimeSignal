@@ -189,6 +189,61 @@ async def _run_bot(bot):
         print("[BOT] Initializing bot...")
         await bot.initialize()
         print("[BOT] Initialization complete. Entering risk monitor loop...")
+        
+        # Inject test trade trigger for dashboard UI demonstration
+        async def trigger_test_trade():
+            await asyncio.sleep(8)
+            symbol = "BTC/USDT"
+            if not bot.pipeline.ltf_candles.get(symbol):
+                print("[TEST TRIGGER] Caches not warmed up yet. Cannot test.")
+                return
+            
+            latest_close = bot.pipeline.ltf_candles[symbol][-1][4]
+            bot.pipeline.latest_prices[symbol] = latest_close
+            
+            # Temporary settings to ensure trade execution
+            from config import Config
+            original_slippage = Config.MAX_SLIPPAGE_PCT
+            Config.MAX_SLIPPAGE_PCT = 1.0
+            
+            original_generate_signal = bot.strategy.generate_signal
+            def mock_generate_signal(htf_df, ltf_df, relaxed=False, super_relaxed=False):
+                metadata = {
+                    'stop_loss': latest_close * 0.99,
+                    'take_profit': latest_close * 1.02,
+                    'tp1': latest_close * 1.01,
+                    'tp2': latest_close * 1.02,
+                    'score': 4.5,
+                    'mode': 'STRICT',
+                    'setup_type': 'TEST_OB',
+                    'zone_id': 'TEST_ZONE_123',
+                    'reason': 'Mocked test signal for UI dashboard demonstration',
+                    'debug_checks': {
+                        'trend': 'PASS',
+                        'zone': 'PASS',
+                        'trigger': 'PASS',
+                        'vwap': 'PASS',
+                        'volatility': 'PASS'
+                    }
+                }
+                return "BUY", metadata
+            bot.strategy.generate_signal = mock_generate_signal
+            
+            print("[TEST TRIGGER] Executing test BUY trade...")
+            await bot._on_candle_close_impl(symbol)
+            
+            bot.strategy.generate_signal = original_generate_signal
+            Config.MAX_SLIPPAGE_PCT = original_slippage
+            print("[TEST TRIGGER] Test BUY trade completed and active on dashboard!")
+            
+            # Wait 25 seconds and exit
+            await asyncio.sleep(25)
+            print("[TEST TRIGGER] Executing test exit (liquidation)...")
+            await bot.exit_position(symbol, "TEST_EXIT")
+            print("[TEST TRIGGER] Test exit completed!")
+            
+        asyncio.create_task(trigger_test_trade())
+        
         await bot.run_live_risk_monitor()
     except asyncio.CancelledError:
         pass
