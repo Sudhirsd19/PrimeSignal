@@ -194,11 +194,11 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             trigger_close = ltf_df.iloc[-2]['close']
             trigger_open = ltf_df.iloc[-2]['open']
             trigger_high = ltf_df.iloc[-2]['high']
+            candle_range = trigger_high - trigger_low
             
             liq_sweep = False
             if swing_range > 0.003:
                 if trigger_low < swing_low and trigger_close > swing_low:
-                    candle_range = trigger_high - trigger_low
                     lower_wick = min(trigger_open, trigger_close) - trigger_low
                     if candle_range > 0 and (lower_wick / candle_range) >= 0.3:
                         avg_body = abs(ltf_df['close'] - ltf_df['open']).rolling(14).mean().iloc[-2]
@@ -350,11 +350,11 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             trigger_close = ltf_df.iloc[-2]['close']
             trigger_open = ltf_df.iloc[-2]['open']
             trigger_high = ltf_df.iloc[-2]['high']
+            candle_range = trigger_high - trigger_low
             
             liq_sweep = False
             if swing_range > 0.003:
                 if trigger_high > swing_high and trigger_close < swing_high:
-                    candle_range = trigger_high - trigger_low
                     upper_wick = trigger_high - max(trigger_open, trigger_close)
                     if candle_range > 0 and (upper_wick / candle_range) >= 0.3:
                         avg_body = abs(ltf_df['close'] - ltf_df['open']).rolling(14).mean().iloc[-2]
@@ -376,6 +376,14 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 zone_top = active_bearish_fvg['top']
                 zone_ts = active_bearish_fvg['timestamp']
                 reason  = f"Price inside Bearish FVG [{zone_bottom:.2f}-{zone_top:.2f}]"
+                
+            elif not in_zone and liq_sweep:
+                in_zone = True
+                entry_type = "SWEEP"
+                zone_bottom = swing_high
+                zone_top = trigger_high
+                zone_ts = ltf_df.index[-2]
+                reason = f"Liquidity Sweep of Swing High [{swing_high:.2f}]"
                 
             # Secondary Setups
             if not in_zone and relaxed and strong_trend:
@@ -406,13 +414,49 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             vwap_pass = curr_vwap < prev_vwap + (prev_vwap * vwap_tol)
             metadata['debug_checks']['vwap'] = 'PASS' if vwap_pass else 'FAIL'
 
-            if in_zone and trigger_pass and vwap_pass and vol_pass:
-                # Require rejection candle OR micro break for secondary setups
+            micro_bos = (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-2]['open']) and (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-3]['low'])
+            
+            score = 0
+            if in_zone and entry_type in ["OB", "FVG", "SWEEP"]: score += 2
+            if vwap_pass: score += 1
+            if trigger_pass: score += 1
+            if micro_bos: score += 1
+            
+            # Sudden Wick Filter (1.8%)
+            if (trigger_high - trigger_low) / trigger_low > 0.018:
+                valid_entry = False
+                reason = "Rejected: Setup candle wick/range > 1.8% (Slippage risk)"
+            
+            if metadata['session'] == 'ASIA' and entry_type == 'FVG': score += 1
+            if metadata['session'] == 'LONDON' and strong_trend: score += 1
+            if metadata['session'] == 'NY' and entry_type == 'SWEEP': score += 1
+            
+            if market_regime == 'TREND': score_thresh = 2.5
+            elif market_regime == 'MIXED': score_thresh = 3.0
+            elif market_regime == 'RANGE': score_thresh = 3.5
+            elif market_regime == 'HIGH_VOL': score_thresh = 4.0
+            else: score_thresh = 3.0
+            
+            if super_relaxed:
+                score_thresh -= 0.5
+                vwap_pass = True
+                
+            metadata['score'] = score
+            
+            valid_entry = False
+            if relaxed:
                 if entry_type in ["EMA", "VWAP"]:
-                    rejection = (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-2]['open']) and (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-3]['low'])
-                    if not rejection:
-                        return "HOLD", metadata
+                    if micro_bos: valid_entry = True
+                elif in_zone and trigger_pass and vwap_pass:
+                    valid_entry = True
+            else:
+                if score >= score_thresh and (vwap_pass or micro_bos): valid_entry = True
+                
+            if valid_entry and market_regime == 'HIGH_VOL':
+                if entry_type == 'FVG': valid_entry = False
+                elif entry_type == 'OB' and not strong_trend: valid_entry = False
 
+            if valid_entry:
                 if entry_type in ["OB", "FVG"]:
                     ob_sl = zone_top * 1.002
                 else:
@@ -422,7 +466,11 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 # Tighter of structure or ATR, but minimum 0.3% distance
                 tightest_sl = min(ob_sl, atr_sl) if entry_type in ["OB", "FVG"] else atr_sl
                 min_sl = curr_price * (1 + 0.003)
-                stop_loss = max(tightest_sl, min_sl)
+                
+                # Range stop loss for BEARISH
+                last_5_range = ltf_df['high'].iloc[-7:-2].max() - ltf_df['low'].iloc[-7:-2].min()
+                range_sl = curr_price + (0.8 * last_5_range)
+                stop_loss = max(tightest_sl, min_sl, range_sl)
 
                 risk        = max(stop_loss - curr_price, 1e-9)
                 fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.001) * 2.0
@@ -437,7 +485,6 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 metadata['mode'] = "RELAXED" if relaxed else "STRICT"
                 metadata['setup_type'] = entry_type
                 metadata['zone_id']    = f"{entry_type}_{zone_ts}"
-                metadata['setup_type'] = entry_type
                 trig_str = 'RSI Recovery' if rsi_trigger else 'Death Cross'
                 rel_str = ' (RELAXED)' if relaxed else ''
                 metadata['reason']     = f"{reason} | Trigger: {trig_str}{rel_str}"

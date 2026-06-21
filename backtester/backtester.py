@@ -60,16 +60,15 @@ class BacktestEngine:
         relaxed_losses = 0
         relaxed_disabled_until = 0
         relaxed_trades_today = 0
-        last_trade_day = ltf_df.index[start_idx].date()
-        
         fee_rate = getattr(Config, 'FEE_RATE', 0.001)
         slippage_pct = getattr(Config, 'MAX_SLIPPAGE_PCT', 0.002)
-        
+
         # We start loop from index where indicators are warmed up on both sides
         start_idx = max(Config.TREND_EMA * 12, 100) # Ensure HTF EMA is warm (1h EMA 200 = 200 hours, so at 5m we need at least 2400 bars)
         if start_idx >= len(ltf_df) - 50:
             start_idx = Config.LONG_EMA + 20
             
+        last_trade_day = ltf_df.index[start_idx].date()
         print(f"[BACKTEST] Running simulation loop from bar {start_idx} to {len(ltf_df)}...")
         
         for i in range(start_idx, len(ltf_df)):

@@ -250,7 +250,8 @@ class PrimeSignalBot:
 
         DashboardState.daily_drawdown_pct = self.risk.current_drawdown_pct
 
-        ltf_df = self.pipeline.ltf_candles[symbol]
+        ltf_df = prepare_dataframe(self.pipeline.ltf_candles[symbol])
+        htf_df = prepare_dataframe(self.pipeline.htf_candles[symbol])
         
         # Check high volatility kill switch
         if not ltf_df.empty:
@@ -400,7 +401,7 @@ class PrimeSignalBot:
             self.traded_zones_cache.clear()
             
         # FIX #2: Define entry_price BEFORE ML block uses it
-        entry_price = ltf_df['close'].iloc[-2]
+        entry_price = ltf_df['close'].iloc[-1]
         add_log_message(f"[{symbol}] Entry price set: {entry_price:.4f}")
 
         # ML Confidence Scaler & Soft Session Filter
@@ -563,12 +564,19 @@ class PrimeSignalBot:
                 self.position_side[symbol] = "LONG"
                 self.entry_price[symbol] = entry_price
                 self.stop_loss[symbol] = sl
-                self.take_profit[symbol] = tp
+                
+                # Initialize TP levels for LONG
+                self.partial_tp_taken[symbol] = False
+                self.tp2_taken[symbol] = False
+                r_amount = abs(sl - entry_price)
+                self.take_profit_1r[symbol] = entry_price + r_amount
+                self.take_profit_2r[symbol] = metadata.get('tp2', entry_price + (2 * r_amount))
+                self.take_profit[symbol] = entry_price + (10 * r_amount)
+                
                 self.highest_price_reached[symbol] = entry_price
                 self.position_size[symbol] = pos_size
                 self.entry_time[symbol] = int(time.time() * 1000)
                 self.last_trade_time[symbol] = time.time()
-                self.position_mode[symbol] = metadata.get('mode', 'STRICT')
                 self.position_mode[symbol] = metadata.get('mode', 'STRICT')
                 self.last_zone_traded[symbol] = metadata.get('zone_id')
                 self.trades_today += 1
@@ -632,25 +640,25 @@ class PrimeSignalBot:
                 self.position_side[symbol] = "SHORT"
                 self.entry_price[symbol] = entry_price
                 self.stop_loss[symbol] = sl
-                self.take_profit[symbol] = tp
+                
+                # Initialize TP levels for SHORT
+                self.partial_tp_taken[symbol] = False
+                self.tp2_taken[symbol] = False
+                r_amount = abs(sl - entry_price)
+                self.take_profit_1r[symbol] = entry_price - r_amount
+                self.take_profit_2r[symbol] = metadata.get('tp2', entry_price - (2 * r_amount))
+                self.take_profit[symbol] = entry_price - (10 * r_amount)
+                
                 self.lowest_price_reached[symbol] = entry_price
                 self.position_size[symbol] = pos_size
                 self.entry_time[symbol] = int(time.time() * 1000)
                 self.last_trade_time[symbol] = time.time()
-                self.position_mode[symbol] = metadata.get('mode', 'STRICT')
                 self.position_mode[symbol] = metadata.get('mode', 'STRICT')
                 self.last_zone_traded[symbol] = metadata.get('zone_id')
                 self.trades_today += 1
                 self.global_last_trade_time = time.time()
                 if metadata.get('mode') == 'RELAXED':
                     self.relaxed_trades_today += 1
-                self.partial_tp_taken[symbol] = False
-                self.tp2_taken[symbol] = False
-                r_amount = abs(sl - entry_price)
-                self.take_profit_1r[symbol] = entry_price + r_amount if signal == "BUY" else entry_price - r_amount
-                self.take_profit_2r[symbol] = metadata.get('tp2', entry_price + (2*r_amount) if signal == "BUY" else entry_price - (2*r_amount))
-                # Remove static full TP to allow runner, or set it to 10R
-                self.take_profit[symbol] = entry_price + (10*r_amount) if signal == "BUY" else entry_price - (10*r_amount)
                 
                 if symbol == Config.SYMBOL:
                     DashboardState.in_position = True
@@ -661,6 +669,9 @@ class PrimeSignalBot:
 
                 self.save_state()
                 await self.notifier.send_message(msg_str)
+            else:
+                add_log_message(f"[{symbol}] ❌ SELL order REJECTED (check execution logs)")
+                await self.notifier.send_message(f"⚠️ SELL REJECTED {symbol}: Order failed to execute. Check logs.")
 
     async def run_live_risk_monitor(self):
         while True:
@@ -841,7 +852,9 @@ class PrimeSignalBot:
                 self.trade_history.pop(0)
                 
             if len(self.trade_history) >= 2 and all(self.trade_history[-2:]):
-                self.cluster_loss_pause_until = time.time() + (2 * 3600)
+                cooldown_time = time.time() + (2 * 3600)
+                self.cluster_loss_pause_until = cooldown_time
+                self.global_pause_until = cooldown_time  # Update global pause
                 add_log_message("🚨 [SAFETY] 2 consecutive losses. Trading paused globally for 2 hours.")
                 self.trade_history.clear()
             elif len(self.trade_history) >= 6 and sum(self.trade_history) >= 3:
@@ -849,6 +862,16 @@ class PrimeSignalBot:
                 add_log_message("🚨 [SAFETY] 3 losses in last 6 trades. Global risk slashed by 50%.")
             else:
                 self.cluster_risk_penalty = False
+
+            # Update relaxed cooldowns
+            if metadata.get('mode') == 'RELAXED' and is_loss:
+                self.relaxed_losses += 1
+                if self.relaxed_losses >= 2:
+                    self.relaxed_disabled_until = time.time() + 7200
+                    add_log_message("🚨 [SAFETY] 2 relaxed losses. Relaxed mode disabled for 2 hours.")
+                    self.relaxed_losses = 0
+            elif not is_loss and metadata.get('mode') == 'RELAXED':
+                self.relaxed_losses = 0
 
             self.in_position[symbol] = False
             self.position_side[symbol] = "HOLD"
