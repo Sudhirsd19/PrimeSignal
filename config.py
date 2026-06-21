@@ -11,7 +11,7 @@ class Config:
     
     # Product Settings
     SYMBOL = os.getenv("SYMBOL", "BTC/USDT")
-    SUPPORTED_SYMBOLS = os.getenv("SUPPORTED_SYMBOLS", "BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,AVAX/USDT,LINK/USDT,MATIC/USDT,DOT/USDT,LTC/USDT,TRX/USDT,SHIB/USDT,NEAR/USDT,ATOM/USDT,UNI/USDT,ETC/USDT,FIL/USDT,APT/USDT").split(",")
+    SUPPORTED_SYMBOLS = os.getenv("SUPPORTED_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT,LINK/USDT,ATOM/USDT,ETC/USDT,FIL/USDT,APT/USDT,NEAR/USDT,ARB/USDT,OP/USDT,POL/USDT").split(",")
     TRADE_AMOUNT = float(os.getenv("TRADE_AMOUNT", "0.001"))
     
     # Risk parameters
@@ -51,21 +51,43 @@ class Config:
     
     # Test Mode config
     TEST_MODE = os.getenv("TEST_MODE", "False").lower() in ("true", "1", "yes")
+    PAPER_TRADING = os.getenv("PAPER_TRADING", "True").lower() in ("true", "1", "yes")
     
     # Telegram notifier settings
     TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
+    # CoinDCX settings
+    COINDCX_API_KEY = os.getenv("COINDCX_API_KEY", "")
+    COINDCX_SECRET_KEY = os.getenv("COINDCX_SECRET_KEY", "")
+    COINDCX_TRADE_INR = os.getenv("COINDCX_TRADE_INR", "True").lower() in ("true", "1", "yes")
+
     @classmethod
     def validate(cls):
         has_keys = True
+        
+        # Check Binance Keys
+        has_binance = True
         if not cls.API_KEY or cls.API_KEY == "your_api_key_here":
-            print("WARNING: BINANCE_API_KEY is using default placeholder. Trading engine will run in DRY-RUN mode.")
-            has_keys = False
+            has_binance = False
         if not cls.SECRET_KEY or cls.SECRET_KEY == "your_api_secret_here":
-            print("WARNING: BINANCE_SECRET_KEY is using default placeholder. Trading engine will run in DRY-RUN mode.")
-            has_keys = False
+            has_binance = False
             
+        # Check CoinDCX Keys
+        has_coindcx = True
+        if not cls.COINDCX_API_KEY or cls.COINDCX_API_KEY == "your_coindcx_key_here":
+            has_coindcx = False
+        if not cls.COINDCX_SECRET_KEY or cls.COINDCX_SECRET_KEY == "your_coindcx_secret_here":
+            has_coindcx = False
+
+        if not has_binance and not has_coindcx:
+            print("WARNING: Neither Binance nor CoinDCX credentials found. Trading engine will run in DRY-RUN mode.")
+            has_keys = False
+        elif has_coindcx:
+            print(f"[INIT] CoinDCX integration active. Mode: {'PAPER TRADING (Demo)' if cls.PAPER_TRADING else 'LIVE TRADING'}")
+        elif has_binance:
+            print(f"[INIT] Binance integration active. Mode: {'PAPER TRADING (Demo)' if cls.PAPER_TRADING else 'LIVE TRADING'}")
+
         # Validate critical numeric ranges to prevent account-wipe settings
         if cls.RISK_PCT > 5.0:
             print(f"⚠️  WARNING: RISK_PCT={cls.RISK_PCT}% is dangerously high! Recommended: 0.5–2%. Capping at 5%.")
@@ -80,6 +102,9 @@ class Config:
         print(f"  Account Risk Limit  : {cls.RISK_PCT}% | Max Daily Drawdown: {cls.MAX_DAILY_LOSS_PCT}%")
         print(f"  SMC Indicators      : RSI ({cls.RSI_PERIOD}), ATR ({cls.ATR_PERIOD}), EMA ({cls.TREND_EMA})")
         print(f"  ML Confidence Min   : {cls.ML_CONFIRMATION_THRESHOLD * 100:.1f}%")
-        print(f"  Binance Sandbox     : {cls.USE_TESTNET}")
+        if has_coindcx:
+            print(f"  Exchange Routing    : CoinDCX (INR Pairs: {cls.COINDCX_TRADE_INR})")
+        else:
+            print(f"  Exchange Routing    : Binance (Sandbox: {cls.USE_TESTNET})")
         print("-------------------------------------------------")
         return has_keys

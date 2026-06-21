@@ -24,6 +24,9 @@ templates = Jinja2Templates(directory=templates_dir)
 class SymbolRequest(BaseModel):
     symbol: str
 
+class ModeRequest(BaseModel):
+    paper_trading: bool
+
 # ─── ATTACK-1 FIX: API Key Auth for mutating endpoints ──────────────────────
 # Without this, anyone on the internet can POST /api/change_symbol and spam
 # the bot with symbol changes, triggering WebSocket restarts and CPU spikes.
@@ -61,6 +64,8 @@ class DashboardState:
     active_bullish_ob_level = 0.0
     active_bearish_ob_level = 0.0
     chart_history = []
+    coindcx_profile = None
+    coindcx_balances = []
     
     symbol_change_requested = None # Holds new symbol if requested by UI
     active_websockets = set()
@@ -78,6 +83,39 @@ async def change_symbol(req: SymbolRequest):
     
     DashboardState.symbol_change_requested = symbol
     return {"status": "success", "message": f"Symbol change to {symbol} requested successfully."}
+
+@app.post("/api/set_mode", dependencies=[Depends(verify_dashboard_key)])
+async def set_mode(req: ModeRequest):
+    Config.PAPER_TRADING = req.paper_trading
+    
+    # If bot is active, trigger mode switch side-effects
+    if bot_instance is not None:
+        try:
+            # Tell bot to update balance immediately
+            if not req.paper_trading:
+                # Switching to LIVE: fetch live balance
+                if bot_instance.has_keys:
+                    balance = await bot_instance.execution.fetch_balance()
+                    if balance:
+                        if Config.COINDCX_TRADE_INR:
+                            inr_balance = balance.get('total', {}).get('INR', None)
+                            if inr_balance is not None:
+                                DashboardState.balance_usdt = inr_balance
+                        else:
+                            usdt_balance = balance.get('total', {}).get('USDT', None)
+                            if usdt_balance and usdt_balance > 0:
+                                DashboardState.balance_usdt = usdt_balance
+                        DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
+            else:
+                # Switching to PAPER: reset to virtual balance
+                DashboardState.balance_usdt = bot_instance._dry_run_balance_usdt
+                DashboardState.balance_base = 0.0
+        except Exception as e:
+            print(f"[MODE SWITCH] Error syncing balances: {e}")
+            
+    mode_name = "PAPER TRADING" if req.paper_trading else "REAL MONEY"
+    add_log_message(f"Trading mode switched to {mode_name}")
+    return {"status": "success", "message": f"Switched to {mode_name}"}
 
 @app.get("/api/state")
 async def get_state():
@@ -151,9 +189,13 @@ async def send_state_to_ws(websocket):
         "symbol": Config.SYMBOL,
         "ltf_timeframe": Config.LTF_TIMEFRAME,
         "htf_timeframe": Config.HTF_TIMEFRAME,
+        "paper_trading": Config.PAPER_TRADING,
+        "balance_currency": "USDT" if (Config.PAPER_TRADING or not Config.COINDCX_TRADE_INR) else "INR",
         "trades": DashboardState.trades[-5:],  # Last 5 trades
         "logs": DashboardState.logs[-10:],     # Last 10 logs
-        "chart_history": DashboardState.chart_history
+        "chart_history": DashboardState.chart_history,
+        "coindcx_profile": DashboardState.coindcx_profile,
+        "coindcx_balances": DashboardState.coindcx_balances
     }
     await websocket.send_text(json.dumps(state_payload))
 
@@ -197,6 +239,14 @@ async def _run_bot(bot):
             if not bot.pipeline.ltf_candles.get(symbol):
                 print("[TEST TRIGGER] Caches not warmed up yet. Cannot test.")
                 return
+            
+            # Reset safety pauses so the test trade doesn't get blocked
+            bot.global_pause_until = 0
+            bot.relaxed_disabled_until = 0
+            bot.cluster_loss_pause_until = 0
+            bot.consecutive_losses = 0
+            if hasattr(bot, 'trade_history'):
+                bot.trade_history.clear()
             
             # Force close any previously recovered open trade to start demo clean
             if bot.in_position[symbol]:
@@ -244,8 +294,8 @@ async def _run_bot(bot):
             Config.MAX_SLIPPAGE_PCT = original_slippage
             print("[TEST TRIGGER] Test BUY trade completed and active on dashboard!")
             
-            # Wait 25 seconds and exit
-            await asyncio.sleep(25)
+            # Wait 1200 seconds (20 minutes) so user can see it active on the UI
+            await asyncio.sleep(1200)
             print("[TEST TRIGGER] Executing test exit (liquidation)...")
             await bot.exit_position(symbol, "TEST_EXIT")
             print("[TEST TRIGGER] Test exit completed!")

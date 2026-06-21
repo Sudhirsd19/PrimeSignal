@@ -16,6 +16,13 @@ class ExecutionEngine:
             
         self.trade_client = ccxt.binance(options)
         
+        # 3. CoinDCX Integration
+        from execution.coindcx_client import CoinDCXClient
+        self.coindcx_client = None
+        if Config.COINDCX_API_KEY and Config.COINDCX_API_KEY != "your_coindcx_key_here":
+            self.coindcx_client = CoinDCXClient(Config.COINDCX_API_KEY, Config.COINDCX_SECRET_KEY)
+            print("[EXECUTION] CoinDCX client integrated successfully.")
+            
         if Config.USE_TESTNET:
             self.trade_client.set_sandbox_mode(True)
             print("[EXECUTION] Sandbox mode enabled (Binance Testnet)")
@@ -31,6 +38,8 @@ class ExecutionEngine:
 
     async def fetch_balance(self):
         """Fetch balances with automatic retry."""
+        if self.coindcx_client:
+            return await self.coindcx_client.fetch_balance()
         return await self.execute_with_retry(self.trade_client.fetch_balance)
 
     async def fetch_current_price(self, symbol=None):
@@ -78,6 +87,13 @@ class ExecutionEngine:
         """
         if symbol is None:
             symbol = Config.SYMBOL
+            
+        if self.coindcx_client:
+            coindcx_symbol = symbol
+            if Config.COINDCX_TRADE_INR:
+                target = symbol.split('/')[0]
+                coindcx_symbol = f"{target}/INR"
+            return await self.coindcx_client.place_order(side, order_type, amount, price, symbol=coindcx_symbol)
 
         # 0. Enforce exchange LOT_SIZE precision (CRITICAL-4 fix)
         # Binance rejects orders where amount does not match step size filter.
@@ -186,4 +202,10 @@ class ExecutionEngine:
                 print(f"[EXECUTION]   Error message: {e}")
                 traceback.print_exc()
                 break
+        return None
+
+    async def fetch_coindcx_user_info(self):
+        """Fetch CoinDCX user profile information."""
+        if self.coindcx_client:
+            return await self.coindcx_client.fetch_user_info()
         return None

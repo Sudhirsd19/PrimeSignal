@@ -41,6 +41,7 @@ class PrimeSignalBot:
         self.in_position = {sym: False for sym in Config.SUPPORTED_SYMBOLS}
         self.position_side = {sym: "HOLD" for sym in Config.SUPPORTED_SYMBOLS}
         self.entry_price = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.entry_price_usdt = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.stop_loss = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.take_profit = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.highest_price_reached = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
@@ -92,6 +93,7 @@ class PrimeSignalBot:
             'in_position': self.in_position,
             'position_side': self.position_side,
             'entry_price': self.entry_price,
+            'entry_price_usdt': self.entry_price_usdt,
             'stop_loss': self.stop_loss,
             'take_profit': self.take_profit,
             'position_size': self.position_size,
@@ -120,6 +122,7 @@ class PrimeSignalBot:
             self.in_position = safe_load('in_position', False)
             self.position_side = safe_load('position_side', 'HOLD')
             self.entry_price = safe_load('entry_price', 0.0)
+            self.entry_price_usdt = safe_load('entry_price_usdt', 0.0)
             self.stop_loss = safe_load('stop_loss', 0.0)
             self.take_profit = safe_load('take_profit', 0.0)
             self.position_size = safe_load('position_size', 0.0)
@@ -153,18 +156,59 @@ class PrimeSignalBot:
         await asyncio.sleep(3)
         
         # Initial Balance load
-        if self.has_keys:
+        if self.has_keys and not Config.PAPER_TRADING:
             balance = await self.execution.fetch_balance()
             if balance:
-                usdt_balance = balance.get('total', {}).get('USDT', None)
-                if usdt_balance and usdt_balance > 0:
-                    DashboardState.balance_usdt = usdt_balance
+                if Config.COINDCX_TRADE_INR:
+                    inr_balance = balance.get('total', {}).get('INR', None)
+                    if inr_balance is not None:
+                        DashboardState.balance_usdt = inr_balance
+                    else:
+                        add_log_message("[WARNING] CoinDCX INR Balance fetch returned None. Keeping last known value.")
                 else:
-                    add_log_message(f"[WARNING] Balance fetch returned {usdt_balance}. Check account type. Keeping last known value.")
+                    usdt_balance = balance.get('total', {}).get('USDT', None)
+                    if usdt_balance and usdt_balance > 0:
+                        DashboardState.balance_usdt = usdt_balance
+                    else:
+                        add_log_message(f"[WARNING] Balance fetch returned {usdt_balance}. Check account type. Keeping last known value.")
                 DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
         else:
             DashboardState.balance_usdt = self._dry_run_balance_usdt
             DashboardState.balance_base = 0.0
+
+        # Initial CoinDCX Profile Load
+        if self.execution.coindcx_client:
+            try:
+                profile = await self.execution.fetch_coindcx_user_info()
+                if profile:
+                    DashboardState.coindcx_profile = {
+                        "name": f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip() or "CoinDCX User",
+                        "email": profile.get("email", "unknown"),
+                        "id": profile.get("coindcx_id", "unknown"),
+                        "status": "Connected"
+                    }
+                else:
+                    DashboardState.coindcx_profile = {
+                        "name": "CoinDCX User",
+                        "email": "unknown",
+                        "id": "unknown",
+                        "status": "Auth Error"
+                    }
+            except Exception as e:
+                print(f"[BOT] CoinDCX profile fetch failed: {e}")
+                DashboardState.coindcx_profile = {
+                    "name": "CoinDCX User",
+                    "email": "unknown",
+                    "id": "unknown",
+                    "status": f"Error: {str(e)}"
+                }
+        else:
+            DashboardState.coindcx_profile = {
+                "name": "Dry Run Mode",
+                "email": "demo@coindcx.com",
+                "id": "DEMO12345",
+                "status": "Demo Mode (Keys Missing)"
+            }
         
         # Train ML Models on historical candles for each symbol
         for sym in Config.SUPPORTED_SYMBOLS:
@@ -232,16 +276,21 @@ class PrimeSignalBot:
             return
             
         # Update balance via API if live
-        if self.has_keys:
+        if self.has_keys and not Config.PAPER_TRADING:
             balance = await self.execution.fetch_balance()
             if balance:
-                usdt_balance = balance.get('total', {}).get('USDT', None)
-                if usdt_balance and usdt_balance > 0:
-                    DashboardState.balance_usdt = usdt_balance
+                if Config.COINDCX_TRADE_INR:
+                    inr_balance = balance.get('total', {}).get('INR', None)
+                    if inr_balance is not None:
+                        DashboardState.balance_usdt = inr_balance
+                else:
+                    usdt_balance = balance.get('total', {}).get('USDT', None)
+                    if usdt_balance and usdt_balance > 0:
+                        DashboardState.balance_usdt = usdt_balance
                 DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
                 
         # Check drawdown circuit breakers
-        current_equity = DashboardState.balance_usdt if self.has_keys else self.calculate_total_equity()
+        current_equity = DashboardState.balance_usdt if (self.has_keys and not Config.PAPER_TRADING) else self.calculate_total_equity()
             
         if not self.risk.check_circuit_breaker(current_equity):
             add_log_message("Trading halted: Daily drawdown limit reached.")
@@ -283,7 +332,7 @@ class PrimeSignalBot:
                 return
             
         signal, metadata = self.strategy.generate_signal(
-            self.pipeline.htf_candles[symbol],
+            htf_df,
             ltf_df,
             relaxed=False
         )
@@ -306,7 +355,7 @@ class PrimeSignalBot:
                         super_relaxed = True
                         
                     signal, metadata = self.strategy.generate_signal(
-                        self.pipeline.htf_candles[symbol],
+                        htf_df,
                         ltf_df,
                         relaxed=True,
                         super_relaxed=super_relaxed
@@ -536,9 +585,30 @@ class PrimeSignalBot:
             add_log_message(f"[{symbol}] Trade skipped: Slippage too high. Signal: {entry_price}, Live: {live_price}")
             return
         entry_price = live_price  # Execute at live price
+        self.entry_price_usdt[symbol] = entry_price  # Save reference USDT price
         
         sl = metadata['stop_loss']
         tp = metadata['take_profit']
+        
+        # Translate to INR if using CoinDCX INR trading
+        if self.execution.coindcx_client and Config.COINDCX_TRADE_INR:
+            coindcx_symbol = f"{symbol.split('/')[0]}INR"
+            coindcx_ticker = await self.execution.coindcx_client.fetch_ticker_data(coindcx_symbol)
+            if coindcx_ticker:
+                entry_price_inr = coindcx_ticker['last']
+                sl_pct = abs(entry_price - sl) / entry_price
+                tp_pct = abs(entry_price - tp) / entry_price
+                
+                entry_price = entry_price_inr
+                if signal == "BUY":
+                    sl = entry_price * (1 - sl_pct)
+                    tp = entry_price * (1 + tp_pct)
+                else:
+                    sl = entry_price * (1 + sl_pct)
+                    tp = entry_price * (1 - tp_pct)
+                add_log_message(f"[{symbol}] CoinDCX INR price translated: Entry {entry_price:.2f} INR | SL {sl:.2f} INR | TP {tp:.2f} INR")
+            else:
+                add_log_message(f"[{symbol}] WARNING: Failed to fetch CoinDCX INR price. Sizing in USDT.")
         
         pos_size = self.risk.calculate_position_size(current_equity, entry_price, sl)
         
@@ -551,7 +621,7 @@ class PrimeSignalBot:
         if signal == "BUY":
             add_log_message(f"[{symbol}] Executing BUY (LONG). Size: {pos_size:.6f} | SL: {sl:.2f} | TP: {tp:.2f}")
             order = None
-            if self.has_keys:
+            if self.has_keys and not Config.PAPER_TRADING:
                 order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol)
             else:
                 position_cost = pos_size * entry_price
@@ -695,6 +765,12 @@ class PrimeSignalBot:
                         ltf_df = prepare_dataframe(self.pipeline.ltf_candles[symbol])
                         curr_atr = calculate_atr(ltf_df, Config.ATR_PERIOD).iloc[-1] if not ltf_df.empty else 0.001
                         
+                        # Scale to INR if CoinDCX INR trading is enabled
+                        if self.execution.coindcx_client and Config.COINDCX_TRADE_INR and self.entry_price_usdt[symbol] > 0:
+                            scale_factor = self.entry_price[symbol] / self.entry_price_usdt[symbol]
+                            curr_price = curr_price * scale_factor
+                            curr_atr = curr_atr * scale_factor
+                        
                         if self.position_side[symbol] == "LONG":
                             self.highest_price_reached[symbol] = max(self.highest_price_reached[symbol], curr_price)
                             
@@ -702,7 +778,7 @@ class PrimeSignalBot:
                             if not self.partial_tp_taken[symbol] and curr_price >= self.take_profit_1r[symbol]:
                                 add_log_message(f"[{symbol}] TP1 (1R) hit. Booking 50% profit.")
                                 tp1_size = self.position_size[symbol] * (0.50 / 1.0)
-                                if self.has_keys:
+                                if self.has_keys and not Config.PAPER_TRADING:
                                     await self.execution.place_order('sell', 'market', tp1_size, symbol=symbol, is_exit_order=True)
                                 else:
                                     self._dry_run_balance_usdt += tp1_size * curr_price
@@ -718,7 +794,7 @@ class PrimeSignalBot:
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price >= self.take_profit_2r[symbol]:
                                 add_log_message(f"[{symbol}] TP2 hit. Booking 30% profit. Runner trails.")
                                 tp2_size = self.position_size[symbol] * (0.30 / 0.50)
-                                if self.has_keys:
+                                if self.has_keys and not Config.PAPER_TRADING:
                                     await self.execution.place_order('sell', 'market', tp2_size, symbol=symbol, is_exit_order=True)
                                 else:
                                     self._dry_run_balance_usdt += tp2_size * curr_price
@@ -743,7 +819,7 @@ class PrimeSignalBot:
                             if not self.partial_tp_taken[symbol] and curr_price <= self.take_profit_1r[symbol]:
                                 add_log_message(f"[{symbol}] TP1 (1R) hit. Booking 50% profit.")
                                 tp1_size = self.position_size[symbol] * (0.50 / 1.0)
-                                if self.has_keys:
+                                if self.has_keys and not Config.PAPER_TRADING:
                                     await self.execution.place_order('buy', 'market', tp1_size, symbol=symbol, is_exit_order=True)
                                 else:
                                     self._dry_run_balance_usdt += tp1_size * (self.entry_price[symbol] - curr_price) + (tp1_size * self.entry_price[symbol])
@@ -759,7 +835,7 @@ class PrimeSignalBot:
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price <= self.take_profit_2r[symbol]:
                                 add_log_message(f"[{symbol}] TP2 hit. Booking 30% profit. Runner trails.")
                                 tp2_size = self.position_size[symbol] * (0.30 / 0.50)
-                                if self.has_keys:
+                                if self.has_keys and not Config.PAPER_TRADING:
                                     await self.execution.place_order('buy', 'market', tp2_size, symbol=symbol, is_exit_order=True)
                                 else:
                                     self._dry_run_balance_usdt += tp2_size * (self.entry_price[symbol] - curr_price) + (tp2_size * self.entry_price[symbol])
@@ -779,7 +855,16 @@ class PrimeSignalBot:
 
                 # Update UI for selected Config.SYMBOL
                 sym = Config.SYMBOL
-                DashboardState.latest_price = self.pipeline.latest_prices.get(sym, 0.0)
+                latest_price = self.pipeline.latest_prices.get(sym, 0.0)
+                
+                # Fetch live INR price from CoinDCX if in real INR trading mode
+                if self.execution.coindcx_client and Config.COINDCX_TRADE_INR and not Config.PAPER_TRADING:
+                    coindcx_symbol = f"{sym.split('/')[0]}INR"
+                    coindcx_ticker = await self.execution.coindcx_client.fetch_ticker_data(coindcx_symbol)
+                    if coindcx_ticker:
+                        latest_price = coindcx_ticker['last']
+                        
+                DashboardState.latest_price = latest_price
                 if not self.has_keys:
                     DashboardState.balance_usdt = self.calculate_total_equity()
                     
@@ -800,6 +885,42 @@ class PrimeSignalBot:
                     DashboardState.current_pnl_pct = 0.0
                     DashboardState.current_pnl_usdt = 0.0
 
+                # Update CoinDCX balances
+                if self.execution.coindcx_client:
+                    try:
+                        balance = await self.execution.fetch_balance()
+                        if balance:
+                            updated_bals = []
+                            total_bals = balance.get('total', {})
+                            free_bals = balance.get('free', {})
+                            used_bals = balance.get('used', {})
+                            for curr, total in total_bals.items():
+                                if total > 0.0:
+                                    updated_bals.append({
+                                        "currency": curr,
+                                        "balance": total,
+                                        "available": free_bals.get(curr, total),
+                                        "locked": used_bals.get(curr, 0.0)
+                                    })
+                            # Sort to put INR and USDT first, then others by balance descending
+                            def sort_key(x):
+                                c = x['currency']
+                                if c == 'INR': return (0, -x['balance'])
+                                if c == 'USDT': return (1, -x['balance'])
+                                return (2, -x['balance'])
+                            updated_bals.sort(key=sort_key)
+                            DashboardState.coindcx_balances = updated_bals
+                    except Exception as e:
+                        print(f"[RISK MONITOR] Error fetching CoinDCX balances: {e}")
+                else:
+                    # In dry run mode, put some mock balances
+                    DashboardState.coindcx_balances = [
+                        {"currency": "INR", "balance": 50000.0, "available": 50000.0, "locked": 0.0},
+                        {"currency": "USDT", "balance": 1000.0, "available": 1000.0, "locked": 0.0},
+                        {"currency": "BTC", "balance": 0.05, "available": 0.05, "locked": 0.0},
+                        {"currency": "ETH", "balance": 0.5, "available": 0.5, "locked": 0.0}
+                    ]
+
             except Exception as e:
                 import traceback
                 print(f"[RISK MONITOR] Error: {e}")
@@ -813,7 +934,7 @@ class PrimeSignalBot:
             exit_price = self.entry_price[symbol]
         add_log_message(f"[{symbol}] Exiting at price: {exit_price:.4f} (reason: {reason})")
         order = None
-        if self.has_keys:
+        if self.has_keys and not Config.PAPER_TRADING:
             side = 'buy' if self.position_side[symbol] == 'SHORT' else 'sell'
             order = await self.execution.place_order(side, 'market', self.position_size[symbol], price=exit_price, is_exit_order=True, symbol=symbol)
         else:
@@ -823,12 +944,12 @@ class PrimeSignalBot:
             if self.position_side[symbol] == "LONG":
                 pnl_pct = (exit_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
                 pnl_usdt = self.position_size[symbol] * (exit_price - self.entry_price[symbol])
-                if not self.has_keys:
+                if not self.has_keys or Config.PAPER_TRADING:
                     self._dry_run_balance_usdt += self.position_size[symbol] * exit_price
             else:
                 pnl_pct = (self.entry_price[symbol] - exit_price) / self.entry_price[symbol] * 100.0
                 pnl_usdt = self.position_size[symbol] * (self.entry_price[symbol] - exit_price)
-                if not self.has_keys:
+                if not self.has_keys or Config.PAPER_TRADING:
                     self._dry_run_balance_usdt += (self.position_size[symbol] * self.entry_price[symbol]) + pnl_usdt
                 
             trade_record = {
