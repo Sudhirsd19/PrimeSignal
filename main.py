@@ -212,6 +212,11 @@ class PrimeSignalBot:
 
         DashboardState.latest_price = self.pipeline.latest_prices.get(Config.SYMBOL, 0.0)
         DashboardState.chart_history = self.pipeline.ltf_candles[Config.SYMBOL][-100:] if self.pipeline.ltf_candles[Config.SYMBOL] else []
+        
+        if not self.in_position[Config.SYMBOL]:
+            DashboardState.signal_light = "RED"
+            DashboardState.signal_light_reason = "Waiting for next signal..."
+            
         add_log_message(f"System ready. Multi-symbol watch active. UI viewing {Config.SYMBOL}")
 
     async def on_candle_close(self, symbol):
