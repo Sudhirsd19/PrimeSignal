@@ -90,7 +90,7 @@
         </header>
 
         <!-- STATS GRID -->
-        <section class="grid grid-cols-1 md:grid-cols-5 gap-6">
+        <section class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
             <!-- Price Ticker -->
             <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between h-32 relative overflow-hidden">
                 <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Live Index Price</span>
@@ -140,6 +140,24 @@
                     <span id="signal-light-text" class="text-xl font-extrabold text-white terminal-font">RED</span>
                 </div>
                 <div class="text-xs text-gray-400 mt-1 truncate" id="signal-light-reason" title="System starting up...">System starting up...</div>
+            </div>
+
+            <!-- Trailing Stop Loss -->
+            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between h-32 relative">
+                <div class="flex justify-between items-center">
+                    <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Trailing Stop</span>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="tsl-toggle" class="sr-only peer" checked>
+                        <div class="w-7 h-4 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-500"></div>
+                    </label>
+                </div>
+                <div class="flex flex-col mt-2">
+                    <div class="flex justify-between text-[10px] text-gray-400 font-bold mb-1">
+                        <span>Offset (ATR)</span>
+                        <span id="tsl-val-display" class="text-blue-400 text-xs">2.0x</span>
+                    </div>
+                    <input type="range" id="tsl-slider" min="0.5" max="5.0" step="0.1" value="2.0" class="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                </div>
             </div>
         </section>
 
@@ -1189,9 +1207,39 @@
                 tabActivePosition.className = "flex-1 pb-2 text-xs font-bold uppercase tracking-wider text-gray-500 border-b-2 border-transparent hover:text-gray-300 focus:outline-none transition-colors duration-200";
                 contentCoindcxWallet.classList.remove('hidden');
                 contentCoindcxWallet.classList.add('flex');
-                contentActivePosition.classList.add('hidden');
                 contentActivePosition.classList.remove('flex');
             });
+        }
+        
+        // TSL Listeners
+        const tslToggle = document.getElementById('tsl-toggle');
+        const tslSlider = document.getElementById('tsl-slider');
+        const tslValDisplay = document.getElementById('tsl-val-display');
+
+        async function updateRiskSettings() {
+            try {
+                await fetch('/api/update_risk_settings', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
+                    },
+                    body: JSON.stringify({
+                        tsl_enabled: tslToggle.checked,
+                        tsl_multiplier: parseFloat(tslSlider.value)
+                    })
+                });
+            } catch (err) {
+                console.error("Error updating risk settings:", err);
+            }
+        }
+
+        if(tslToggle && tslSlider) {
+            tslToggle.addEventListener('change', updateRiskSettings);
+            tslSlider.addEventListener('input', (e) => {
+                tslValDisplay.textContent = parseFloat(e.target.value).toFixed(1) + 'x';
+            });
+            tslSlider.addEventListener('change', updateRiskSettings);
         }
         
         connectWS();

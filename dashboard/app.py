@@ -138,6 +138,22 @@ async def emergency_stop():
     except Exception as e:
         return {"status": "error", "message": f"Failed to activate kill switch: {str(e)}"}
 
+class RiskSettingsUpdate(BaseModel):
+    tsl_enabled: bool
+    tsl_multiplier: float
+
+@app.post("/api/update_risk_settings", dependencies=[Depends(verify_dashboard_key)])
+async def update_risk_settings(settings: RiskSettingsUpdate):
+    from config import Config
+    # If the user disables TSL, we can just set the multiplier very high
+    Config.TRAILING_ATR_MULT = settings.tsl_multiplier
+    if not settings.tsl_enabled:
+        Config.TRAILING_ATR_MULT = 999.0 # Effectively disables it
+    
+    status_str = f"TSL {'Enabled' if settings.tsl_enabled else 'Disabled'} ({settings.tsl_multiplier}x)"
+    add_log_message(f"⚙️ Risk Settings Updated: {status_str}")
+    return {"status": "success", "message": status_str}
+
 @app.get("/api/state")
 async def get_state():
     """Rest API endpoint for current state."""
