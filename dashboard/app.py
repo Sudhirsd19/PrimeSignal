@@ -46,13 +46,7 @@ class DashboardState:
     latest_price = 0.0
     balance_usdt = 10000.0
     balance_base = 0.0
-    in_position = False
-    position_side = "HOLD"
-    entry_price = 0.0
-    stop_loss = 0.0
-    take_profit = 0.0
-    current_pnl_usdt = 0.0
-    current_pnl_pct = 0.0
+    active_positions = {} # dictionary of symbol -> dict with position details
     
     trades = []
     logs = []
@@ -158,20 +152,18 @@ async def update_risk_settings(settings: RiskSettingsUpdate):
 
 @app.get("/api/analytics")
 async def get_analytics():
-    """Fetch trade logs from Firebase and aggregate analytics for the UI."""
+    """Fetch trade logs from local JSONL file and aggregate analytics for the UI."""
     try:
-        from core.firebase_manager import FirebaseManager
-        firebase = FirebaseManager()
-        if not firebase.is_connected:
-            return {"status": "error", "message": "Firebase not connected."}
-            
-        logs_ref = firebase.db.collection("trade_logs")
-        docs = logs_ref.order_by("timestamp", direction="ASCENDING").limit(100).stream()
-        
+        log_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'trade_logs.jsonl')
         trades = []
-        for doc in docs:
-            data = doc.to_dict()
-            trades.append(data)
+        if os.path.exists(log_file):
+            with open(log_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if line.strip():
+                        try:
+                            trades.append(json.loads(line))
+                        except:
+                            pass
             
         wins = 0
         losses = 0
@@ -179,18 +171,24 @@ async def get_analytics():
         equity_curve = []
         
         for t in trades:
-            if t.get("action") == "SELL":
-                pnl = t.get("pnl_usdt", 0.0)
-                if pnl > 0:
-                    wins += 1
-                elif pnl < 0:
-                    losses += 1
-                    
-                cumulative_pnl += pnl
-                # Format time for chart
-                if "timestamp" in t:
-                    time_str = t["timestamp"].strftime("%m-%d %H:%M") if hasattr(t["timestamp"], "strftime") else str(t["timestamp"])
+            # We assume exit trades have a pnl_usdt value
+            pnl = t.get("pnl_usdt", 0.0)
+            if pnl > 0:
+                wins += 1
+            elif pnl < 0:
+                losses += 1
+                
+            cumulative_pnl += pnl
+            
+            # Format time for chart
+            if "time" in t:
+                import datetime
+                try:
+                    dt = datetime.datetime.fromtimestamp(t["time"] / 1000.0)
+                    time_str = dt.strftime("%m-%d %H:%M")
                     equity_curve.append({"time": time_str, "value": cumulative_pnl})
+                except:
+                    pass
                     
         total = wins + losses
         win_rate = (wins / total * 100) if total > 0 else 0.0
@@ -199,9 +197,10 @@ async def get_analytics():
             "status": "success",
             "wins": wins,
             "losses": losses,
-            "win_rate": round(win_rate, 2),
-            "total_pnl": round(cumulative_pnl, 2),
-            "equity_curve": equity_curve
+            "win_rate": win_rate,
+            "total_pnl": cumulative_pnl,
+            "equity_curve": equity_curve,
+            "history": list(reversed(trades))[:50]
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -213,13 +212,7 @@ async def get_state():
         "latest_price": DashboardState.latest_price,
         "balance_usdt": DashboardState.balance_usdt,
         "balance_base": DashboardState.balance_base,
-        "in_position": DashboardState.in_position,
-        "position_side": DashboardState.position_side,
-        "entry_price": DashboardState.entry_price,
-        "stop_loss": DashboardState.stop_loss,
-        "take_profit": DashboardState.take_profit,
-        "current_pnl_usdt": DashboardState.current_pnl_usdt,
-        "current_pnl_pct": DashboardState.current_pnl_pct,
+        "active_positions": DashboardState.active_positions,
         "daily_drawdown_pct": DashboardState.daily_drawdown_pct,
         "ml_confidence": DashboardState.ml_confidence,
         "active_ob": DashboardState.active_ob,
@@ -263,13 +256,7 @@ async def send_state_to_ws(websocket):
         "latest_price": DashboardState.latest_price,
         "balance_usdt": DashboardState.balance_usdt,
         "balance_base": DashboardState.balance_base,
-        "in_position": DashboardState.in_position,
-        "position_side": DashboardState.position_side,
-        "entry_price": DashboardState.entry_price,
-        "stop_loss": DashboardState.stop_loss,
-        "take_profit": DashboardState.take_profit,
-        "current_pnl_usdt": DashboardState.current_pnl_usdt,
-        "current_pnl_pct": DashboardState.current_pnl_pct,
+        "active_positions": DashboardState.active_positions,
         "daily_drawdown_pct": DashboardState.daily_drawdown_pct,
         "ml_confidence": DashboardState.ml_confidence,
         "active_ob": DashboardState.active_ob,

@@ -52,6 +52,7 @@ class PrimeSignalBot:
         self.position_size = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.position_mode = {sym: "STRICT" for sym in Config.SUPPORTED_SYMBOLS}
         self.entry_time = {sym: 0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.trade_metadata = {sym: {} for sym in Config.SUPPORTED_SYMBOLS}
         self.last_trade_time = {sym: 0 for sym in Config.SUPPORTED_SYMBOLS}
         self.last_zone_traded = {sym: None for sym in Config.SUPPORTED_SYMBOLS}
         self.volatility_pause_until = {sym: 0 for sym in Config.SUPPORTED_SYMBOLS}
@@ -686,6 +687,7 @@ class PrimeSignalBot:
                 self.highest_price_reached[symbol] = entry_price
                 self.position_size[symbol] = pos_size
                 self.entry_time[symbol] = int(time.time() * 1000)
+                self.trade_metadata[symbol] = metadata
                 self.last_trade_time[symbol] = time.time()
                 self.position_mode[symbol] = metadata.get('mode', 'STRICT')
                 self.last_zone_traded[symbol] = metadata.get('zone_id')
@@ -763,6 +765,7 @@ class PrimeSignalBot:
                 self.lowest_price_reached[symbol] = entry_price
                 self.position_size[symbol] = pos_size
                 self.entry_time[symbol] = int(time.time() * 1000)
+                self.trade_metadata[symbol] = metadata
                 self.last_trade_time[symbol] = time.time()
                 self.position_mode[symbol] = metadata.get('mode', 'STRICT')
                 self.last_zone_traded[symbol] = metadata.get('zone_id')
@@ -798,7 +801,7 @@ class PrimeSignalBot:
                     current_eq = DashboardState.balance_usdt if self.has_keys else self.calculate_total_equity()
                     self.risk.reset_daily_equity(current_eq)
                     self._last_reset_date = now_utc.date()
-                    add_log_message(f"[RISK] Daily equity checkpoint reset at UTC midnight.")
+                    add_log_message("[RISK] Daily equity checkpoint reset at UTC midnight.")
 
                 for symbol in Config.SUPPORTED_SYMBOLS:
                     if self.in_position[symbol] and self.pipeline.latest_prices.get(symbol, 0.0) > 0:
@@ -908,19 +911,29 @@ class PrimeSignalBot:
                 if self.pipeline.ltf_candles[sym]:
                     DashboardState.chart_history = self.pipeline.ltf_candles[sym][-100:]
                 
-                if self.in_position[sym] and self.pipeline.latest_prices.get(sym, 0.0) > 0:
-                    curr_price = self.pipeline.latest_prices[sym]
-                    if self.position_side[sym] == "LONG":
-                        pnl_pct = (curr_price - self.entry_price[sym]) / self.entry_price[sym] * 100.0
-                        pnl_usdt = self.position_size[sym] * (curr_price - self.entry_price[sym])
-                    else:
-                        pnl_pct = (self.entry_price[sym] - curr_price) / self.entry_price[sym] * 100.0
-                        pnl_usdt = self.position_size[sym] * (self.entry_price[sym] - curr_price)
-                    DashboardState.current_pnl_pct = pnl_pct
-                    DashboardState.current_pnl_usdt = pnl_usdt
-                else:
-                    DashboardState.current_pnl_pct = 0.0
-                    DashboardState.current_pnl_usdt = 0.0
+                # Compile all active positions
+                current_active_positions = {}
+                for s in Config.SUPPORTED_SYMBOLS:
+                    if self.in_position[s] and self.pipeline.latest_prices.get(s, 0.0) > 0:
+                        cp = self.pipeline.latest_prices[s]
+                        if self.position_side[s] == "LONG":
+                            pct = (cp - self.entry_price[s]) / self.entry_price[s] * 100.0
+                            usdt = self.position_size[s] * (cp - self.entry_price[s])
+                        else:
+                            pct = (self.entry_price[s] - cp) / self.entry_price[s] * 100.0
+                            usdt = self.position_size[s] * (self.entry_price[s] - cp)
+                            
+                        current_active_positions[s] = {
+                            "symbol": s,
+                            "side": self.position_side[s],
+                            "entry_price": self.entry_price[s],
+                            "stop_loss": self.stop_loss[s],
+                            "take_profit": self.take_profit[s],
+                            "current_pnl_pct": pct,
+                            "current_pnl_usdt": usdt
+                        }
+                
+                DashboardState.active_positions = current_active_positions
 
             except Exception as e:
                 import traceback
@@ -961,12 +974,36 @@ class PrimeSignalBot:
                 'exit_price': exit_price,
                 'pnl_usdt': pnl_usdt,
                 'pnl_pct': pnl_pct,
-                'entry_time': self.entry_time[symbol],
-                'exit_time': int(time.time() * 1000)
+                'entry_time': self.entry_time.get(symbol, 0),
+                'exit_time': int(time.time() * 1000),
+                'reason': reason,
+                'metadata': getattr(self, 'trade_metadata', {}).get(symbol, {})
             }
             DashboardState.trades.append(trade_record)
             if len(DashboardState.trades) > 500:
                 DashboardState.trades = DashboardState.trades[-500:]
+                
+            # Log to local persistent file
+            try:
+                import json
+                import os
+                os.makedirs('data', exist_ok=True)
+                with open('data/trade_logs.jsonl', 'a', encoding='utf-8') as f:
+                    log_entry = {
+                        "action": "SELL",
+                        "symbol": symbol,
+                        "side": trade_record['side'],
+                        "entry_price": trade_record['entry_price'],
+                        "exit_price": trade_record['exit_price'],
+                        "pnl_usdt": trade_record['pnl_usdt'],
+                        "pnl_pct": trade_record['pnl_pct'],
+                        "reason": trade_record['reason'],
+                        "time": trade_record['exit_time'],
+                        "condition": trade_record['metadata']
+                    }
+                    f.write(json.dumps(log_entry) + "\\n")
+            except Exception as e:
+                print(f"[LOGGING] Failed to save trade log: {e}")
 
             # Task 5: Cluster Loss Tracking
             is_loss = pnl_usdt < 0
@@ -1002,8 +1039,6 @@ class PrimeSignalBot:
             self.position_size[symbol] = 0.0
             
             if symbol == Config.SYMBOL:
-                DashboardState.in_position = False
-                DashboardState.position_side = "HOLD"
                 DashboardState.signal_light = "RED"
                 DashboardState.signal_light_reason = "Waiting for next signal..."
                 DashboardState.signal_progress = 0
