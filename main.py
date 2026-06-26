@@ -960,13 +960,14 @@ class PrimeSignalBot:
                 self.cluster_risk_penalty = False
 
             # Update relaxed cooldowns
-            if metadata.get('mode') == 'RELAXED' and is_loss:
+            trade_mode = self.position_mode.get(symbol, 'STRICT')
+            if trade_mode == 'RELAXED' and is_loss:
                 self.relaxed_losses += 1
                 if self.relaxed_losses >= 2:
                     self.relaxed_disabled_until = time.time() + 7200
                     add_log_message("🚨 [SAFETY] 2 relaxed losses. Relaxed mode disabled for 2 hours.")
                     self.relaxed_losses = 0
-            elif not is_loss and metadata.get('mode') == 'RELAXED':
+            elif not is_loss and trade_mode == 'RELAXED':
                 self.relaxed_losses = 0
 
             self.in_position[symbol] = False
