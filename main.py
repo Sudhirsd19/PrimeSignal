@@ -410,7 +410,10 @@ class PrimeSignalBot:
         if is_low_volume_session:
             avg_vol = ltf_df['volume'].rolling(20).mean().iloc[-2] if len(ltf_df) > 20 else 0.0
             if ltf_df['volume'].iloc[-1] < 1.2 * avg_vol:
-                add_log_message(f"[{symbol}] Trade skipped: Outside 12-22 UTC and volume not > 1.2x average.")
+                msg = f"[{symbol}] Trade skipped: Outside 12-22 UTC and volume not > 1.2x average."
+                add_log_message(msg)
+                DashboardState.signal_light = "ORANGE"
+                DashboardState.signal_light_reason = "Signal blocked: Low volume during off-peak session."
                 return
                 
         # 4H Bias logic
@@ -446,21 +449,29 @@ class PrimeSignalBot:
                 if btc_drop > 0.01:
                     add_log_message(f"[{symbol}] Trade blocked: BTC dropped > 1% in last 5m. Blocking altcoin longs.")
                     self.logger.log_signal_filtered(symbol, signal, "BTC correlation drop", "btc_correlation")
+                    DashboardState.signal_light = "RED"
+                    DashboardState.signal_light_reason = "Signal blocked: BTC dumping >1%."
                     return
         
         # Daily Trade Limit
         if self.trades_today >= 6:
             add_log_message(f"[{symbol}] Trade skipped: Max 6 trades per day reached.")
+            DashboardState.signal_light = "RED"
+            DashboardState.signal_light_reason = "Signal blocked: Daily max trades reached."
             return
 
         # Cluster Loss Cooldown
         if time.time() < getattr(self, 'cluster_loss_pause_until', 0):
             add_log_message(f"[{symbol}] Trade skipped: Cluster loss cooldown active.")
+            DashboardState.signal_light = "RED"
+            DashboardState.signal_light_reason = "Signal blocked: Cluster loss cooldown."
             return
 
         # Cooldown Check
         if time.time() - self.last_trade_time.get(symbol, 0) < getattr(Config, 'COOLDOWN_MINUTES', 15) * 60:
             add_log_message(f"[{symbol}] Trade skipped due to cooldown.")
+            DashboardState.signal_light = "ORANGE"
+            DashboardState.signal_light_reason = "Signal blocked: Cooldown between trades."
             return
 
         # Same Zone Check with Traded Zones Cache
@@ -468,6 +479,8 @@ class PrimeSignalBot:
         cache_key = f"{symbol}_{zone_id}"
         if zone_id and self.traded_zones_cache.get(cache_key):
             add_log_message(f"[{symbol}] Trade skipped: already traded in this zone ({zone_id}).")
+            DashboardState.signal_light = "ORANGE"
+            DashboardState.signal_light_reason = "Signal blocked: Already traded this specific zone."
             return
             
         # Clear out old cache (basic cleanup - ideally based on candle count but here based on simple dict size)
