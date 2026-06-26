@@ -337,6 +337,28 @@ class PrimeSignalBot:
             else:
                 DashboardState.ml_confidence = 0.5
             DashboardState.chart_history = self.pipeline.ltf_candles[symbol][-100:]
+            
+            # --- SIGNAL LIGHT LOGIC ---
+            debug = metadata.get('debug_checks', {})
+            light_state = "RED"
+            light_reason = metadata.get('reason', 'Waiting for setup...')
+            
+            if self.in_position[symbol]:
+                light_state = "BLUE"
+                light_reason = f"Active {self.position_side[symbol]} position running."
+            elif signal != "HOLD":
+                light_state = "GREEN"
+                light_reason = f"Signal Validated! Initiating {signal}..."
+            elif debug.get('trend') == 'PASS':
+                if debug.get('zone') == 'PASS':
+                    light_state = "ORANGE"
+                    light_reason = "In OB/FVG Zone. Waiting for momentum trigger."
+                else:
+                    light_state = "YELLOW"
+                    light_reason = "HTF Trend aligned. Searching for entry zones."
+            
+            DashboardState.signal_light = light_state
+            DashboardState.signal_light_reason = light_reason
         
         if signal == "HOLD":
             # Log debug checks for rejection reason

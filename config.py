@@ -33,7 +33,7 @@ class Config:
     RSI_OVERSOLD = int(os.getenv("RSI_OVERSOLD", "30"))
     RSI_OVERBOUGHT = int(os.getenv("RSI_OVERBOUGHT", "70"))
     ATR_PERIOD = int(os.getenv("ATR_PERIOD", "14"))
-    MIN_ATR_PCT = float(os.getenv("MIN_ATR_PCT", "0.0015"))
+    MIN_ATR_PCT = float(os.getenv("MIN_ATR_PCT", "0.0010"))
     MAX_ZONE_AGE_CANDLES = int(os.getenv("MAX_ZONE_AGE_CANDLES", "50"))
     ZONE_BUFFER_PCT = float(os.getenv("ZONE_BUFFER_PCT", "0.001"))
     VWAP_TOLERANCE = float(os.getenv("VWAP_TOLERANCE", "0.001"))
@@ -42,7 +42,7 @@ class Config:
     MAX_CANDLE_MOVE_PCT = float(os.getenv("MAX_CANDLE_MOVE_PCT", "0.015"))
     VOLATILITY_PAUSE_CANDLES = int(os.getenv("VOLATILITY_PAUSE_CANDLES", "2"))
     COOLDOWN_MINUTES = int(os.getenv("COOLDOWN_MINUTES", "15"))
-    MAX_SLIPPAGE_PCT = float(os.getenv("MAX_SLIPPAGE_PCT", "0.002"))
+    MAX_SLIPPAGE_PCT = float(os.getenv("MAX_SLIPPAGE_PCT", "0.004"))
     FEE_RATE = float(os.getenv("FEE_RATE", "0.001"))
     
     # Machine Learning configurations

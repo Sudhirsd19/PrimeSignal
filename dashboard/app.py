@@ -67,6 +67,9 @@ class DashboardState:
     coindcx_profile = None
     coindcx_balances = []
     
+    signal_light = "RED"
+    signal_light_reason = "System starting up..."
+    
     symbol_change_requested = None # Holds new symbol if requested by UI
     active_websockets = set()
 
@@ -149,7 +152,9 @@ async def get_state():
         "active_ob_level": DashboardState.active_ob_level,
         "active_ob_type": DashboardState.active_ob_type,
         "symbol": Config.SYMBOL,
-        "trades_count": len(DashboardState.trades)
+        "trades_count": len(DashboardState.trades),
+        "signal_light": DashboardState.signal_light,
+        "signal_light_reason": DashboardState.signal_light_reason
     }
 
 @app.get("/api/trades")
@@ -206,7 +211,9 @@ async def send_state_to_ws(websocket):
         "logs": DashboardState.logs[-10:],     # Last 10 logs
         "chart_history": DashboardState.chart_history,
         "coindcx_profile": DashboardState.coindcx_profile,
-        "coindcx_balances": DashboardState.coindcx_balances
+        "coindcx_balances": DashboardState.coindcx_balances,
+        "signal_light": DashboardState.signal_light,
+        "signal_light_reason": DashboardState.signal_light_reason
     }
     await websocket.send_text(json.dumps(state_payload))
 
