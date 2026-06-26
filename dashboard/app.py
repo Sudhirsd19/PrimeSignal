@@ -154,6 +154,56 @@ async def update_risk_settings(settings: RiskSettingsUpdate):
     add_log_message(f"⚙️ Risk Settings Updated: {status_str}")
     return {"status": "success", "message": status_str}
 
+@app.get("/api/analytics")
+async def get_analytics():
+    """Fetch trade logs from Firebase and aggregate analytics for the UI."""
+    try:
+        from core.firebase_manager import FirebaseManager
+        firebase = FirebaseManager()
+        if not firebase.is_connected:
+            return {"status": "error", "message": "Firebase not connected."}
+            
+        logs_ref = firebase.db.collection("trade_logs")
+        docs = logs_ref.order_by("timestamp", direction="ASCENDING").limit(100).stream()
+        
+        trades = []
+        for doc in docs:
+            data = doc.to_dict()
+            trades.append(data)
+            
+        wins = 0
+        losses = 0
+        cumulative_pnl = 0.0
+        equity_curve = []
+        
+        for t in trades:
+            if t.get("action") == "SELL":
+                pnl = t.get("pnl_usdt", 0.0)
+                if pnl > 0:
+                    wins += 1
+                elif pnl < 0:
+                    losses += 1
+                    
+                cumulative_pnl += pnl
+                # Format time for chart
+                if "timestamp" in t:
+                    time_str = t["timestamp"].strftime("%m-%d %H:%M") if hasattr(t["timestamp"], "strftime") else str(t["timestamp"])
+                    equity_curve.append({"time": time_str, "value": cumulative_pnl})
+                    
+        total = wins + losses
+        win_rate = (wins / total * 100) if total > 0 else 0.0
+        
+        return {
+            "status": "success",
+            "wins": wins,
+            "losses": losses,
+            "win_rate": round(win_rate, 2),
+            "total_pnl": round(cumulative_pnl, 2),
+            "equity_curve": equity_curve
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 @app.get("/api/state")
 async def get_state():
     """Rest API endpoint for current state."""

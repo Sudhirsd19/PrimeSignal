@@ -8,6 +8,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- TradingView Lightweight Charts -->
     <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
     <style>
@@ -199,20 +200,23 @@
             </div>
 
             <!-- Active Position & CoinDCX Account Panel -->
-            <div id="position-card" class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between min-h-[380px]">
-                <div class="flex flex-col h-full w-full">
-                    <!-- Tabs -->
-                    <div class="flex border-b border-[#1f2937] mb-4 w-full">
-                        <button id="tab-active-position" class="flex-1 pb-2 text-xs font-bold uppercase tracking-wider text-blue-400 border-b-2 border-blue-500 focus:outline-none transition-colors duration-200">
-                            Active Position
+            <div class="col-span-1 lg:col-span-1 flex flex-col h-[500px]">
+                <div class="bg-[#111827] border border-[#1f2937] rounded-xl flex flex-col h-full overflow-hidden">
+                    <!-- Tabs Header -->
+                    <div class="flex border-b border-[#1f2937] p-2 space-x-2">
+                        <button id="tab-active-position" class="flex-1 pb-2 text-[10px] font-bold uppercase tracking-wider text-blue-400 border-b-2 border-blue-500 focus:outline-none transition-colors duration-200 truncate px-1">
+                            Position
                         </button>
-                        <button id="tab-coindcx-wallet" class="flex-1 pb-2 text-xs font-bold uppercase tracking-wider text-gray-500 border-b-2 border-transparent hover:text-gray-300 focus:outline-none transition-colors duration-200">
-                            CoinDCX Wallet
+                        <button id="tab-analytics" class="flex-1 pb-2 text-[10px] font-bold uppercase tracking-wider text-gray-500 border-b-2 border-transparent hover:text-gray-300 focus:outline-none transition-colors duration-200 truncate px-1">
+                            Analytics
+                        </button>
+                        <button id="tab-coindcx-wallet" class="flex-1 pb-2 text-[10px] font-bold uppercase tracking-wider text-gray-500 border-b-2 border-transparent hover:text-gray-300 focus:outline-none transition-colors duration-200 truncate px-1">
+                            CoinDCX
                         </button>
                     </div>
 
                     <!-- Tab Content: Active Position -->
-                    <div id="content-active-position" class="flex flex-col justify-between flex-grow">
+                    <div id="content-active-position" class="flex flex-col justify-between flex-grow p-4">
                         <div class="flex-grow">
                             <div id="no-position-view" class="flex flex-col items-center justify-center h-48 border border-dashed border-[#1f2937] rounded-xl text-gray-500">
                                 <p class="text-sm font-semibold">NO ACTIVE POSITION</p>
@@ -252,8 +256,29 @@
                         </div>
                     </div>
 
+                    <!-- Tab Content: Analytics -->
+                    <div id="content-analytics" class="hidden flex-col flex-grow overflow-hidden p-4">
+                        <div class="flex justify-between items-center mb-4">
+                            <span class="text-xs font-semibold text-gray-500 uppercase">Win Rate</span>
+                            <span id="analytics-winrate-text" class="text-lg font-bold text-blue-400">0%</span>
+                        </div>
+                        <div class="w-full flex justify-center mb-4" style="height: 120px;">
+                            <canvas id="winRateChart"></canvas>
+                        </div>
+                        <div class="flex justify-between items-center mb-2 mt-4">
+                            <span class="text-xs font-semibold text-gray-500 uppercase">Total PnL</span>
+                            <span id="analytics-pnl-text" class="text-sm font-bold text-white">0.00 USDT</span>
+                        </div>
+                        <div class="w-full" style="height: 120px;">
+                            <canvas id="equityChart"></canvas>
+                        </div>
+                        <button onclick="loadAnalytics()" class="mt-auto w-full bg-[#1f2937] hover:bg-gray-700 text-white text-xs font-bold py-2 rounded transition-colors">
+                            REFRESH DATA
+                        </button>
+                    </div>
+
                     <!-- Tab Content: CoinDCX Wallet -->
-                    <div id="content-coindcx-wallet" class="hidden flex-col flex-grow overflow-hidden">
+                    <div id="content-coindcx-wallet" class="hidden flex-col flex-grow overflow-hidden p-4">
                         <!-- Profile Summary -->
                         <div class="bg-[#171e2e] border border-[#1f2937] p-3 rounded-lg text-xs space-y-1.5 mb-3">
                             <div class="flex justify-between">
@@ -1188,27 +1213,109 @@
 
         // --- 4. COINDCX TABS SWITCHER ---
         const tabActivePosition = document.getElementById('tab-active-position');
+        const tabAnalytics = document.getElementById('tab-analytics');
         const tabCoindcxWallet = document.getElementById('tab-coindcx-wallet');
         const contentActivePosition = document.getElementById('content-active-position');
+        const contentAnalytics = document.getElementById('content-analytics');
         const contentCoindcxWallet = document.getElementById('content-coindcx-wallet');
+        
+        const activeClass = "flex-1 pb-2 text-[10px] font-bold uppercase tracking-wider text-blue-400 border-b-2 border-blue-500 focus:outline-none transition-colors duration-200 truncate px-1";
+        const inactiveClass = "flex-1 pb-2 text-[10px] font-bold uppercase tracking-wider text-gray-500 border-b-2 border-transparent hover:text-gray-300 focus:outline-none transition-colors duration-200 truncate px-1";
 
-        if (tabActivePosition && tabCoindcxWallet && contentActivePosition && contentCoindcxWallet) {
-            tabActivePosition.addEventListener('click', () => {
-                tabActivePosition.className = "flex-1 pb-2 text-xs font-bold uppercase tracking-wider text-blue-400 border-b-2 border-blue-500 focus:outline-none transition-colors duration-200";
-                tabCoindcxWallet.className = "flex-1 pb-2 text-xs font-bold uppercase tracking-wider text-gray-500 border-b-2 border-transparent hover:text-gray-300 focus:outline-none transition-colors duration-200";
-                contentActivePosition.classList.remove('hidden');
-                contentActivePosition.classList.add('flex');
-                contentCoindcxWallet.classList.add('hidden');
-                contentCoindcxWallet.classList.remove('flex');
-            });
+        function switchTab(activeTab, activeContent) {
+            tabActivePosition.className = tabActivePosition === activeTab ? activeClass : inactiveClass;
+            tabAnalytics.className = tabAnalytics === activeTab ? activeClass : inactiveClass;
+            tabCoindcxWallet.className = tabCoindcxWallet === activeTab ? activeClass : inactiveClass;
+            
+            contentActivePosition.classList.add('hidden');
+            contentActivePosition.classList.remove('flex');
+            contentAnalytics.classList.add('hidden');
+            contentAnalytics.classList.remove('flex');
+            contentCoindcxWallet.classList.add('hidden');
+            contentCoindcxWallet.classList.remove('flex');
+            
+            activeContent.classList.remove('hidden');
+            activeContent.classList.add('flex');
+        }
 
-            tabCoindcxWallet.addEventListener('click', () => {
-                tabCoindcxWallet.className = "flex-1 pb-2 text-xs font-bold uppercase tracking-wider text-blue-400 border-b-2 border-blue-500 focus:outline-none transition-colors duration-200";
-                tabActivePosition.className = "flex-1 pb-2 text-xs font-bold uppercase tracking-wider text-gray-500 border-b-2 border-transparent hover:text-gray-300 focus:outline-none transition-colors duration-200";
-                contentCoindcxWallet.classList.remove('hidden');
-                contentCoindcxWallet.classList.add('flex');
-                contentActivePosition.classList.remove('flex');
+        if (tabActivePosition && tabCoindcxWallet && tabAnalytics) {
+            tabActivePosition.addEventListener('click', () => switchTab(tabActivePosition, contentActivePosition));
+            tabAnalytics.addEventListener('click', () => {
+                switchTab(tabAnalytics, contentAnalytics);
+                if(!window.analyticsLoaded) {
+                    loadAnalytics();
+                }
             });
+            tabCoindcxWallet.addEventListener('click', () => switchTab(tabCoindcxWallet, contentCoindcxWallet));
+        }
+        
+        let winRateChartInstance = null;
+        let equityChartInstance = null;
+
+        async function loadAnalytics() {
+            try {
+                const response = await fetch('/api/analytics');
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    window.analyticsLoaded = true;
+                    document.getElementById('analytics-winrate-text').textContent = data.win_rate + '%';
+                    document.getElementById('analytics-pnl-text').textContent = data.total_pnl + ' USDT';
+                    
+                    const winCtx = document.getElementById('winRateChart').getContext('2d');
+                    if (winRateChartInstance) winRateChartInstance.destroy();
+                    winRateChartInstance = new Chart(winCtx, {
+                        type: 'doughnut',
+                        data: {
+                            labels: ['Wins', 'Losses'],
+                            datasets: [{
+                                data: [data.wins, data.losses],
+                                backgroundColor: ['#3b82f6', '#ef4444'],
+                                borderWidth: 0
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { display: false }
+                            }
+                        }
+                    });
+                    
+                    const eqCtx = document.getElementById('equityChart').getContext('2d');
+                    if (equityChartInstance) equityChartInstance.destroy();
+                    const labels = data.equity_curve.map(d => d.time);
+                    const values = data.equity_curve.map(d => d.value);
+                    
+                    equityChartInstance = new Chart(eqCtx, {
+                        type: 'line',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                data: values,
+                                borderColor: '#10b981',
+                                tension: 0.2,
+                                pointRadius: 0,
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { display: false }
+                            },
+                            scales: {
+                                x: { display: false },
+                                y: { display: false }
+                            }
+                        }
+                    });
+                }
+            } catch (e) {
+                console.error("Failed to load analytics", e);
+            }
         }
         
         // TSL Listeners
