@@ -107,6 +107,10 @@ class PrimeSignalBot:
         except Exception as e:
             print(f"[STATE] Failed to save state: {e}")
 
+    def is_live_trading(self):
+        """Returns True only if we should send real API orders."""
+        return self.has_keys and not Config.PAPER_TRADING
+
     def load_state(self):
         """Restore position state from disk after a restart."""
         if not self._STATE_FILE.exists():
@@ -131,6 +135,18 @@ class PrimeSignalBot:
             self.lowest_price_reached = safe_load('lowest_price_reached', 999999.0)
             self._dry_run_balance_usdt = state.get('_dry_run_balance_usdt', 10000.0)
             
+            # FIX #7: Ghost position detection — clear positions with invalid data
+            for sym in Config.SUPPORTED_SYMBOLS:
+                if self.in_position[sym]:
+                    if self.position_size[sym] <= 0 or self.entry_price[sym] <= 0:
+                        print(f"[STATE] ⚠️ Ghost position detected for {sym} (size={self.position_size[sym]}, entry={self.entry_price[sym]}). Resetting.")
+                        self.in_position[sym] = False
+                        self.position_side[sym] = "HOLD"
+                        self.entry_price[sym] = 0.0
+                        self.position_size[sym] = 0.0
+                        self.stop_loss[sym] = 0.0
+                        self.take_profit[sym] = 0.0
+
             # Sync to dashboard for active UI symbol
             sym = Config.SYMBOL
             DashboardState.in_position = self.in_position[sym]
@@ -272,7 +288,12 @@ class PrimeSignalBot:
         return current_equity
 
     async def _on_candle_close_impl(self, symbol):
+        print(f"[DEBUG] [{symbol}] === CANDLE CLOSE EVALUATION START ===")
+        print(f"[DEBUG] [{symbol}] has_keys={self.has_keys}, PAPER_TRADING={Config.PAPER_TRADING}, is_live={self.is_live_trading()}")
+        print(f"[DEBUG] [{symbol}] in_position={self.in_position[symbol]}, position_side={self.position_side[symbol]}")
+
         if time.time() < self.global_pause_until:
+            print(f"[DEBUG] [{symbol}] BLOCKED by global_pause_until ({self.global_pause_until - time.time():.0f}s remaining)")
             return
             
         # Update balance via API if live
@@ -324,7 +345,7 @@ class PrimeSignalBot:
         is_low_volume_session = not (12 <= current_hour <= 21)
         
         if self.has_keys:
-            open_time = ltf_df.iloc[-1]['time'] / 1000.0 if 'time' in ltf_df.columns else ltf_df.index[-1].timestamp()
+            open_time = ltf_df.iloc[-1]['timestamp'] / 1000.0 if 'timestamp' in ltf_df.columns else ltf_df.index[-1].timestamp()
             close_time = open_time + (5 * 60)
             delay = time.time() - close_time
             if delay > 10:
@@ -336,6 +357,7 @@ class PrimeSignalBot:
             ltf_df,
             relaxed=False
         )
+        print(f"[DEBUG] [{symbol}] Strict signal={signal}, debug_checks={metadata.get('debug_checks')}, score={metadata.get('score')}")
         relaxed_used = False
         
         # Dual-Pass Execution
@@ -405,6 +427,7 @@ class PrimeSignalBot:
         
         # Position Reversal logic
         if self.in_position[symbol]:
+            print(f"[DEBUG] [{symbol}] Already in position ({self.position_side[symbol]}). Signal={signal}. Checking reversal.")
             if self.position_side[symbol] == "LONG" and signal == "SELL":
                 add_log_message(f"[{symbol}] Trend reversal: Closing LONG position.")
                 await self.exit_position(symbol, "SIGNAL_REVERSAL")
@@ -611,19 +634,26 @@ class PrimeSignalBot:
                 add_log_message(f"[{symbol}] WARNING: Failed to fetch CoinDCX INR price. Sizing in USDT.")
         
         pos_size = self.risk.calculate_position_size(current_equity, entry_price, sl)
+        print(f"[DEBUG] [{symbol}] Raw pos_size from risk_mgr: {pos_size:.8f}")
         
         # Scale pos_size by the dynamic trade_risk_pct (default calculate_position_size uses Config.RISK_PCT)
-        # So we adjust it relative to default RISK_PCT
-        pos_size = pos_size * (trade_risk_pct / getattr(Config, 'RISK_PCT', 0.02))
+        # FIX #2: RISK_PCT is stored as percentage (e.g. 1.0 = 1%). Convert to decimal for correct scaling.
+        risk_pct_decimal = getattr(Config, 'RISK_PCT', 2.0) / 100.0
+        pos_size = pos_size * (trade_risk_pct / risk_pct_decimal)
+        print(f"[DEBUG] [{symbol}] Scaled pos_size: {pos_size:.8f} (trade_risk_pct={trade_risk_pct}, risk_pct_decimal={risk_pct_decimal})")
         if pos_size <= 0.0:
+            print(f"[DEBUG] [{symbol}] BLOCKED: pos_size <= 0 after scaling")
             return
             
         if signal == "BUY":
             add_log_message(f"[{symbol}] Executing BUY (LONG). Size: {pos_size:.6f} | SL: {sl:.2f} | TP: {tp:.2f}")
             order = None
-            if self.has_keys and not Config.PAPER_TRADING:
+            # FIX #8: Use centralized live trading check
+            if self.is_live_trading():
+                print(f"[DEBUG] [{symbol}] BUY → Routing to LIVE exchange API")
                 order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol)
             else:
+                print(f"[DEBUG] [{symbol}] BUY → Dry-run mock order")
                 position_cost = pos_size * entry_price
                 if position_cost <= self._dry_run_balance_usdt:
                     self._dry_run_balance_usdt -= position_cost
@@ -697,9 +727,12 @@ class PrimeSignalBot:
             )
             add_log_message(f"[{symbol}] " + msg_str.replace('\\n', ' | '))
             order = None
-            if self.has_keys:
+            # FIX #1: Added `not Config.PAPER_TRADING` — previously SELL orders leaked to live API in paper mode
+            if self.is_live_trading():
+                print(f"[DEBUG] [{symbol}] SELL → Routing to LIVE exchange API")
                 order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol)
             else:
+                print(f"[DEBUG] [{symbol}] SELL → Dry-run mock order")
                 collateral = pos_size * entry_price
                 if collateral <= self._dry_run_balance_usdt:
                     self._dry_run_balance_usdt -= collateral
@@ -778,7 +811,7 @@ class PrimeSignalBot:
                             if not self.partial_tp_taken[symbol] and curr_price >= self.take_profit_1r[symbol]:
                                 add_log_message(f"[{symbol}] TP1 (1R) hit. Booking 50% profit.")
                                 tp1_size = self.position_size[symbol] * (0.50 / 1.0)
-                                if self.has_keys and not Config.PAPER_TRADING:
+                                if self.is_live_trading():
                                     await self.execution.place_order('sell', 'market', tp1_size, symbol=symbol, is_exit_order=True)
                                 else:
                                     self._dry_run_balance_usdt += tp1_size * curr_price
@@ -794,7 +827,7 @@ class PrimeSignalBot:
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price >= self.take_profit_2r[symbol]:
                                 add_log_message(f"[{symbol}] TP2 hit. Booking 30% profit. Runner trails.")
                                 tp2_size = self.position_size[symbol] * (0.30 / 0.50)
-                                if self.has_keys and not Config.PAPER_TRADING:
+                                if self.is_live_trading():
                                     await self.execution.place_order('sell', 'market', tp2_size, symbol=symbol, is_exit_order=True)
                                 else:
                                     self._dry_run_balance_usdt += tp2_size * curr_price
@@ -819,7 +852,7 @@ class PrimeSignalBot:
                             if not self.partial_tp_taken[symbol] and curr_price <= self.take_profit_1r[symbol]:
                                 add_log_message(f"[{symbol}] TP1 (1R) hit. Booking 50% profit.")
                                 tp1_size = self.position_size[symbol] * (0.50 / 1.0)
-                                if self.has_keys and not Config.PAPER_TRADING:
+                                if self.is_live_trading():
                                     await self.execution.place_order('buy', 'market', tp1_size, symbol=symbol, is_exit_order=True)
                                 else:
                                     self._dry_run_balance_usdt += tp1_size * (self.entry_price[symbol] - curr_price) + (tp1_size * self.entry_price[symbol])
@@ -835,7 +868,7 @@ class PrimeSignalBot:
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price <= self.take_profit_2r[symbol]:
                                 add_log_message(f"[{symbol}] TP2 hit. Booking 30% profit. Runner trails.")
                                 tp2_size = self.position_size[symbol] * (0.30 / 0.50)
-                                if self.has_keys and not Config.PAPER_TRADING:
+                                if self.is_live_trading():
                                     await self.execution.place_order('buy', 'market', tp2_size, symbol=symbol, is_exit_order=True)
                                 else:
                                     self._dry_run_balance_usdt += tp2_size * (self.entry_price[symbol] - curr_price) + (tp2_size * self.entry_price[symbol])
@@ -934,7 +967,7 @@ class PrimeSignalBot:
             exit_price = self.entry_price[symbol]
         add_log_message(f"[{symbol}] Exiting at price: {exit_price:.4f} (reason: {reason})")
         order = None
-        if self.has_keys and not Config.PAPER_TRADING:
+        if self.is_live_trading():
             side = 'buy' if self.position_side[symbol] == 'SHORT' else 'sell'
             order = await self.execution.place_order(side, 'market', self.position_size[symbol], price=exit_price, is_exit_order=True, symbol=symbol)
         else:
