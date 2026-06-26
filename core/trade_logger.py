@@ -29,8 +29,20 @@ class TradeLogger:
         firebase = FirebaseManager()
         if firebase.is_connected:
             try:
+                def sanitize(obj):
+                    if isinstance(obj, dict):
+                        return {k: sanitize(v) for k, v in obj.items()}
+                    elif isinstance(obj, list):
+                        return [sanitize(v) for v in obj]
+                    elif hasattr(obj, "item"):  # numpy float/int
+                        return obj.item()
+                    elif str(type(obj)) == "<class 'pandas._libs.tslibs.timestamps.Timestamp'>":
+                        return str(obj)
+                    return obj
+                
+                safe_entry = sanitize(entry)
                 # Add to trade_logs collection with a generated ID or auto-id
-                firebase.db.collection("trade_logs").add(entry)
+                firebase.db.collection("trade_logs").add(safe_entry)
             except Exception as e:
                 print(f"[FIREBASE] Failed to write log: {e}")
 

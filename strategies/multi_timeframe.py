@@ -142,6 +142,14 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
 
         metadata['ltf_rsi']  = curr_rsi
         metadata['ltf_vwap'] = curr_vwap
+        metadata['curr_atr'] = curr_atr
+        metadata['curr_adx'] = curr_adx
+        metadata['ema_short'] = curr_short
+        metadata['ema_long'] = curr_long
+        metadata['curr_ema_50'] = curr_ema_50
+        metadata['htf_ema_50'] = latest_htf_ema_50
+        metadata['htf_ema_200'] = latest_htf_ema_200
+        metadata['candle_volume'] = float(ltf_df['volume'].iloc[-2])
 
         vol_pass = (curr_atr / curr_price) >= Config.MIN_ATR_PCT
         metadata['debug_checks']['volatility'] = 'PASS' if vol_pass else 'FAIL'
@@ -177,6 +185,15 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                     active_bearish_fvg = fvg
 
         vwap_tol = Config.VWAP_TOLERANCE * 2 if relaxed else Config.VWAP_TOLERANCE
+
+        metadata['active_ob_details'] = {
+            'bullish': {'bottom': active_bullish_ob['bottom'], 'top': active_bullish_ob['top']} if active_bullish_ob else None,
+            'bearish': {'bottom': active_bearish_ob['bottom'], 'top': active_bearish_ob['top']} if active_bearish_ob else None
+        }
+        metadata['active_fvg_details'] = {
+            'bullish': {'bottom': active_bullish_fvg['bottom'], 'top': active_bullish_fvg['top']} if active_bullish_fvg else None,
+            'bearish': {'bottom': active_bearish_fvg['bottom'], 'top': active_bearish_fvg['top']} if active_bearish_fvg else None
+        }
 
         if htf_trend == 'BULLISH':
             in_zone = False
