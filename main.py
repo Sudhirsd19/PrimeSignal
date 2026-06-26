@@ -412,8 +412,9 @@ class PrimeSignalBot:
             if ltf_df['volume'].iloc[-1] < 1.2 * avg_vol:
                 msg = f"[{symbol}] Trade skipped: Outside 12-22 UTC and volume not > 1.2x average."
                 add_log_message(msg)
-                DashboardState.signal_light = "ORANGE"
-                DashboardState.signal_light_reason = "Signal blocked: Low volume during off-peak session."
+                if symbol == Config.SYMBOL:
+                    DashboardState.signal_light = "ORANGE"
+                    DashboardState.signal_light_reason = "Signal blocked: Low volume during off-peak session."
                 return
                 
         # 4H Bias logic
@@ -449,38 +450,42 @@ class PrimeSignalBot:
                 if btc_drop > 0.01:
                     add_log_message(f"[{symbol}] Trade blocked: BTC dropped > 1% in last 5m. Blocking altcoin longs.")
                     self.logger.log_signal_filtered(symbol, signal, "BTC correlation drop", "btc_correlation")
-                    DashboardState.signal_light = "RED"
-                    DashboardState.signal_light_reason = "Signal blocked: BTC dumping >1%."
+                    if symbol == Config.SYMBOL:
+                        DashboardState.signal_light = "RED"
+                        DashboardState.signal_light_reason = "Signal blocked: BTC dumping >1%."
                     return
         
         # Daily Trade Limit
-        if self.trades_today >= 6:
-            add_log_message(f"[{symbol}] Trade skipped: Max 6 trades per day reached.")
-            DashboardState.signal_light = "RED"
-            DashboardState.signal_light_reason = "Signal blocked: Daily max trades reached."
+        if self.trades_today >= Config.MAX_OPEN_TRADES:
+            add_log_message(f"[{symbol}] Trade skipped: Daily maximum ({Config.MAX_OPEN_TRADES}) reached.")
+            if symbol == Config.SYMBOL:
+                DashboardState.signal_light = "RED"
+                DashboardState.signal_light_reason = "Signal blocked: Daily max trades reached."
             return
 
         # Cluster Loss Cooldown
-        if time.time() < getattr(self, 'cluster_loss_pause_until', 0):
+        if time.time() < self.global_pause_until:
             add_log_message(f"[{symbol}] Trade skipped: Cluster loss cooldown active.")
-            DashboardState.signal_light = "RED"
-            DashboardState.signal_light_reason = "Signal blocked: Cluster loss cooldown."
+            if symbol == Config.SYMBOL:
+                DashboardState.signal_light = "RED"
+                DashboardState.signal_light_reason = "Signal blocked: Cluster loss cooldown."
             return
 
         # Cooldown Check
-        if time.time() - self.last_trade_time.get(symbol, 0) < getattr(Config, 'COOLDOWN_MINUTES', 15) * 60:
-            add_log_message(f"[{symbol}] Trade skipped due to cooldown.")
-            DashboardState.signal_light = "ORANGE"
-            DashboardState.signal_light_reason = "Signal blocked: Cooldown between trades."
+        if time.time() - self.global_last_trade_time < (Config.COOLDOWN_MINUTES * 60):
+            add_log_message(f"[{symbol}] Trade skipped: Cooldown of {Config.COOLDOWN_MINUTES}m not finished.")
+            if symbol == Config.SYMBOL:
+                DashboardState.signal_light = "ORANGE"
+                DashboardState.signal_light_reason = "Signal blocked: Cooldown between trades."
             return
 
         # Same Zone Check with Traded Zones Cache
         zone_id = metadata.get('zone_id')
-        cache_key = f"{symbol}_{zone_id}"
-        if zone_id and self.traded_zones_cache.get(cache_key):
-            add_log_message(f"[{symbol}] Trade skipped: already traded in this zone ({zone_id}).")
-            DashboardState.signal_light = "ORANGE"
-            DashboardState.signal_light_reason = "Signal blocked: Already traded this specific zone."
+        if zone_id and zone_id == self.last_zone_traded[symbol]:
+            add_log_message(f"[{symbol}] Trade skipped: Already traded in this specific zone ({zone_id}).")
+            if symbol == Config.SYMBOL:
+                DashboardState.signal_light = "ORANGE"
+                DashboardState.signal_light_reason = "Signal blocked: Already traded this specific zone."
             return
             
         # Clear out old cache (basic cleanup - ideally based on candle count but here based on simple dict size)
@@ -641,7 +646,7 @@ class PrimeSignalBot:
             self.logger.log_signal_filtered(symbol, signal, "CoinDCX Spot does not support SHORT", "exchange_capability")
             return
 
-        if signal == "BUY":
+        if symbol == Config.SYMBOL:
             DashboardState.signal_light = "YELLOW"
             DashboardState.signal_light_reason = "Validating entry metrics..."
             
@@ -651,8 +656,9 @@ class PrimeSignalBot:
                 await asyncio.sleep(0.5)
                 
             DashboardState.signal_light = "GREEN"
-            DashboardState.signal_light_reason = "Executing BUY (LONG)..."
-            
+            DashboardState.signal_light_reason = f"Executing {signal}..."
+        
+        if signal == "BUY":
             add_log_message(f"[{symbol}] Executing BUY (LONG). Size: {pos_size:.6f} | SL: {sl:.2f} | TP: {tp:.2f}")
             order = None
             if self.has_keys:
@@ -804,9 +810,10 @@ class PrimeSignalBot:
                         if self.position_side[symbol] == "LONG":
                             self.highest_price_reached[symbol] = max(self.highest_price_reached[symbol], curr_price)
                             
-                            DashboardState.signal_light = "BLUE"
-                            DashboardState.signal_light_reason = f"Active LONG ({curr_price:.2f})"
-                            DashboardState.signal_progress = 0
+                            if symbol == Config.SYMBOL:
+                                DashboardState.signal_light = "BLUE"
+                                DashboardState.signal_light_reason = f"Active LONG ({curr_price:.2f})"
+                                DashboardState.signal_progress = 0
                             
                             # TP1 (50%)
                             if not self.partial_tp_taken[symbol] and curr_price >= self.take_profit_1r[symbol]:
@@ -849,9 +856,10 @@ class PrimeSignalBot:
                         elif self.position_side[symbol] == "SHORT":
                             self.lowest_price_reached[symbol] = min(self.lowest_price_reached[symbol], curr_price)
                             
-                            DashboardState.signal_light = "BLUE"
-                            DashboardState.signal_light_reason = f"Active SHORT ({curr_price:.2f})"
-                            DashboardState.signal_progress = 0
+                            if symbol == Config.SYMBOL:
+                                DashboardState.signal_light = "BLUE"
+                                DashboardState.signal_light_reason = f"Active SHORT ({curr_price:.2f})"
+                                DashboardState.signal_progress = 0
                             
                             # TP1 (50%)
                             if not self.partial_tp_taken[symbol] and curr_price <= self.take_profit_1r[symbol]:
@@ -996,6 +1004,9 @@ class PrimeSignalBot:
             if symbol == Config.SYMBOL:
                 DashboardState.in_position = False
                 DashboardState.position_side = "HOLD"
+                DashboardState.signal_light = "RED"
+                DashboardState.signal_light_reason = "Waiting for next signal..."
+                DashboardState.signal_progress = 0
 
             self.save_state()
             await self.notifier.send_message(

@@ -229,7 +229,8 @@ async def get_state():
         "symbol": Config.SYMBOL,
         "trades_count": len(DashboardState.trades),
         "signal_light": DashboardState.signal_light,
-        "signal_light_reason": DashboardState.signal_light_reason
+        "signal_light_reason": DashboardState.signal_light_reason,
+        "signal_progress": DashboardState.signal_progress
     }
 
 @app.get("/api/trades")
@@ -288,7 +289,8 @@ async def send_state_to_ws(websocket):
         "coindcx_profile": DashboardState.coindcx_profile,
         "coindcx_balances": DashboardState.coindcx_balances,
         "signal_light": DashboardState.signal_light,
-        "signal_light_reason": DashboardState.signal_light_reason
+        "signal_light_reason": DashboardState.signal_light_reason,
+        "signal_progress": DashboardState.signal_progress
     }
     await websocket.send_text(json.dumps(state_payload))
 
