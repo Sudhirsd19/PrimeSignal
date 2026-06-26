@@ -8,3 +8,5 @@ htf_data.json
 .idea/
 .vscode/
 bot_state.json
+logs/
+KILL_SWITCH

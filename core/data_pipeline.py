@@ -22,6 +22,13 @@ class RealTimeDataPipeline:
         # Callback for new candle close events
         self.on_candle_close_callback = None
 
+        # Feature 6: Track last candle time per symbol/timeframe for gap healing
+        self._last_candle_ts = {
+            'ltf': {sym: 0 for sym in Config.SUPPORTED_SYMBOLS},
+            'htf': {sym: 0 for sym in Config.SUPPORTED_SYMBOLS},
+            '4h':  {sym: 0 for sym in Config.SUPPORTED_SYMBOLS},
+        }
+
     async def initialize_history(self):
         """
         Warm up caches with historical data from the exchange.
@@ -93,6 +100,9 @@ class RealTimeDataPipeline:
                     self.current_websocket = websocket
                     print("[DATA] WebSocket Connected successfully!")
                     retry_delay = 2.0  # Reset retry delay
+
+                    # Feature 6: Heal any gaps from disconnection
+                    await self._heal_candle_gaps()
                     
                     async for message in websocket:
                         if not self.websocket_active:
@@ -131,6 +141,8 @@ class RealTimeDataPipeline:
                             if timeframe == Config.LTF_TIMEFRAME:
                                 self.latest_prices[symbol] = candle[4]
                                 self._update_candle_cache(self.ltf_candles[symbol], candle, is_closed)
+                                if is_closed:
+                                    self._last_candle_ts['ltf'][symbol] = candle[0]
                                 
                                 # If a lower-timeframe candle just closed, trigger strategy evaluation
                                 if is_closed and self.on_candle_close_callback:
@@ -140,8 +152,12 @@ class RealTimeDataPipeline:
                                     
                             elif timeframe == Config.HTF_TIMEFRAME:
                                 self._update_candle_cache(self.htf_candles[symbol], candle, is_closed)
+                                if is_closed:
+                                    self._last_candle_ts['htf'][symbol] = candle[0]
                             elif timeframe == '4h':
                                 self._update_candle_cache(self.htf_4h_candles[symbol], candle, is_closed)
+                                if is_closed:
+                                    self._last_candle_ts['4h'][symbol] = candle[0]
                                 
             except websockets.exceptions.ConnectionClosed:
                 print(f"[DATA] WebSocket disconnected. Reconnecting in {retry_delay:.1f}s...")
@@ -198,3 +214,65 @@ class RealTimeDataPipeline:
             self.websocket_task.cancel()
             self.websocket_task = None
         print("[DATA] WebSocket pipeline stopped.")
+
+    # ── Feature 6: WebSocket reconnection gap healing ────────────────────
+    async def _heal_candle_gaps(self):
+        """Re-fetches missing candles after a WebSocket disconnect."""
+        healed = 0
+        for symbol in Config.SUPPORTED_SYMBOLS:
+            # Heal LTF gaps
+            last_ts = self._last_candle_ts['ltf'].get(symbol, 0)
+            if last_ts > 0 and self.ltf_candles[symbol]:
+                fetched = await self._fetch_since(symbol, Config.LTF_TIMEFRAME, last_ts)
+                if fetched:
+                    merged = self._merge_candles(self.ltf_candles[symbol], fetched)
+                    self.ltf_candles[symbol] = merged
+                    healed += len(fetched)
+
+            # Heal HTF gaps
+            last_ts = self._last_candle_ts['htf'].get(symbol, 0)
+            if last_ts > 0 and self.htf_candles[symbol]:
+                fetched = await self._fetch_since(symbol, Config.HTF_TIMEFRAME, last_ts)
+                if fetched:
+                    merged = self._merge_candles(self.htf_candles[symbol], fetched)
+                    self.htf_candles[symbol] = merged
+                    healed += len(fetched)
+
+            # Heal 4H gaps
+            last_ts = self._last_candle_ts['4h'].get(symbol, 0)
+            if last_ts > 0 and self.htf_4h_candles[symbol]:
+                fetched = await self._fetch_since(symbol, '4h', last_ts)
+                if fetched:
+                    merged = self._merge_candles(self.htf_4h_candles[symbol], fetched)
+                    self.htf_4h_candles[symbol] = merged
+                    healed += len(fetched)
+
+        if healed > 0:
+            print(f"[DATA] Gap healing complete: {healed} candles recovered across all symbols.")
+
+    async def _fetch_since(self, symbol, timeframe, since_ts):
+        """Fetches candles from exchange since a given timestamp."""
+        try:
+            ohlcv = await self.execution.fetch_ohlcv(
+                symbol=symbol, timeframe=timeframe, limit=200
+            )
+            if ohlcv:
+                # Only return candles after the last known timestamp
+                return [c for c in ohlcv if c[0] > since_ts]
+        except Exception as e:
+            print(f"[DATA] Gap heal fetch failed for {symbol} {timeframe}: {e}")
+        return []
+
+    @staticmethod
+    def _merge_candles(existing: list, new_candles: list) -> list:
+        """Merges new candles into existing cache, deduplicating by timestamp."""
+        existing_ts = {c[0] for c in existing}
+        merged = list(existing)
+        for c in new_candles:
+            if c[0] not in existing_ts:
+                merged.append(c)
+        merged.sort(key=lambda c: c[0])
+        # Keep bounded
+        if len(merged) > 1000:
+            merged = merged[-1000:]
+        return merged

@@ -117,6 +117,17 @@ async def set_mode(req: ModeRequest):
     add_log_message(f"Trading mode switched to {mode_name}")
     return {"status": "success", "message": f"Switched to {mode_name}"}
 
+@app.post("/api/emergency_stop", dependencies=[Depends(verify_dashboard_key)])
+async def emergency_stop():
+    """Trigger the emergency kill switch by creating the KILL_SWITCH file."""
+    try:
+        with open("KILL_SWITCH", "w") as f:
+            f.write("Triggered via API")
+        add_log_message("🚨 EMERGENCY KILL SWITCH TRIGGERED VIA API 🚨")
+        return {"status": "success", "message": "Kill switch activated. All positions will be exited."}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to activate kill switch: {str(e)}"}
+
 @app.get("/api/state")
 async def get_state():
     """Rest API endpoint for current state."""

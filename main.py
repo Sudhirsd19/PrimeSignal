@@ -23,6 +23,8 @@ from ml.confirmation import MLSignalConfirmator
 from risk.risk_manager import RiskManager
 from alerts.notifier import TelegramNotifier
 from dashboard.app import app, DashboardState, add_log_message
+from core.trade_logger import TradeLogger
+import os
 
 class PrimeSignalBot:
     def __init__(self):
@@ -34,6 +36,7 @@ class PrimeSignalBot:
         self.strategy = MultiTimeframeSMCStrategy()
         self.risk = RiskManager()
         self.notifier = TelegramNotifier()
+        self.logger = TradeLogger()
         
         self.ml_models = {sym: MLSignalConfirmator() for sym in Config.SUPPORTED_SYMBOLS}
         
@@ -41,7 +44,6 @@ class PrimeSignalBot:
         self.in_position = {sym: False for sym in Config.SUPPORTED_SYMBOLS}
         self.position_side = {sym: "HOLD" for sym in Config.SUPPORTED_SYMBOLS}
         self.entry_price = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.entry_price_usdt = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.stop_loss = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.take_profit = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.highest_price_reached = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
@@ -93,7 +95,6 @@ class PrimeSignalBot:
             'in_position': self.in_position,
             'position_side': self.position_side,
             'entry_price': self.entry_price,
-            'entry_price_usdt': self.entry_price_usdt,
             'stop_loss': self.stop_loss,
             'take_profit': self.take_profit,
             'position_size': self.position_size,
@@ -101,25 +102,11 @@ class PrimeSignalBot:
             'highest_price_reached': self.highest_price_reached,
             'lowest_price_reached': self.lowest_price_reached,
             '_dry_run_balance_usdt': self._dry_run_balance_usdt,
-            # FIX F: Persist partial TP and cooldown state for crash recovery
-            'partial_tp_taken': self.partial_tp_taken,
-            'tp2_taken': self.tp2_taken,
-            'take_profit_1r': self.take_profit_1r,
-            'take_profit_2r': self.take_profit_2r,
-            'last_trade_time': self.last_trade_time,
-            'trades_today': self.trades_today,
-            'trade_history': self.trade_history,
-            'cluster_loss_pause_until': self.cluster_loss_pause_until,
-            'global_pause_until': self.global_pause_until,
         }
         try:
             self._STATE_FILE.write_text(json.dumps(state))
         except Exception as e:
             print(f"[STATE] Failed to save state: {e}")
-
-    def is_live_trading(self):
-        """Returns True only if we should send real API orders."""
-        return self.has_keys and not Config.PAPER_TRADING
 
     def load_state(self):
         """Restore position state from disk after a restart."""
@@ -136,7 +123,6 @@ class PrimeSignalBot:
             self.in_position = safe_load('in_position', False)
             self.position_side = safe_load('position_side', 'HOLD')
             self.entry_price = safe_load('entry_price', 0.0)
-            self.entry_price_usdt = safe_load('entry_price_usdt', 0.0)
             self.stop_loss = safe_load('stop_loss', 0.0)
             self.take_profit = safe_load('take_profit', 0.0)
             self.position_size = safe_load('position_size', 0.0)
@@ -144,30 +130,7 @@ class PrimeSignalBot:
             self.highest_price_reached = safe_load('highest_price_reached', 0.0)
             self.lowest_price_reached = safe_load('lowest_price_reached', 999999.0)
             self._dry_run_balance_usdt = state.get('_dry_run_balance_usdt', 10000.0)
-
-            # FIX F: Restore partial TP and cooldown state
-            self.partial_tp_taken = safe_load('partial_tp_taken', False)
-            self.tp2_taken = safe_load('tp2_taken', False)
-            self.take_profit_1r = safe_load('take_profit_1r', 0.0)
-            self.take_profit_2r = safe_load('take_profit_2r', 0.0)
-            self.last_trade_time = safe_load('last_trade_time', 0)
-            self.trades_today = state.get('trades_today', 0)
-            self.trade_history = state.get('trade_history', [])
-            self.cluster_loss_pause_until = state.get('cluster_loss_pause_until', 0)
-            self.global_pause_until = state.get('global_pause_until', 0)
             
-            # FIX #7: Ghost position detection — clear positions with invalid data
-            for sym in Config.SUPPORTED_SYMBOLS:
-                if self.in_position[sym]:
-                    if self.position_size[sym] <= 0 or self.entry_price[sym] <= 0:
-                        print(f"[STATE] ⚠️ Ghost position detected for {sym} (size={self.position_size[sym]}, entry={self.entry_price[sym]}). Resetting.")
-                        self.in_position[sym] = False
-                        self.position_side[sym] = "HOLD"
-                        self.entry_price[sym] = 0.0
-                        self.position_size[sym] = 0.0
-                        self.stop_loss[sym] = 0.0
-                        self.take_profit[sym] = 0.0
-
             # Sync to dashboard for active UI symbol
             sym = Config.SYMBOL
             DashboardState.in_position = self.in_position[sym]
@@ -193,59 +156,18 @@ class PrimeSignalBot:
         await asyncio.sleep(3)
         
         # Initial Balance load
-        if self.has_keys and not Config.PAPER_TRADING:
+        if self.has_keys:
             balance = await self.execution.fetch_balance()
             if balance:
-                if Config.COINDCX_TRADE_INR:
-                    inr_balance = balance.get('total', {}).get('INR', None)
-                    if inr_balance is not None:
-                        DashboardState.balance_usdt = inr_balance
-                    else:
-                        add_log_message("[WARNING] CoinDCX INR Balance fetch returned None. Keeping last known value.")
+                usdt_balance = balance.get('total', {}).get('USDT', None)
+                if usdt_balance and usdt_balance > 0:
+                    DashboardState.balance_usdt = usdt_balance
                 else:
-                    usdt_balance = balance.get('total', {}).get('USDT', None)
-                    if usdt_balance and usdt_balance > 0:
-                        DashboardState.balance_usdt = usdt_balance
-                    else:
-                        add_log_message(f"[WARNING] Balance fetch returned {usdt_balance}. Check account type. Keeping last known value.")
+                    add_log_message(f"[WARNING] Balance fetch returned {usdt_balance}. Check account type. Keeping last known value.")
                 DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
         else:
             DashboardState.balance_usdt = self._dry_run_balance_usdt
             DashboardState.balance_base = 0.0
-
-        # Initial CoinDCX Profile Load
-        if self.execution.coindcx_client:
-            try:
-                profile = await self.execution.fetch_coindcx_user_info()
-                if profile:
-                    DashboardState.coindcx_profile = {
-                        "name": f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip() or "CoinDCX User",
-                        "email": profile.get("email", "unknown"),
-                        "id": profile.get("coindcx_id", "unknown"),
-                        "status": "Connected"
-                    }
-                else:
-                    DashboardState.coindcx_profile = {
-                        "name": "CoinDCX User",
-                        "email": "unknown",
-                        "id": "unknown",
-                        "status": "Auth Error"
-                    }
-            except Exception as e:
-                print(f"[BOT] CoinDCX profile fetch failed: {e}")
-                DashboardState.coindcx_profile = {
-                    "name": "CoinDCX User",
-                    "email": "unknown",
-                    "id": "unknown",
-                    "status": f"Error: {str(e)}"
-                }
-        else:
-            DashboardState.coindcx_profile = {
-                "name": "Dry Run Mode",
-                "email": "demo@coindcx.com",
-                "id": "DEMO12345",
-                "status": "Demo Mode (Keys Missing)"
-            }
         
         # Train ML Models on historical candles for each symbol
         for sym in Config.SUPPORTED_SYMBOLS:
@@ -309,30 +231,28 @@ class PrimeSignalBot:
         return current_equity
 
     async def _on_candle_close_impl(self, symbol):
-        print(f"[DEBUG] [{symbol}] === CANDLE CLOSE EVALUATION START ===")
-        print(f"[DEBUG] [{symbol}] has_keys={self.has_keys}, PAPER_TRADING={Config.PAPER_TRADING}, is_live={self.is_live_trading()}")
-        print(f"[DEBUG] [{symbol}] in_position={self.in_position[symbol]}, position_side={self.position_side[symbol]}")
+        # Feature 4: Emergency Kill Switch
+        if os.path.exists("KILL_SWITCH"):
+            add_log_message(f"🚨 KILL SWITCH ACTIVE 🚨 Halting all operations for {symbol}")
+            if self.in_position[symbol]:
+                await self.exit_position(symbol, "EMERGENCY_KILL_SWITCH")
+                self.logger.log_kill_switch("FILE", 1)
+            return
 
         if time.time() < self.global_pause_until:
-            print(f"[DEBUG] [{symbol}] BLOCKED by global_pause_until ({self.global_pause_until - time.time():.0f}s remaining)")
             return
             
         # Update balance via API if live
-        if self.has_keys and not Config.PAPER_TRADING:
+        if self.has_keys:
             balance = await self.execution.fetch_balance()
             if balance:
-                if Config.COINDCX_TRADE_INR:
-                    inr_balance = balance.get('total', {}).get('INR', None)
-                    if inr_balance is not None:
-                        DashboardState.balance_usdt = inr_balance
-                else:
-                    usdt_balance = balance.get('total', {}).get('USDT', None)
-                    if usdt_balance and usdt_balance > 0:
-                        DashboardState.balance_usdt = usdt_balance
+                usdt_balance = balance.get('total', {}).get('USDT', None)
+                if usdt_balance and usdt_balance > 0:
+                    DashboardState.balance_usdt = usdt_balance
                 DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
                 
         # Check drawdown circuit breakers
-        current_equity = DashboardState.balance_usdt if (self.has_keys and not Config.PAPER_TRADING) else self.calculate_total_equity()
+        current_equity = DashboardState.balance_usdt if self.has_keys else self.calculate_total_equity()
             
         if not self.risk.check_circuit_breaker(current_equity):
             add_log_message("Trading halted: Daily drawdown limit reached.")
@@ -366,21 +286,18 @@ class PrimeSignalBot:
         is_low_volume_session = not (12 <= current_hour <= 21)
         
         if self.has_keys:
-            open_time = ltf_df.iloc[-1]['timestamp'] / 1000.0 if 'timestamp' in ltf_df.columns else ltf_df.index[-1].timestamp()
-            # FIX E: Parse LTF_TIMEFRAME to seconds dynamically instead of hardcoding 5 min
-            _tf_seconds = {'1m': 60, '3m': 180, '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400}
-            close_time = open_time + _tf_seconds.get(Config.LTF_TIMEFRAME, 300)
+            open_time = ltf_df.iloc[-1]['time'] / 1000.0 if 'time' in ltf_df.columns else ltf_df.index[-1].timestamp()
+            close_time = open_time + (5 * 60)
             delay = time.time() - close_time
             if delay > 10:
                 add_log_message(f"[{symbol}] Trade skipped: Execution delay ({delay:.1f}s) > 10s. Stale signal protection.")
                 return
             
         signal, metadata = self.strategy.generate_signal(
-            htf_df,
+            self.pipeline.htf_candles[symbol],
             ltf_df,
             relaxed=False
         )
-        print(f"[DEBUG] [{symbol}] Strict signal={signal}, debug_checks={metadata.get('debug_checks')}, score={metadata.get('score')}")
         relaxed_used = False
         
         # Dual-Pass Execution
@@ -388,8 +305,7 @@ class PrimeSignalBot:
             open_count, _, _, _ = await self.get_open_positions_info()
             
             # Reset daily trades
-            # FIX H: Replace deprecated utcnow() with timezone-aware call
-            current_date = datetime.datetime.now(datetime.timezone.utc).date()
+            current_date = datetime.datetime.utcnow().date()
             if current_date != self.last_trade_day:
                 self.trades_today = 0
                 self.last_trade_day = current_date
@@ -401,7 +317,7 @@ class PrimeSignalBot:
                         super_relaxed = True
                         
                     signal, metadata = self.strategy.generate_signal(
-                        htf_df,
+                        self.pipeline.htf_candles[symbol],
                         ltf_df,
                         relaxed=True,
                         super_relaxed=super_relaxed
@@ -448,10 +364,10 @@ class PrimeSignalBot:
                 metadata['score'] = metadata.get('score', 3) - 0.5
                 
         add_log_message(f"[{symbol}] Raw strategy signal: {signal} ({metadata.get('reason')})")
+        self.logger.log_signal_generated(symbol, signal, metadata.get('score', 0), metadata.get('mode', 'STRICT'), metadata)
         
         # Position Reversal logic
         if self.in_position[symbol]:
-            print(f"[DEBUG] [{symbol}] Already in position ({self.position_side[symbol]}). Signal={signal}. Checking reversal.")
             if self.position_side[symbol] == "LONG" and signal == "SELL":
                 add_log_message(f"[{symbol}] Trend reversal: Closing LONG position.")
                 await self.exit_position(symbol, "SIGNAL_REVERSAL")
@@ -461,14 +377,14 @@ class PrimeSignalBot:
             return
 
         # BTC Correlation Filter
-        # FIX D: BTC correlation filter — ltf_candles stores lists of lists, not DataFrames
         if signal == "BUY" and symbol != "BTC/USDT":
-            btc_candles = self.pipeline.ltf_candles.get("BTC/USDT")
-            if btc_candles and len(btc_candles) > 0:
-                btc_last = btc_candles[-1]  # [timestamp, open, high, low, close, volume]
-                btc_drop = (btc_last[1] - btc_last[4]) / btc_last[1]  # (open - close) / open
+            btc_df = self.pipeline.ltf_candles.get("BTC/USDT")
+            if btc_df is not None and not btc_df.empty:
+                btc_last = btc_df.iloc[-1]
+                btc_drop = (btc_last['open'] - btc_last['close']) / btc_last['open']
                 if btc_drop > 0.01:
                     add_log_message(f"[{symbol}] Trade blocked: BTC dropped > 1% in last 5m. Blocking altcoin longs.")
+                    self.logger.log_signal_filtered(symbol, signal, "BTC correlation drop", "btc_correlation")
                     return
         
         # Daily Trade Limit
@@ -633,57 +549,30 @@ class PrimeSignalBot:
             add_log_message(f"[{symbol}] Trade skipped: Slippage too high. Signal: {entry_price}, Live: {live_price}")
             return
         entry_price = live_price  # Execute at live price
-        self.entry_price_usdt[symbol] = entry_price  # Save reference USDT price
         
         sl = metadata['stop_loss']
         tp = metadata['take_profit']
         
-        # Translate to INR if using CoinDCX INR trading
-        if self.execution.coindcx_client and Config.COINDCX_TRADE_INR:
-            coindcx_symbol = f"{symbol.split('/')[0]}INR"
-            coindcx_ticker = await self.execution.coindcx_client.fetch_ticker_data(coindcx_symbol)
-            if coindcx_ticker:
-                entry_price_inr = coindcx_ticker['last']
-                sl_pct = abs(entry_price - sl) / entry_price
-                tp_pct = abs(entry_price - tp) / entry_price
-                
-                entry_price = entry_price_inr
-                if signal == "BUY":
-                    sl = entry_price * (1 - sl_pct)
-                    tp = entry_price * (1 + tp_pct)
-                else:
-                    sl = entry_price * (1 + sl_pct)
-                    tp = entry_price * (1 - tp_pct)
-                add_log_message(f"[{symbol}] CoinDCX INR price translated: Entry {entry_price:.2f} INR | SL {sl:.2f} INR | TP {tp:.2f} INR")
-            else:
-                add_log_message(f"[{symbol}] WARNING: Failed to fetch CoinDCX INR price. Sizing in USDT.")
-        
         pos_size = self.risk.calculate_position_size(current_equity, entry_price, sl)
-        print(f"[DEBUG] [{symbol}] Raw pos_size from risk_mgr: {pos_size:.8f}")
         
         # Scale pos_size by the dynamic trade_risk_pct (default calculate_position_size uses Config.RISK_PCT)
-        # FIX #2: RISK_PCT is stored as percentage (e.g. 1.0 = 1%). Convert to decimal for correct scaling.
-        risk_pct_decimal = getattr(Config, 'RISK_PCT', 2.0) / 100.0
-        pos_size = pos_size * (trade_risk_pct / risk_pct_decimal)
-        print(f"[DEBUG] [{symbol}] Scaled pos_size: {pos_size:.8f} (trade_risk_pct={trade_risk_pct}, risk_pct_decimal={risk_pct_decimal})")
+        # So we adjust it relative to default RISK_PCT
+        pos_size = pos_size * (trade_risk_pct / getattr(Config, 'RISK_PCT', 0.02))
         if pos_size <= 0.0:
-            print(f"[DEBUG] [{symbol}] BLOCKED: pos_size <= 0 after scaling")
             return
-
+            
         # FIX A (CRITICAL-1): CoinDCX is a SPOT exchange — cannot short-sell assets you don't own
         if signal == "SELL" and self.execution.coindcx_client and Config.COINDCX_TRADE_INR:
             add_log_message(f"[{symbol}] ⚠️ SELL signal blocked: CoinDCX spot exchange does not support short selling.")
+            self.logger.log_signal_filtered(symbol, signal, "CoinDCX Spot does not support SHORT", "exchange_capability")
             return
-            
+
         if signal == "BUY":
             add_log_message(f"[{symbol}] Executing BUY (LONG). Size: {pos_size:.6f} | SL: {sl:.2f} | TP: {tp:.2f}")
             order = None
-            # FIX #8: Use centralized live trading check
-            if self.is_live_trading():
-                print(f"[DEBUG] [{symbol}] BUY → Routing to LIVE exchange API")
+            if self.has_keys:
                 order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol)
             else:
-                print(f"[DEBUG] [{symbol}] BUY → Dry-run mock order")
                 position_cost = pos_size * entry_price
                 if position_cost <= self._dry_run_balance_usdt:
                     self._dry_run_balance_usdt -= position_cost
@@ -736,6 +625,7 @@ class PrimeSignalBot:
                     f"Reason: {metadata.get('reason', 'N/A')}"
                 )
                 add_log_message(f"[{symbol}] " + msg_str.replace('\\n', ' | '))
+                self.logger.log_trade_executed(symbol, "LONG", pos_size, entry_price, sl, tp, order.get('id', ''), metadata.get('mode', 'STRICT'))
                 await self.notifier.send_message(msg_str)
             else:
                 # FIX #4: Log order rejection with reason
@@ -757,12 +647,9 @@ class PrimeSignalBot:
             )
             add_log_message(f"[{symbol}] " + msg_str.replace('\\n', ' | '))
             order = None
-            # FIX #1: Added `not Config.PAPER_TRADING` — previously SELL orders leaked to live API in paper mode
-            if self.is_live_trading():
-                print(f"[DEBUG] [{symbol}] SELL → Routing to LIVE exchange API")
+            if self.has_keys:
                 order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol)
             else:
-                print(f"[DEBUG] [{symbol}] SELL → Dry-run mock order")
                 collateral = pos_size * entry_price
                 if collateral <= self._dry_run_balance_usdt:
                     self._dry_run_balance_usdt -= collateral
@@ -801,6 +688,7 @@ class PrimeSignalBot:
                     DashboardState.take_profit = tp
 
                 self.save_state()
+                self.logger.log_trade_executed(symbol, "SHORT", pos_size, entry_price, sl, tp, order.get('id', ''), metadata.get('mode', 'STRICT'))
                 await self.notifier.send_message(msg_str)
             else:
                 add_log_message(f"[{symbol}] ❌ SELL order REJECTED (check execution logs)")
@@ -828,22 +716,6 @@ class PrimeSignalBot:
                         ltf_df = prepare_dataframe(self.pipeline.ltf_candles[symbol])
                         curr_atr = calculate_atr(ltf_df, Config.ATR_PERIOD).iloc[-1] if not ltf_df.empty else 0.001
                         
-                        # FIX C (CRITICAL-3): Fetch LIVE INR price from CoinDCX instead of using frozen scale factor
-                        if self.execution.coindcx_client and Config.COINDCX_TRADE_INR and self.entry_price_usdt[symbol] > 0:
-                            coindcx_sym = f"{symbol.split('/')[0]}INR"
-                            coindcx_tick = await self.execution.coindcx_client.fetch_ticker_data(coindcx_sym)
-                            if coindcx_tick and coindcx_tick['last'] > 0:
-                                live_inr_price = coindcx_tick['last']
-                                live_usdt_price = self.pipeline.latest_prices.get(symbol, 1.0)
-                                inr_usdt_ratio = live_inr_price / live_usdt_price if live_usdt_price > 0 else 1.0
-                                curr_price = live_inr_price
-                                curr_atr = curr_atr * inr_usdt_ratio
-                            else:
-                                # Fallback to frozen scale if CoinDCX ticker unavailable
-                                scale_factor = self.entry_price[symbol] / self.entry_price_usdt[symbol]
-                                curr_price = curr_price * scale_factor
-                                curr_atr = curr_atr * scale_factor
-                        
                         if self.position_side[symbol] == "LONG":
                             self.highest_price_reached[symbol] = max(self.highest_price_reached[symbol], curr_price)
                             
@@ -851,7 +723,7 @@ class PrimeSignalBot:
                             if not self.partial_tp_taken[symbol] and curr_price >= self.take_profit_1r[symbol]:
                                 add_log_message(f"[{symbol}] TP1 (1R) hit. Booking 50% profit.")
                                 tp1_size = self.position_size[symbol] * (0.50 / 1.0)
-                                if self.is_live_trading():
+                                if self.has_keys:
                                     await self.execution.place_order('sell', 'market', tp1_size, symbol=symbol, is_exit_order=True)
                                 else:
                                     self._dry_run_balance_usdt += tp1_size * curr_price
@@ -867,7 +739,7 @@ class PrimeSignalBot:
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price >= self.take_profit_2r[symbol]:
                                 add_log_message(f"[{symbol}] TP2 hit. Booking 30% profit. Runner trails.")
                                 tp2_size = self.position_size[symbol] * (0.30 / 0.50)
-                                if self.is_live_trading():
+                                if self.has_keys:
                                     await self.execution.place_order('sell', 'market', tp2_size, symbol=symbol, is_exit_order=True)
                                 else:
                                     self._dry_run_balance_usdt += tp2_size * curr_price
@@ -892,7 +764,7 @@ class PrimeSignalBot:
                             if not self.partial_tp_taken[symbol] and curr_price <= self.take_profit_1r[symbol]:
                                 add_log_message(f"[{symbol}] TP1 (1R) hit. Booking 50% profit.")
                                 tp1_size = self.position_size[symbol] * (0.50 / 1.0)
-                                if self.is_live_trading():
+                                if self.has_keys:
                                     await self.execution.place_order('buy', 'market', tp1_size, symbol=symbol, is_exit_order=True)
                                 else:
                                     self._dry_run_balance_usdt += tp1_size * (self.entry_price[symbol] - curr_price) + (tp1_size * self.entry_price[symbol])
@@ -908,7 +780,7 @@ class PrimeSignalBot:
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price <= self.take_profit_2r[symbol]:
                                 add_log_message(f"[{symbol}] TP2 hit. Booking 30% profit. Runner trails.")
                                 tp2_size = self.position_size[symbol] * (0.30 / 0.50)
-                                if self.is_live_trading():
+                                if self.has_keys:
                                     await self.execution.place_order('buy', 'market', tp2_size, symbol=symbol, is_exit_order=True)
                                 else:
                                     self._dry_run_balance_usdt += tp2_size * (self.entry_price[symbol] - curr_price) + (tp2_size * self.entry_price[symbol])
@@ -928,16 +800,7 @@ class PrimeSignalBot:
 
                 # Update UI for selected Config.SYMBOL
                 sym = Config.SYMBOL
-                latest_price = self.pipeline.latest_prices.get(sym, 0.0)
-                
-                # Fetch live INR price from CoinDCX if in real INR trading mode
-                if self.execution.coindcx_client and Config.COINDCX_TRADE_INR and not Config.PAPER_TRADING:
-                    coindcx_symbol = f"{sym.split('/')[0]}INR"
-                    coindcx_ticker = await self.execution.coindcx_client.fetch_ticker_data(coindcx_symbol)
-                    if coindcx_ticker:
-                        latest_price = coindcx_ticker['last']
-                        
-                DashboardState.latest_price = latest_price
+                DashboardState.latest_price = self.pipeline.latest_prices.get(sym, 0.0)
                 if not self.has_keys:
                     DashboardState.balance_usdt = self.calculate_total_equity()
                     
@@ -958,42 +821,6 @@ class PrimeSignalBot:
                     DashboardState.current_pnl_pct = 0.0
                     DashboardState.current_pnl_usdt = 0.0
 
-                # Update CoinDCX balances
-                if self.execution.coindcx_client:
-                    try:
-                        balance = await self.execution.fetch_balance()
-                        if balance:
-                            updated_bals = []
-                            total_bals = balance.get('total', {})
-                            free_bals = balance.get('free', {})
-                            used_bals = balance.get('used', {})
-                            for curr, total in total_bals.items():
-                                if total > 0.0:
-                                    updated_bals.append({
-                                        "currency": curr,
-                                        "balance": total,
-                                        "available": free_bals.get(curr, total),
-                                        "locked": used_bals.get(curr, 0.0)
-                                    })
-                            # Sort to put INR and USDT first, then others by balance descending
-                            def sort_key(x):
-                                c = x['currency']
-                                if c == 'INR': return (0, -x['balance'])
-                                if c == 'USDT': return (1, -x['balance'])
-                                return (2, -x['balance'])
-                            updated_bals.sort(key=sort_key)
-                            DashboardState.coindcx_balances = updated_bals
-                    except Exception as e:
-                        print(f"[RISK MONITOR] Error fetching CoinDCX balances: {e}")
-                else:
-                    # In dry run mode, put some mock balances
-                    DashboardState.coindcx_balances = [
-                        {"currency": "INR", "balance": 50000.0, "available": 50000.0, "locked": 0.0},
-                        {"currency": "USDT", "balance": 1000.0, "available": 1000.0, "locked": 0.0},
-                        {"currency": "BTC", "balance": 0.05, "available": 0.05, "locked": 0.0},
-                        {"currency": "ETH", "balance": 0.5, "available": 0.5, "locked": 0.0}
-                    ]
-
             except Exception as e:
                 import traceback
                 print(f"[RISK MONITOR] Error: {e}")
@@ -1007,7 +834,7 @@ class PrimeSignalBot:
             exit_price = self.entry_price[symbol]
         add_log_message(f"[{symbol}] Exiting at price: {exit_price:.4f} (reason: {reason})")
         order = None
-        if self.is_live_trading():
+        if self.has_keys:
             side = 'buy' if self.position_side[symbol] == 'SHORT' else 'sell'
             order = await self.execution.place_order(side, 'market', self.position_size[symbol], price=exit_price, is_exit_order=True, symbol=symbol)
         else:
@@ -1017,14 +844,15 @@ class PrimeSignalBot:
             if self.position_side[symbol] == "LONG":
                 pnl_pct = (exit_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
                 pnl_usdt = self.position_size[symbol] * (exit_price - self.entry_price[symbol])
-                if not self.has_keys or Config.PAPER_TRADING:
+                if not self.has_keys:
                     self._dry_run_balance_usdt += self.position_size[symbol] * exit_price
             else:
                 pnl_pct = (self.entry_price[symbol] - exit_price) / self.entry_price[symbol] * 100.0
                 pnl_usdt = self.position_size[symbol] * (self.entry_price[symbol] - exit_price)
-                if not self.has_keys or Config.PAPER_TRADING:
+                if not self.has_keys:
                     self._dry_run_balance_usdt += (self.position_size[symbol] * self.entry_price[symbol]) + pnl_usdt
                 
+            self.logger.log_trade_exited(symbol, self.position_side[symbol], self.entry_price[symbol], exit_price, pnl_pct, pnl_usdt, reason, order.get('id', '') if order else '')
             trade_record = {
                 'symbol': symbol,
                 'side': self.position_side[symbol],
@@ -1058,14 +886,13 @@ class PrimeSignalBot:
                 self.cluster_risk_penalty = False
 
             # Update relaxed cooldowns
-            position_mode = self.position_mode.get(symbol, 'STRICT')
-            if position_mode == 'RELAXED' and is_loss:
+            if metadata.get('mode') == 'RELAXED' and is_loss:
                 self.relaxed_losses += 1
                 if self.relaxed_losses >= 2:
                     self.relaxed_disabled_until = time.time() + 7200
                     add_log_message("🚨 [SAFETY] 2 relaxed losses. Relaxed mode disabled for 2 hours.")
                     self.relaxed_losses = 0
-            elif not is_loss and position_mode == 'RELAXED':
+            elif not is_loss and metadata.get('mode') == 'RELAXED':
                 self.relaxed_losses = 0
 
             self.in_position[symbol] = False

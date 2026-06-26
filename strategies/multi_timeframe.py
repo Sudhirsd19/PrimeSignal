@@ -119,8 +119,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         metadata['strong_trend'] = strong_trend
 
         import datetime
-        # FIX H: Replace deprecated utcnow() with timezone-aware call
-        current_hour = datetime.datetime.now(datetime.timezone.utc).hour
+        current_hour = datetime.datetime.utcnow().hour
         session_name = 'OTHER'
         if 0 <= current_hour < 8: session_name = 'ASIA'
         elif 8 <= current_hour < 13: session_name = 'LONDON'
@@ -267,6 +266,11 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             if trigger_pass: score += 1
             if micro_bos: score += 1
             
+            # Sudden Wick Filter (1.8%)
+            if candle_range / trigger_low > 0.018:
+                valid_entry = False
+                reason = "Rejected: Setup candle wick/range > 1.8% (Slippage risk)"
+            
             if metadata['session'] == 'ASIA' and entry_type == 'FVG': score += 1
             if metadata['session'] == 'LONDON' and strong_trend: score += 1
             if metadata['session'] == 'NY' and entry_type == 'SWEEP': score += 1
@@ -296,11 +300,6 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 if entry_type == 'FVG': valid_entry = False
                 elif entry_type == 'OB' and not strong_trend: valid_entry = False
 
-            # FIX #4: Sudden Wick Filter (1.8%) — moved AFTER valid_entry decision so it isn't overwritten
-            if valid_entry and candle_range / trigger_low > 0.018:
-                valid_entry = False
-                reason = "Rejected: Setup candle wick/range > 1.8% (Slippage risk)"
-
             # FIX #3: Removed redundant vol_pass check - vol_pass already validated at line 146
             if valid_entry:
                 if entry_type in ["OB", "FVG"]:
@@ -319,7 +318,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 risk        = max(curr_price - stop_loss, 1e-9)
                 fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.001) * 2.0
                 take_profit_1r = curr_price + risk + fee_adj
-                take_profit = curr_price + (risk * Config.MIN_RISK_REWARD_RATIO) + fee_adj
+                take_profit = curr_price + (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.0)) + fee_adj
 
                 metadata['stop_loss']  = stop_loss
                 metadata['take_profit_1r'] = take_profit_1r
@@ -423,6 +422,11 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             if trigger_pass: score += 1
             if micro_bos: score += 1
             
+            # Sudden Wick Filter (1.8%)
+            if (trigger_high - trigger_low) / trigger_low > 0.018:
+                valid_entry = False
+                reason = "Rejected: Setup candle wick/range > 1.8% (Slippage risk)"
+            
             if metadata['session'] == 'ASIA' and entry_type == 'FVG': score += 1
             if metadata['session'] == 'LONDON' and strong_trend: score += 1
             if metadata['session'] == 'NY' and entry_type == 'SWEEP': score += 1
@@ -452,11 +456,6 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 if entry_type == 'FVG': valid_entry = False
                 elif entry_type == 'OB' and not strong_trend: valid_entry = False
 
-            # FIX #4: Sudden Wick Filter (1.8%) — moved AFTER valid_entry decision so it isn't overwritten
-            if valid_entry and (trigger_high - trigger_low) / trigger_low > 0.018:
-                valid_entry = False
-                reason = "Rejected: Setup candle wick/range > 1.8% (Slippage risk)"
-
             if valid_entry:
                 if entry_type in ["OB", "FVG"]:
                     ob_sl = zone_top * 1.002
@@ -476,7 +475,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 risk        = max(stop_loss - curr_price, 1e-9)
                 fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.001) * 2.0
                 take_profit_1r = curr_price - risk - fee_adj
-                take_profit = curr_price - (risk * Config.MIN_RISK_REWARD_RATIO) - fee_adj
+                take_profit = curr_price - (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.0)) - fee_adj
 
                 metadata['stop_loss']  = stop_loss
                 metadata['take_profit_1r'] = take_profit_1r

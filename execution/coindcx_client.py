@@ -219,3 +219,51 @@ class CoinDCXClient:
         except Exception as e:
             print(f"[CoinDCX] ERROR calling user info endpoint: {e}")
             return None
+
+    async def fetch_order_status(self, order_id: str) -> dict | None:
+        """Fetches the status of a specific order by ID."""
+        url = f"{self.base_url}/exchange/v1/orders/status"
+        payload = {
+            "id": order_id,
+            "timestamp": int(time.time() * 1000),
+        }
+        payload_str, headers = self._sign(payload)
+        try:
+            session = await self._get_session()
+            async with session.post(url, data=payload_str, headers=headers) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return {
+                        'id': data.get('id'),
+                        'status': (data.get('status') or '').lower(),
+                        'price': float(data.get('avg_price') or data.get('price_per_unit') or 0),
+                        'amount': float(data.get('total_quantity') or 0),
+                        'filled': float(data.get('filled_quantity') or 0),
+                    }
+                else:
+                    return None
+        except Exception as e:
+            print(f"[CoinDCX] Error fetching order status: {e}")
+            return None
+
+    async def wait_for_fill(self, order_id: str, timeout: float = 30.0) -> dict | None:
+        """Polls CoinDCX order status until filled, cancelled, or timeout."""
+        import asyncio
+        start = time.time()
+        poll_interval = 1.0
+        while time.time() - start < timeout:
+            status = await self.fetch_order_status(order_id)
+            if status:
+                s = status.get('status', '')
+                if s in ('filled', 'completed', 'closed'):
+                    elapsed = int((time.time() - start) * 1000)
+                    print(f"[CoinDCX FILL] Order {order_id} FILLED in {elapsed}ms")
+                    return status
+                elif s in ('cancelled', 'rejected'):
+                    print(f"[CoinDCX FILL] Order {order_id} ended: {s}")
+                    return None
+            await asyncio.sleep(poll_interval)
+            poll_interval = min(poll_interval * 1.5, 3.0)
+        print(f"[CoinDCX FILL] Order {order_id} TIMED OUT after {timeout}s")
+        return None
+

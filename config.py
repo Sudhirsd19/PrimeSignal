@@ -62,6 +62,13 @@ class Config:
     COINDCX_SECRET_KEY = os.getenv("COINDCX_SECRET_KEY", "")
     COINDCX_TRADE_INR = os.getenv("COINDCX_TRADE_INR", "True").lower() in ("true", "1", "yes")
 
+    # Exchange type: 'spot' or 'futures' (Binance USDT-M Futures)
+    EXCHANGE_TYPE = os.getenv("EXCHANGE_TYPE", "spot").lower()
+
+    # Futures-specific settings (only used when EXCHANGE_TYPE='futures')
+    FUTURES_LEVERAGE = int(os.getenv("FUTURES_LEVERAGE", "1"))
+    FUTURES_MARGIN_MODE = os.getenv("FUTURES_MARGIN_MODE", "isolated").lower()  # 'isolated' or 'cross'
+
     @classmethod
     def validate(cls):
         has_keys = True
