@@ -195,6 +195,11 @@ class PrimeSignalBot:
                 else:
                     add_log_message(f"[WARNING] Balance fetch returned {usdt_balance}. Check account type. Keeping last known value.")
                 DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
+            
+            # Fetch CoinDCX profile
+            coindcx_profile = await self.execution.fetch_coindcx_user_info()
+            if coindcx_profile:
+                DashboardState.coindcx_profile = coindcx_profile
         else:
             DashboardState.balance_usdt = self._dry_run_balance_usdt
             DashboardState.balance_base = 0.0
