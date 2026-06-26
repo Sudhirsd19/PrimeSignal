@@ -24,6 +24,7 @@ from risk.risk_manager import RiskManager
 from alerts.notifier import TelegramNotifier
 from dashboard.app import app, DashboardState, add_log_message
 from core.trade_logger import TradeLogger
+from core.firebase_manager import FirebaseManager
 import os
 
 class PrimeSignalBot:
@@ -90,7 +91,7 @@ class PrimeSignalBot:
     _STATE_FILE = Path("bot_state.json")
 
     def save_state(self):
-        """Persist current position state to disk for crash recovery."""
+        """Persist current position state to disk and Firebase for crash recovery."""
         state = {
             'in_position': self.in_position,
             'position_side': self.position_side,
@@ -103,18 +104,46 @@ class PrimeSignalBot:
             'lowest_price_reached': self.lowest_price_reached,
             '_dry_run_balance_usdt': self._dry_run_balance_usdt,
         }
+        
+        firebase = FirebaseManager()
+        if firebase.is_connected:
+            try:
+                firebase.db.collection("state").document("bot_state").set(state)
+            except Exception as e:
+                print(f"[FIREBASE] Failed to save state: {e}")
+                
         try:
             self._STATE_FILE.write_text(json.dumps(state))
         except Exception as e:
-            print(f"[STATE] Failed to save state: {e}")
+            print(f"[STATE] Failed to save state to disk: {e}")
 
     def load_state(self):
-        """Restore position state from disk after a restart."""
-        if not self._STATE_FILE.exists():
+        """Restore position state from Firebase or disk after a restart."""
+        state = {}
+        loaded_from = "NONE"
+        
+        firebase = FirebaseManager()
+        if firebase.is_connected:
+            try:
+                doc = firebase.db.collection("state").document("bot_state").get()
+                if doc.exists:
+                    state = doc.to_dict()
+                    loaded_from = "FIREBASE"
+            except Exception as e:
+                print(f"[FIREBASE] Failed to load state: {e}")
+
+        # Fallback to local disk if Firebase is empty or unavailable
+        if loaded_from == "NONE" and self._STATE_FILE.exists():
+            try:
+                state = json.loads(self._STATE_FILE.read_text())
+                loaded_from = "DISK"
+            except Exception as e:
+                print(f"[STATE] Failed to load local state: {e}")
+
+        if not state:
             return
+
         try:
-            state = json.loads(self._STATE_FILE.read_text())
-            
             # Helper to safely load dict state, falling back to default if new symbols were added
             def safe_load(key, default_val):
                 loaded_dict = state.get(key, {})
@@ -232,11 +261,21 @@ class PrimeSignalBot:
 
     async def _on_candle_close_impl(self, symbol):
         # Feature 4: Emergency Kill Switch
-        if os.path.exists("KILL_SWITCH"):
+        kill_active = os.path.exists("KILL_SWITCH")
+        firebase = FirebaseManager()
+        if not kill_active and firebase.is_connected:
+            try:
+                kill_doc = firebase.db.collection("control").document("kill_switch").get()
+                if kill_doc.exists and kill_doc.to_dict().get("active", False):
+                    kill_active = True
+            except Exception as e:
+                pass
+
+        if kill_active:
             add_log_message(f"🚨 KILL SWITCH ACTIVE 🚨 Halting all operations for {symbol}")
             if self.in_position[symbol]:
                 await self.exit_position(symbol, "EMERGENCY_KILL_SWITCH")
-                self.logger.log_kill_switch("FILE", 1)
+                self.logger.log_kill_switch("FIREBASE_OR_FILE", 1)
             return
 
         if time.time() < self.global_pause_until:

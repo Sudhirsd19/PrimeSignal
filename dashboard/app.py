@@ -9,6 +9,8 @@ from fastapi.security import APIKeyHeader
 from starlette.requests import Request
 from pydantic import BaseModel
 from config import Config
+from collections import deque
+from core.firebase_manager import FirebaseManager
 
 app = FastAPI(title="PrimeSignal Trading Dashboard")
 
@@ -122,10 +124,15 @@ async def set_mode(req: ModeRequest):
 
 @app.post("/api/emergency_stop", dependencies=[Depends(verify_dashboard_key)])
 async def emergency_stop():
-    """Trigger the emergency kill switch by creating the KILL_SWITCH file."""
+    """Trigger the emergency kill switch via Firebase or local file."""
     try:
+        firebase = FirebaseManager()
+        if firebase.is_connected:
+            firebase.db.collection("control").document("kill_switch").set({"active": True})
+        
         with open("KILL_SWITCH", "w") as f:
             f.write("Triggered via API")
+            
         add_log_message("🚨 EMERGENCY KILL SWITCH TRIGGERED VIA API 🚨")
         return {"status": "success", "message": "Kill switch activated. All positions will be exited."}
     except Exception as e:

@@ -5,6 +5,9 @@ Writes every trading decision as a JSON line to logs/trade_decisions.jsonl.
 import json
 import os
 from datetime import datetime, timezone
+import uuid
+
+from core.firebase_manager import FirebaseManager
 
 
 class TradeLogger:
@@ -21,6 +24,17 @@ class TradeLogger:
             "event": event_type,
             **data,
         }
+        
+        # Write to Firebase if available
+        firebase = FirebaseManager()
+        if firebase.is_connected:
+            try:
+                # Add to trade_logs collection with a generated ID or auto-id
+                firebase.db.collection("trade_logs").add(entry)
+            except Exception as e:
+                print(f"[FIREBASE] Failed to write log: {e}")
+
+        # Always write to local JSONL as backup
         try:
             with open(self.log_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, default=str) + "\n")
