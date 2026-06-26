@@ -33,11 +33,11 @@ class Config:
     RSI_OVERSOLD = int(os.getenv("RSI_OVERSOLD", "30"))
     RSI_OVERBOUGHT = int(os.getenv("RSI_OVERBOUGHT", "70"))
     ATR_PERIOD = int(os.getenv("ATR_PERIOD", "14"))
-    MIN_ATR_PCT = float(os.getenv("MIN_ATR_PCT", "0.0010"))
+    MIN_ATR_PCT = float(os.getenv("MIN_ATR_PCT", "0.0005"))
     MAX_ZONE_AGE_CANDLES = int(os.getenv("MAX_ZONE_AGE_CANDLES", "50"))
     ZONE_BUFFER_PCT = float(os.getenv("ZONE_BUFFER_PCT", "0.001"))
-    VWAP_TOLERANCE = float(os.getenv("VWAP_TOLERANCE", "0.001"))
-    MAX_SPREAD_PCT = float(os.getenv("MAX_SPREAD_PCT", "0.001"))
+    VWAP_TOLERANCE = float(os.getenv("VWAP_TOLERANCE", "0.002"))
+    MAX_SPREAD_PCT = float(os.getenv("MAX_SPREAD_PCT", "0.002"))
     MIN_24H_VOL_USDT = float(os.getenv("MIN_24H_VOL_USDT", "50000000"))
     MAX_CANDLE_MOVE_PCT = float(os.getenv("MAX_CANDLE_MOVE_PCT", "0.015"))
     VOLATILITY_PAUSE_CANDLES = int(os.getenv("VOLATILITY_PAUSE_CANDLES", "2"))
@@ -46,7 +46,7 @@ class Config:
     FEE_RATE = float(os.getenv("FEE_RATE", "0.001"))
     
     # Machine Learning configurations
-    ML_CONFIRMATION_THRESHOLD = float(os.getenv("ML_CONFIRMATION_THRESHOLD", "0.60"))
+    ML_CONFIRMATION_THRESHOLD = float(os.getenv("ML_CONFIRMATION_THRESHOLD", "0.50"))
     ML_TRAIN_BARS = int(os.getenv("ML_TRAIN_BARS", "2000"))
     
     # Test Mode config
