@@ -66,8 +66,8 @@ async def main():
     strategy = MultiTimeframeSMCStrategy()
     ml_confirmator = MLSignalConfirmator()
     
-    # Split: Use first 30% of candles for training, remaining 70% for backtesting
-    split_idx = 300
+    # Split: Use first 10% of candles for training, remaining 90% for backtesting
+    split_idx = int(len(ltf_ohlcv) * 0.1)
     
     # Warm up and train ML model on the training segment
     print(f"\n[ML] Training confirmation classifier on warm-up data (0 to {split_idx})...")
