@@ -134,13 +134,21 @@
             </div>
 
             <!-- Signal Readiness Light -->
-            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between h-32">
-                <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Signal Status</span>
-                <div class="flex items-center space-x-3 mt-2">
+            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between h-32 relative">
+                <div class="flex justify-between items-center">
+                    <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Signal Status</span>
+                    <span id="signal-progress-text" class="text-[10px] text-blue-400 font-bold hidden">0%</span>
+                </div>
+                <div class="flex items-center space-x-3 mt-2 z-10">
                     <div id="signal-light-circle" class="w-8 h-8 rounded-full bg-red-500 border-2 border-red-400 shadow-[0_0_15px_rgba(239,68,68,0.4)]"></div>
                     <span id="signal-light-text" class="text-xl font-extrabold text-white terminal-font">RED</span>
                 </div>
-                <div class="text-xs text-gray-400 mt-1 truncate" id="signal-light-reason" title="System starting up...">System starting up...</div>
+                <div class="text-xs text-gray-400 mt-1 truncate z-10" id="signal-light-reason" title="System starting up...">System starting up...</div>
+                
+                <!-- Progress Bar -->
+                <div class="absolute bottom-0 left-0 h-1 bg-[#1f2937] w-full rounded-b-xl overflow-hidden">
+                    <div id="signal-progress-bar" class="h-full bg-blue-500 transition-all duration-300" style="width: 0%;"></div>
+                </div>
             </div>
 
             <!-- Trailing Stop Loss -->
@@ -902,6 +910,27 @@
                             } else if (lState === "BLUE") {
                                 slCircle.className += "bg-blue-500 border-blue-400 shadow-[0_0_15px_rgba(59,130,246,0.4)] animate-pulse";
                                 slText.className = "text-xl font-extrabold text-blue-500 terminal-font";
+                            }
+                        }
+                        
+                        // Progress Bar Update
+                        const progBar = document.getElementById('signal-progress-bar');
+                        const progText = document.getElementById('signal-progress-text');
+                        if (progBar && progText) {
+                            const progress = state.signal_progress || 0;
+                            progBar.style.width = progress + '%';
+                            
+                            if (progress > 0 && progress < 100) {
+                                progText.textContent = progress + '%';
+                                progText.classList.remove('hidden');
+                                progBar.className = "h-full bg-orange-500 transition-all duration-300";
+                            } else if (progress >= 100) {
+                                progText.textContent = '100%';
+                                progText.classList.remove('hidden');
+                                progBar.className = "h-full bg-green-500 transition-all duration-300";
+                            } else {
+                                progText.classList.add('hidden');
+                                progBar.className = "h-full bg-blue-500 transition-all duration-300";
                             }
                         }
                         

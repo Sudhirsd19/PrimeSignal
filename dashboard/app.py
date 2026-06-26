@@ -57,6 +57,8 @@ class DashboardState:
     trades = []
     logs = []
     
+    signal_progress = 0
+    
     daily_drawdown_pct = 0.0
     ml_confidence = 0.5
     active_ob = "No OB"
@@ -322,77 +324,6 @@ async def _run_bot(bot):
         print("[BOT] Initializing bot...")
         await bot.initialize()
         print("[BOT] Initialization complete. Entering risk monitor loop...")
-        
-        # Inject test trade trigger for dashboard UI demonstration
-        async def trigger_test_trade():
-            await asyncio.sleep(8)
-            symbol = "BTC/USDT"
-            if not bot.pipeline.ltf_candles.get(symbol):
-                print("[TEST TRIGGER] Caches not warmed up yet. Cannot test.")
-                return
-            
-            # Reset safety pauses so the test trade doesn't get blocked
-            bot.global_pause_until = 0
-            bot.relaxed_disabled_until = 0
-            bot.cluster_loss_pause_until = 0
-            bot.consecutive_losses = 0
-            if hasattr(bot, 'trade_history'):
-                bot.trade_history.clear()
-            
-            # Force close any previously recovered open trade to start demo clean
-            if bot.in_position[symbol]:
-                await bot.exit_position(symbol, "FORCE_CLOSE_PREVIOUS_DEMO")
-                await asyncio.sleep(2)
-            
-            latest_close = bot.pipeline.ltf_candles[symbol][-1][4]
-            bot.pipeline.latest_prices[symbol] = latest_close
-            
-            # Inject extremely high volume to last candle to bypass low volume session filters
-            bot.pipeline.ltf_candles[symbol][-1][5] = 9999999999.0
-            
-            # Temporary settings to ensure trade execution
-            from config import Config
-            original_slippage = Config.MAX_SLIPPAGE_PCT
-            Config.MAX_SLIPPAGE_PCT = 1.0
-            
-            original_generate_signal = bot.strategy.generate_signal
-            def mock_generate_signal(htf_df, ltf_df, relaxed=False, super_relaxed=False):
-                metadata = {
-                    'stop_loss': latest_close * 0.99,
-                    'take_profit': latest_close * 1.02,
-                    'tp1': latest_close * 1.01,
-                    'tp2': latest_close * 1.02,
-                    'score': 4.5,
-                    'mode': 'STRICT',
-                    'setup_type': 'TEST_OB',
-                    'zone_id': 'TEST_ZONE_123',
-                    'reason': 'Mocked test signal for UI dashboard demonstration',
-                    'debug_checks': {
-                        'trend': 'PASS',
-                        'zone': 'PASS',
-                        'trigger': 'PASS',
-                        'vwap': 'PASS',
-                        'volatility': 'PASS'
-                    }
-                }
-                return "BUY", metadata
-            bot.strategy.generate_signal = mock_generate_signal
-            
-            print("[TEST TRIGGER] Executing test BUY trade...")
-            await bot._on_candle_close_impl(symbol)
-            
-            bot.strategy.generate_signal = original_generate_signal
-            Config.MAX_SLIPPAGE_PCT = original_slippage
-            print("[TEST TRIGGER] Test BUY trade completed and active on dashboard!")
-            
-            # Wait 1200 seconds (20 minutes) so user can see it active on the UI
-            await asyncio.sleep(1200)
-            print("[TEST TRIGGER] Executing test exit (liquidation)...")
-            await bot.exit_position(symbol, "TEST_EXIT")
-            print("[TEST TRIGGER] Test exit completed!")
-            
-        asyncio.create_task(trigger_test_trade())
-        
         await bot.run_live_risk_monitor()
     except asyncio.CancelledError:
         pass

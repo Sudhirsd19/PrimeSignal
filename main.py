@@ -642,6 +642,17 @@ class PrimeSignalBot:
             return
 
         if signal == "BUY":
+            DashboardState.signal_light = "YELLOW"
+            DashboardState.signal_light_reason = "Validating entry metrics..."
+            
+            # Progress bar simulation for UI
+            for p in [25, 50, 80, 100]:
+                DashboardState.signal_progress = p
+                await asyncio.sleep(0.5)
+                
+            DashboardState.signal_light = "GREEN"
+            DashboardState.signal_light_reason = "Executing BUY (LONG)..."
+            
             add_log_message(f"[{symbol}] Executing BUY (LONG). Size: {pos_size:.6f} | SL: {sl:.2f} | TP: {tp:.2f}")
             order = None
             if self.has_keys:
@@ -793,6 +804,10 @@ class PrimeSignalBot:
                         if self.position_side[symbol] == "LONG":
                             self.highest_price_reached[symbol] = max(self.highest_price_reached[symbol], curr_price)
                             
+                            DashboardState.signal_light = "BLUE"
+                            DashboardState.signal_light_reason = f"Active LONG ({curr_price:.2f})"
+                            DashboardState.signal_progress = 0
+                            
                             # TP1 (50%)
                             if not self.partial_tp_taken[symbol] and curr_price >= self.take_profit_1r[symbol]:
                                 add_log_message(f"[{symbol}] TP1 (1R) hit. Booking 50% profit.")
@@ -833,6 +848,10 @@ class PrimeSignalBot:
                                 
                         elif self.position_side[symbol] == "SHORT":
                             self.lowest_price_reached[symbol] = min(self.lowest_price_reached[symbol], curr_price)
+                            
+                            DashboardState.signal_light = "BLUE"
+                            DashboardState.signal_light_reason = f"Active SHORT ({curr_price:.2f})"
+                            DashboardState.signal_progress = 0
                             
                             # TP1 (50%)
                             if not self.partial_tp_taken[symbol] and curr_price <= self.take_profit_1r[symbol]:
