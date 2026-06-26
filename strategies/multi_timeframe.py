@@ -119,7 +119,8 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         metadata['strong_trend'] = strong_trend
 
         import datetime
-        current_hour = datetime.datetime.utcnow().hour
+        # FIX H: Replace deprecated utcnow() with timezone-aware call
+        current_hour = datetime.datetime.now(datetime.timezone.utc).hour
         session_name = 'OTHER'
         if 0 <= current_hour < 8: session_name = 'ASIA'
         elif 8 <= current_hour < 13: session_name = 'LONDON'
@@ -318,7 +319,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 risk        = max(curr_price - stop_loss, 1e-9)
                 fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.001) * 2.0
                 take_profit_1r = curr_price + risk + fee_adj
-                take_profit = curr_price + (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.0)) + fee_adj
+                take_profit = curr_price + (risk * Config.MIN_RISK_REWARD_RATIO) + fee_adj
 
                 metadata['stop_loss']  = stop_loss
                 metadata['take_profit_1r'] = take_profit_1r
@@ -475,7 +476,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 risk        = max(stop_loss - curr_price, 1e-9)
                 fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.001) * 2.0
                 take_profit_1r = curr_price - risk - fee_adj
-                take_profit = curr_price - (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.0)) - fee_adj
+                take_profit = curr_price - (risk * Config.MIN_RISK_REWARD_RATIO) - fee_adj
 
                 metadata['stop_loss']  = stop_loss
                 metadata['take_profit_1r'] = take_profit_1r

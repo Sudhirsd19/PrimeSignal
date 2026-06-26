@@ -101,6 +101,16 @@ class PrimeSignalBot:
             'highest_price_reached': self.highest_price_reached,
             'lowest_price_reached': self.lowest_price_reached,
             '_dry_run_balance_usdt': self._dry_run_balance_usdt,
+            # FIX F: Persist partial TP and cooldown state for crash recovery
+            'partial_tp_taken': self.partial_tp_taken,
+            'tp2_taken': self.tp2_taken,
+            'take_profit_1r': self.take_profit_1r,
+            'take_profit_2r': self.take_profit_2r,
+            'last_trade_time': self.last_trade_time,
+            'trades_today': self.trades_today,
+            'trade_history': self.trade_history,
+            'cluster_loss_pause_until': self.cluster_loss_pause_until,
+            'global_pause_until': self.global_pause_until,
         }
         try:
             self._STATE_FILE.write_text(json.dumps(state))
@@ -134,6 +144,17 @@ class PrimeSignalBot:
             self.highest_price_reached = safe_load('highest_price_reached', 0.0)
             self.lowest_price_reached = safe_load('lowest_price_reached', 999999.0)
             self._dry_run_balance_usdt = state.get('_dry_run_balance_usdt', 10000.0)
+
+            # FIX F: Restore partial TP and cooldown state
+            self.partial_tp_taken = safe_load('partial_tp_taken', False)
+            self.tp2_taken = safe_load('tp2_taken', False)
+            self.take_profit_1r = safe_load('take_profit_1r', 0.0)
+            self.take_profit_2r = safe_load('take_profit_2r', 0.0)
+            self.last_trade_time = safe_load('last_trade_time', 0)
+            self.trades_today = state.get('trades_today', 0)
+            self.trade_history = state.get('trade_history', [])
+            self.cluster_loss_pause_until = state.get('cluster_loss_pause_until', 0)
+            self.global_pause_until = state.get('global_pause_until', 0)
             
             # FIX #7: Ghost position detection — clear positions with invalid data
             for sym in Config.SUPPORTED_SYMBOLS:
@@ -346,7 +367,9 @@ class PrimeSignalBot:
         
         if self.has_keys:
             open_time = ltf_df.iloc[-1]['timestamp'] / 1000.0 if 'timestamp' in ltf_df.columns else ltf_df.index[-1].timestamp()
-            close_time = open_time + (5 * 60)
+            # FIX E: Parse LTF_TIMEFRAME to seconds dynamically instead of hardcoding 5 min
+            _tf_seconds = {'1m': 60, '3m': 180, '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400}
+            close_time = open_time + _tf_seconds.get(Config.LTF_TIMEFRAME, 300)
             delay = time.time() - close_time
             if delay > 10:
                 add_log_message(f"[{symbol}] Trade skipped: Execution delay ({delay:.1f}s) > 10s. Stale signal protection.")
@@ -365,7 +388,8 @@ class PrimeSignalBot:
             open_count, _, _, _ = await self.get_open_positions_info()
             
             # Reset daily trades
-            current_date = datetime.datetime.utcnow().date()
+            # FIX H: Replace deprecated utcnow() with timezone-aware call
+            current_date = datetime.datetime.now(datetime.timezone.utc).date()
             if current_date != self.last_trade_day:
                 self.trades_today = 0
                 self.last_trade_day = current_date
@@ -437,11 +461,12 @@ class PrimeSignalBot:
             return
 
         # BTC Correlation Filter
+        # FIX D: BTC correlation filter — ltf_candles stores lists of lists, not DataFrames
         if signal == "BUY" and symbol != "BTC/USDT":
-            btc_df = self.pipeline.ltf_candles.get("BTC/USDT")
-            if btc_df is not None and not btc_df.empty:
-                btc_last = btc_df.iloc[-1]
-                btc_drop = (btc_last['open'] - btc_last['close']) / btc_last['open']
+            btc_candles = self.pipeline.ltf_candles.get("BTC/USDT")
+            if btc_candles and len(btc_candles) > 0:
+                btc_last = btc_candles[-1]  # [timestamp, open, high, low, close, volume]
+                btc_drop = (btc_last[1] - btc_last[4]) / btc_last[1]  # (open - close) / open
                 if btc_drop > 0.01:
                     add_log_message(f"[{symbol}] Trade blocked: BTC dropped > 1% in last 5m. Blocking altcoin longs.")
                     return
@@ -644,6 +669,11 @@ class PrimeSignalBot:
         if pos_size <= 0.0:
             print(f"[DEBUG] [{symbol}] BLOCKED: pos_size <= 0 after scaling")
             return
+
+        # FIX A (CRITICAL-1): CoinDCX is a SPOT exchange — cannot short-sell assets you don't own
+        if signal == "SELL" and self.execution.coindcx_client and Config.COINDCX_TRADE_INR:
+            add_log_message(f"[{symbol}] ⚠️ SELL signal blocked: CoinDCX spot exchange does not support short selling.")
+            return
             
         if signal == "BUY":
             add_log_message(f"[{symbol}] Executing BUY (LONG). Size: {pos_size:.6f} | SL: {sl:.2f} | TP: {tp:.2f}")
@@ -798,11 +828,21 @@ class PrimeSignalBot:
                         ltf_df = prepare_dataframe(self.pipeline.ltf_candles[symbol])
                         curr_atr = calculate_atr(ltf_df, Config.ATR_PERIOD).iloc[-1] if not ltf_df.empty else 0.001
                         
-                        # Scale to INR if CoinDCX INR trading is enabled
+                        # FIX C (CRITICAL-3): Fetch LIVE INR price from CoinDCX instead of using frozen scale factor
                         if self.execution.coindcx_client and Config.COINDCX_TRADE_INR and self.entry_price_usdt[symbol] > 0:
-                            scale_factor = self.entry_price[symbol] / self.entry_price_usdt[symbol]
-                            curr_price = curr_price * scale_factor
-                            curr_atr = curr_atr * scale_factor
+                            coindcx_sym = f"{symbol.split('/')[0]}INR"
+                            coindcx_tick = await self.execution.coindcx_client.fetch_ticker_data(coindcx_sym)
+                            if coindcx_tick and coindcx_tick['last'] > 0:
+                                live_inr_price = coindcx_tick['last']
+                                live_usdt_price = self.pipeline.latest_prices.get(symbol, 1.0)
+                                inr_usdt_ratio = live_inr_price / live_usdt_price if live_usdt_price > 0 else 1.0
+                                curr_price = live_inr_price
+                                curr_atr = curr_atr * inr_usdt_ratio
+                            else:
+                                # Fallback to frozen scale if CoinDCX ticker unavailable
+                                scale_factor = self.entry_price[symbol] / self.entry_price_usdt[symbol]
+                                curr_price = curr_price * scale_factor
+                                curr_atr = curr_atr * scale_factor
                         
                         if self.position_side[symbol] == "LONG":
                             self.highest_price_reached[symbol] = max(self.highest_price_reached[symbol], curr_price)

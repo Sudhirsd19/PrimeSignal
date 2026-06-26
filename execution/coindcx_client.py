@@ -12,6 +12,20 @@ class CoinDCXClient:
         self.base_url = "https://api.coindcx.com"
         self.markets_info = {}
         self.initialized = False
+        # FIX G: Reuse a persistent session to avoid per-request TCP overhead
+        self._session = None
+
+    async def _get_session(self):
+        """Lazily create and reuse a single aiohttp session."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def close(self):
+        """Close the persistent session on shutdown."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
 
     async def initialize(self):
         """Loads market details from CoinDCX to extract precisions and minimum limits."""
@@ -19,8 +33,8 @@ class CoinDCXClient:
             return True
         try:
             url = f"{self.base_url}/exchange/v1/markets_details"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
+            session = await self._get_session()
+            async with session.get(url) as response:
                     if response.status == 200:
                         markets = await response.json()
                         for m in markets:
@@ -68,8 +82,8 @@ class CoinDCXClient:
         payload_str, headers = self._sign(payload)
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, data=payload_str, headers=headers) as response:
+            session = await self._get_session()
+            async with session.post(url, data=payload_str, headers=headers) as response:
                     if response.status == 200:
                         balances = await response.json()
                         
@@ -97,8 +111,8 @@ class CoinDCXClient:
         """Fetches public ticker data for a single symbol to get bid, ask, and index price."""
         url = f"{self.base_url}/exchange/ticker"
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
+            session = await self._get_session()
+            async with session.get(url) as response:
                     if response.status == 200:
                         tickers = await response.json()
                         # Tickers is a list of dicts. Find the one matching coindcx_symbol
@@ -163,8 +177,8 @@ class CoinDCXClient:
 
         try:
             print(f"[CoinDCX] Sending spot order: {payload}")
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, data=payload_str, headers=headers) as response:
+            session = await self._get_session()
+            async with session.post(url, data=payload_str, headers=headers) as response:
                     if response.status == 200:
                         res = await response.json()
                         print(f"[CoinDCX] Order placed successfully! ID: {res.get('id')}")
@@ -189,8 +203,8 @@ class CoinDCXClient:
         payload_str, headers = self._sign(payload)
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, data=payload_str, headers=headers) as response:
+            session = await self._get_session()
+            async with session.post(url, data=payload_str, headers=headers) as response:
                     if response.status == 200:
                         res_data = await response.json()
                         if isinstance(res_data, list) and len(res_data) > 0:

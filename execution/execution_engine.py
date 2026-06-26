@@ -35,6 +35,8 @@ class ExecutionEngine:
     async def close(self):
         await self.public_client.close()
         await self.trade_client.close()
+        if self.coindcx_client:
+            await self.coindcx_client.close()
 
     async def fetch_balance(self):
         """Fetch balances with automatic retry."""
