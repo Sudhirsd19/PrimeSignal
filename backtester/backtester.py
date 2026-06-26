@@ -147,9 +147,9 @@ class BacktestEngine:
                         exit_price = max(take_profit, curr_candle['open'])
                         gross_val = position_size * exit_price
                         fee = gross_val * fee_rate
-                        self.balance = gross_val - fee
+                        self.balance += gross_val - fee
                         
-                        pnl_usdt = self.balance - (position_size * entry_price)
+                        pnl_usdt = (position_size * exit_price) - (position_size * entry_price) - fee
                         pnl_pct = (exit_price - entry_price) / entry_price * 100
                         
                         self.trades.append({
@@ -186,9 +186,9 @@ class BacktestEngine:
                         exit_price = min(stop_loss, curr_candle['open'])
                         gross_val = position_size * exit_price
                         fee = gross_val * fee_rate
-                        self.balance = gross_val - fee
+                        self.balance += gross_val - fee
                         
-                        pnl_usdt = self.balance - (position_size * entry_price) # Close value minus initial cost
+                        pnl_usdt = (position_size * exit_price) - (position_size * entry_price) - fee
                         pnl_pct = (exit_price - entry_price) / entry_price * 100
                         
                         self.trades.append({
@@ -422,8 +422,8 @@ class BacktestEngine:
             if position_side == "LONG":
                 gross_val = position_size * exit_price
                 fee = gross_val * fee_rate
-                self.balance = gross_val - fee
-                pnl_usdt = self.balance - (position_size * entry_price)
+                self.balance += gross_val - fee
+                pnl_usdt = (position_size * exit_price) - (position_size * entry_price) - fee
                 pnl_pct = (exit_price - entry_price) / entry_price * 100
             else:
                 pnl_usdt = position_size * (entry_price - exit_price)
