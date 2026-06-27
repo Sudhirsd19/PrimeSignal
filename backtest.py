@@ -27,6 +27,7 @@ async def main():
             htf_ohlcv = json.load(f)
         with open(ltf_file, 'r') as f:
             ltf_ohlcv = json.load(f)
+            ltf_ohlcv = ltf_ohlcv[-4000:]  # Limit to roughly 1 week + warmup
         await execution.close()
     else:
         # Fetch HTF (1h) history (Binance max limit is 1000)
@@ -83,7 +84,7 @@ async def main():
 
     # 3. Setup Backtest Engine
     # Backtest on the remaining out-of-sample candles
-    test_ltf_candles = ltf_ohlcv[split_idx:]
+    test_ltf_candles = ltf_ohlcv[split_idx:split_idx+500]
     
     test_ltf_df = prepare_dataframe(test_ltf_candles)
     if len(test_ltf_df) == 0:

@@ -110,36 +110,9 @@ class BacktestEngine:
                     # Update highest price for trailing stop
                     highest_price = max(highest_price, current_high)
                     
-                    # Partial TP Check BEFORE SL to ensure it correctly triggers if both hit
-                    if not partial_tp_taken and current_high >= take_profit_1r:
-                        partial_exit_price = max(take_profit_1r, curr_candle['open'])
-                        half_size = position_size * 0.5
-                        
-                        gross_val = half_size * partial_exit_price
-                        fee = gross_val * fee_rate
-                        self.balance += gross_val - fee
-                        
-                        pnl_usdt = (half_size * partial_exit_price) - (half_size * entry_price) - fee
-                        pnl_pct = (partial_exit_price - entry_price) / entry_price * 100
-                        
-                        self.trades.append({
-                            'side': 'LONG',
-                            'entry_time': entry_time,
-                            'exit_time': ltf_time,
-                            'entry_price': entry_price,
-                            'exit_price': partial_exit_price,
-                            'pnl_usdt': pnl_usdt,
-                            'pnl_pct': pnl_pct,
-                            'exit_reason': 'PARTIAL_TP_1R',
-                            'setup_mode': setup_mode
-                        })
-                        position_size -= half_size
-                        partial_tp_taken = True
-                        
-                        if entry_price > stop_loss:
-                            stop_loss = entry_price
-
-                    if partial_tp_taken:
+                    # Update trailing stop after price moves significantly in our favor
+                    if current_high >= entry_price + (entry_price - stop_loss) * 0.5:
+                        # Price moved 0.5R in our favor, tighten stop
                         stop_loss = self.risk.update_trailing_stop(entry_price, highest_price, stop_loss, curr_atr, "LONG")
                     
                     # PRIORITY EXIT CHECK: Take Profit checked FIRST
@@ -225,35 +198,9 @@ class BacktestEngine:
                     # For short, we track lowest price reached
                     lowest_price = min(lowest_price, current_low)
                     
-                    # Partial TP Check
-                    if not partial_tp_taken and current_low <= take_profit_1r:
-                        partial_exit_price = min(take_profit_1r, curr_candle['open'])
-                        half_size = position_size * 0.5
-                        
-                        pnl_usdt = half_size * (entry_price - partial_exit_price)
-                        fee = half_size * partial_exit_price * fee_rate
-                        self.balance += pnl_usdt - fee
-                        
-                        pnl_pct = (entry_price - partial_exit_price) / entry_price * 100
-                        
-                        self.trades.append({
-                            'side': 'SHORT',
-                            'entry_time': entry_time,
-                            'exit_time': ltf_time,
-                            'entry_price': entry_price,
-                            'exit_price': partial_exit_price,
-                            'pnl_usdt': pnl_usdt - fee,
-                            'pnl_pct': pnl_pct,
-                            'exit_reason': 'PARTIAL_TP_1R',
-                            'setup_mode': setup_mode
-                        })
-                        position_size -= half_size
-                        partial_tp_taken = True
-                        
-                        if entry_price < stop_loss:
-                            stop_loss = entry_price
-
-                    if partial_tp_taken:
+                    # Update trailing stop after price moves in our favor
+                    if current_low <= entry_price - (stop_loss - entry_price) * 0.5:
+                        # Price moved 0.5R in our favor, tighten stop
                         stop_loss = self.risk.update_trailing_stop(entry_price, lowest_price, stop_loss, curr_atr, "SHORT")
                     
                     # PRIORITY EXIT CHECK: Take Profit checked FIRST
