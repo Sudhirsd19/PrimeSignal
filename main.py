@@ -294,7 +294,7 @@ class PrimeSignalBot:
             open_count, _, _, _ = await self.get_open_positions_info()
             
             # Reset daily trades
-            current_date = datetime.datetime.utcnow().date()
+            current_date = datetime.datetime.now(datetime.timezone.utc).date()
             if current_date != self.last_trade_day:
                 self.trades_today = 0
                 self.last_trade_day = current_date
@@ -367,13 +367,15 @@ class PrimeSignalBot:
 
         # BTC Correlation Filter
         if signal == "BUY" and symbol != "BTC/USDT":
-            btc_df = self.pipeline.ltf_candles.get("BTC/USDT")
-            if btc_df is not None and not btc_df.empty:
-                btc_last = btc_df.iloc[-1]
-                btc_drop = (btc_last['open'] - btc_last['close']) / btc_last['open']
-                if btc_drop > 0.014:
-                    add_log_message(f"[{symbol}] Trade blocked: BTC dropped > 1.4% in last 5m. Blocking altcoin longs.")
-                    return
+            btc_raw = self.pipeline.ltf_candles.get("BTC/USDT")
+            if btc_raw:
+                btc_df = prepare_dataframe(btc_raw) if isinstance(btc_raw, list) else btc_raw
+                if not btc_df.empty:
+                    btc_last = btc_df.iloc[-1]
+                    btc_drop = (btc_last['open'] - btc_last['close']) / btc_last['open']
+                    if btc_drop > 0.014:
+                        add_log_message(f"[{symbol}] Trade blocked: BTC dropped > 1.4% in last 5m. Blocking altcoin longs.")
+                        return
         
         # Daily Trade Limit
         if self.trades_today >= 6:
