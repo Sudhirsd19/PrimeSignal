@@ -87,7 +87,7 @@ class PrimeSignalBot:
     _STATE_FILE = Path("bot_state.json")
 
     def save_state(self):
-        """Persist current position state to disk for crash recovery."""
+        """Persist current position state to disk and Firebase Cloud DB for crash recovery."""
         state = {
             'in_position': self.in_position,
             'position_side': self.position_side,
@@ -103,15 +103,43 @@ class PrimeSignalBot:
         try:
             self._STATE_FILE.write_text(json.dumps(state))
         except Exception as e:
-            print(f"[STATE] Failed to save state: {e}")
+            print(f"[STATE] Failed to save state to local file: {e}")
+            
+        try:
+            from core.firebase_manager import FirebaseManager
+            firebase = FirebaseManager()
+            if firebase.is_connected:
+                firebase.db.collection("bot_state").document("current").set(state)
+        except Exception as e:
+            print(f"[STATE] Firebase state save note: {e}")
 
     def load_state(self):
-        """Restore position state from disk after a restart."""
-        if not self._STATE_FILE.exists():
-            return
+        """Restore position state from Firebase Cloud DB or local disk after a restart."""
+        state = None
+        
+        # 1. Try Firebase Cloud DB first (survives Render container restarts)
         try:
-            state = json.loads(self._STATE_FILE.read_text())
-            
+            from core.firebase_manager import FirebaseManager
+            firebase = FirebaseManager()
+            if firebase.is_connected:
+                doc = firebase.db.collection("bot_state").document("current").get()
+                if doc.exists:
+                    state = doc.to_dict()
+                    add_log_message("[STATE] Recovered position state from Firebase Cloud DB.")
+        except Exception as e:
+            print(f"[STATE] Firebase load check: {e}")
+
+        # 2. Fallback to local file if not restored from Cloud DB
+        if not state and self._STATE_FILE.exists():
+            try:
+                state = json.loads(self._STATE_FILE.read_text())
+            except Exception as e:
+                print(f"[STATE] Failed to load local state: {e}")
+                
+        if not state:
+            return
+
+        try:
             # Helper to safely load dict state, falling back to default if new symbols were added
             def safe_load(key, default_val):
                 loaded_dict = state.get(key, {})
@@ -137,13 +165,28 @@ class PrimeSignalBot:
             DashboardState.take_profit = self.take_profit[sym]
             DashboardState.balance_usdt = self._dry_run_balance_usdt
             
+            # Immediately populate active_positions map for UI refresh recovery
+            active_pos_map = {}
+            for s in Config.SUPPORTED_SYMBOLS:
+                if self.in_position[s]:
+                    active_pos_map[s] = {
+                        'side': self.position_side[s],
+                        'entry_price': self.entry_price[s],
+                        'stop_loss': self.stop_loss[s],
+                        'take_profit': self.take_profit[s],
+                        'position_size': self.position_size[s],
+                        'current_pnl_usdt': 0.0,
+                        'current_pnl_pct': 0.0
+                    }
+            DashboardState.active_positions = active_pos_map
+
             open_positions = sum(1 for s in Config.SUPPORTED_SYMBOLS if self.in_position[s])
             if open_positions > 0:
-                add_log_message(f"[STATE] Recovered {open_positions} open positions from disk.")
+                add_log_message(f"[STATE] Recovered {open_positions} open positions into Dashboard state.")
             else:
-                add_log_message("[STATE] State file loaded — no open position to recover.")
+                add_log_message("[STATE] State loaded — no open positions to recover.")
         except Exception as e:
-            print(f"[STATE] Failed to load state: {e}")
+            print(f"[STATE] Failed to process state: {e}")
 
     async def initialize(self):
         add_log_message("Starting system initialization for all supported symbols...")
