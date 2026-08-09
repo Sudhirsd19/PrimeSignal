@@ -215,8 +215,9 @@
                 <div class="bg-[#111827] border border-[#1f2937] rounded-xl flex flex-col h-full overflow-hidden">
                     <!-- Tabs Header -->
                     <div class="flex border-b border-[#1f2937] p-2 space-x-2">
-                        <button id="tab-active-position" class="flex-1 pb-2 text-[10px] font-bold uppercase tracking-wider text-blue-400 border-b-2 border-blue-500 focus:outline-none transition-colors duration-200 truncate px-1">
-                            Position
+                        <button id="tab-active-position" class="flex-1 pb-2 text-[10px] font-bold uppercase tracking-wider text-blue-400 border-b-2 border-blue-500 focus:outline-none transition-colors duration-200 truncate px-1 flex items-center justify-center gap-1.5">
+                            <span>Position</span>
+                            <span id="active-pos-count-badge" class="px-1.5 py-0.5 rounded-full text-[9px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hidden">0 ACTIVE</span>
                         </button>
                         <button id="tab-analytics" class="flex-1 pb-2 text-[10px] font-bold uppercase tracking-wider text-gray-500 border-b-2 border-transparent hover:text-gray-300 focus:outline-none transition-colors duration-200 truncate px-1">
                             Analytics
@@ -408,12 +409,22 @@
             logsContainer.innerHTML = '';
             allLogs.forEach(log => {
                 const p = document.createElement('p');
-                p.innerText = log.text;
+                const text = log.text;
+                p.className = 'py-0.5 font-mono text-xs transition-colors ';
                 if (log.isBrowser) {
-                    p.className = log.isError ? 'text-red-400 font-bold' : 'text-cyan-400';
+                    p.className += log.isError ? 'text-red-400 font-bold' : 'text-cyan-400 font-medium';
+                } else if (text.includes('BUY') || text.includes('LONG') || text.includes('Executing BUY')) {
+                    p.className += 'text-emerald-400 font-semibold';
+                } else if (text.includes('SELL') || text.includes('SHORT') || text.includes('LIQUIDATED') || text.includes('REJECTED')) {
+                    p.className += 'text-rose-400 font-semibold';
+                } else if (text.includes('skipped') || text.includes('Rejected') || text.includes('paused') || text.includes('cooldown')) {
+                    p.className += 'text-amber-300/90 font-medium';
+                } else if (text.includes('[STATE]') || text.includes('[INIT]') || text.includes('[RISK]')) {
+                    p.className += 'text-indigo-300 font-medium';
                 } else {
-                    p.className = 'text-green-400';
+                    p.className += 'text-slate-300/90';
                 }
+                p.innerText = text;
                 logsContainer.appendChild(p);
             });
             logsContainer.scrollTop = logsContainer.scrollHeight;
@@ -1056,12 +1067,24 @@
                         const activePosMap = state.active_positions || {};
                         const symbols = Object.keys(activePosMap);
                         
+                        // Sync count badge on Position tab header
+                        const posBadge = document.getElementById('active-pos-count-badge');
+                        if (posBadge) {
+                            if (symbols.length > 0) {
+                                posBadge.innerText = `${symbols.length} ACTIVE`;
+                                posBadge.className = "px-1.5 py-0.5 rounded-full text-[9px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 animate-pulse";
+                                posBadge.classList.remove('hidden');
+                            } else {
+                                posBadge.innerText = '0 ACTIVE';
+                                posBadge.className = "px-1.5 py-0.5 rounded-full text-[9px] font-extrabold bg-blue-500/20 text-blue-400 border border-blue-500/30 hidden";
+                            }
+                        }
+                        
                         if (symbols.length > 0) {
                             noPosView.classList.add('hidden');
                             posView.classList.remove('hidden');
                             pnlBox.classList.remove('hidden');
                             
-                            // If there's at least one position, posCard glows subtly.
                             if (posCard) posCard.className = "bg-[#111827] border p-5 rounded-xl flex flex-col justify-between glow-blue";
                             
                             posView.innerHTML = ''; // clear old cards
@@ -1070,29 +1093,45 @@
                                 const pos = activePosMap[sym];
                                 const isLong = pos.side === "LONG";
                                 const sideClass = isLong 
-                                    ? "bg-green-500/10 text-green-400 border-green-500/20" 
-                                    : "bg-red-500/10 text-red-400 border-red-500/20";
+                                    ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20 shadow-[0_0_8px_rgba(16,185,129,0.15)]" 
+                                    : "bg-rose-500/10 text-rose-400 border-rose-500/20 shadow-[0_0_8px_rgba(244,63,94,0.15)]";
                                 const pnlCurr = state.balance_currency || "USDT";
                                 const pnlUsdt = pos.current_pnl_usdt || 0.0;
                                 const pnlPct = pos.current_pnl_pct || 0.0;
-                                const pnlClass = pnlUsdt >= 0 ? "text-green-400" : "text-red-400";
+                                const pnlClass = pnlUsdt >= 0 ? "text-emerald-400" : "text-rose-400";
                                 const sign = pnlUsdt >= 0 ? '+' : '';
                                 
+                                // Calculate position progress towards SL or TP (Range 5% to 95%)
+                                let posProgress = 50;
+                                const entryP = pos.entry_price || 0;
+                                const slP = pos.stop_loss || 0;
+                                const tpP = pos.take_profit || 0;
+                                const liveP = (state.symbol === sym && state.latest_price) ? state.latest_price : entryP;
+                                if (isLong && tpP > slP) {
+                                    posProgress = Math.min(Math.max(((liveP - slP) / (tpP - slP)) * 100, 5), 95);
+                                } else if (!isLong && slP > tpP) {
+                                    posProgress = Math.min(Math.max(((slP - liveP) / (slP - tpP)) * 100, 5), 95);
+                                }
+                                
                                 const cardHTML = `
-                                    <div class="border border-[#1f2937] hover:border-blue-500/50 p-3 rounded-lg bg-[#1f2937]/30 hover:bg-[#1f2937]/60 cursor-pointer transition-all flex flex-col gap-2" onclick="selectSymbolFromPosition('${sym}')" title="Click to view ${sym} chart">
+                                    <div class="border border-[#1f2937] hover:border-indigo-500/50 p-3.5 rounded-xl bg-[#161f30]/80 backdrop-blur-md hover:bg-[#1f2b45]/90 cursor-pointer transition-all duration-200 flex flex-col gap-2.5 shadow-md hover:shadow-indigo-500/10 group" onclick="selectSymbolFromPosition('${sym}')" title="Click to view ${sym} chart">
                                         <div class="flex justify-between items-center">
-                                            <div class="flex items-center gap-1.5">
-                                                <span class="font-bold text-white text-sm">${sym}</span>
-                                                <span class="text-[9px] text-gray-400 font-normal">(Click for chart)</span>
+                                            <div class="flex items-center gap-2">
+                                                <span class="font-bold text-white text-sm tracking-wide group-hover:text-indigo-400 transition-colors">${sym}</span>
+                                                <span class="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-300 font-medium border border-indigo-500/20">Chart ↗</span>
                                             </div>
-                                            <span class="text-[10px] px-2 py-0.5 font-bold rounded uppercase tracking-wider border ${sideClass}">${pos.side}</span>
+                                            <span class="text-[10px] px-2.5 py-0.5 font-extrabold rounded-md uppercase tracking-wider border ${sideClass}">${pos.side}</span>
                                         </div>
-                                        <div class="flex justify-between text-xs">
-                                            <span class="text-gray-500">Entry: <span class="text-white terminal-font font-bold">${pos.entry_price.toFixed(4)}</span></span>
-                                            <span class="text-gray-500">SL: <span class="text-red-400 terminal-font font-bold">${pos.stop_loss.toFixed(4)}</span></span>
+                                        <div class="flex justify-between text-xs font-semibold">
+                                            <span class="text-gray-400">Entry: <span class="text-white terminal-font font-bold">${pos.entry_price.toFixed(4)}</span></span>
+                                            <span class="text-gray-400">SL: <span class="text-red-400 terminal-font font-bold">${pos.stop_loss.toFixed(4)}</span></span>
                                         </div>
-                                        <div class="flex justify-between items-end mt-1 border-t border-[#1f2937] pt-2">
-                                            <span class="text-gray-500 text-[10px] uppercase">Running PnL</span>
+                                        <!-- Risk / Reward Progress Bar -->
+                                        <div class="w-full bg-[#0b0f19] h-1.5 rounded-full overflow-hidden border border-[#1f2937] relative">
+                                            <div class="h-full ${pnlUsdt >= 0 ? 'bg-gradient-to-r from-emerald-500 to-green-400' : 'bg-gradient-to-r from-red-500 to-rose-400'} transition-all duration-500" style="width: ${posProgress.toFixed(1)}%"></div>
+                                        </div>
+                                        <div class="flex justify-between items-end border-t border-[#1f2937]/80 pt-2">
+                                            <span class="text-gray-400 text-[10px] font-bold uppercase tracking-wider">Running PnL</span>
                                             <div class="flex flex-col items-end">
                                                 <span class="font-extrabold terminal-font text-sm ${pnlClass}">${sign}${pnlUsdt.toFixed(2)} ${pnlCurr}</span>
                                                 <span class="font-bold text-[10px] ${pnlClass}">${sign}${pnlPct.toFixed(2)}%</span>
