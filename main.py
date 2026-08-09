@@ -283,7 +283,7 @@ class PrimeSignalBot:
                 return
             
         signal, metadata = self.strategy.generate_signal(
-            self.pipeline.htf_candles[symbol],
+            htf_df,
             ltf_df,
             relaxed=False
         )
@@ -306,7 +306,7 @@ class PrimeSignalBot:
                         super_relaxed = True
                         
                     signal, metadata = self.strategy.generate_signal(
-                        self.pipeline.htf_candles[symbol],
+                        htf_df,
                         ltf_df,
                         relaxed=True,
                         super_relaxed=super_relaxed

@@ -12,6 +12,12 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         """
         Executes Multi-Timeframe Smart Money Concepts strategy.
         """
+        from strategies.indicators import prepare_dataframe
+        if isinstance(htf_df, list):
+            htf_df = prepare_dataframe(htf_df)
+        if isinstance(ltf_df, list):
+            ltf_df = prepare_dataframe(ltf_df)
+
         metadata = {
             'htf_trend': 'NEUTRAL',
             'strong_trend': False,
