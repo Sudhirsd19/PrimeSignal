@@ -142,14 +142,6 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
 
         metadata['ltf_rsi']  = curr_rsi
         metadata['ltf_vwap'] = curr_vwap
-        metadata['curr_atr'] = curr_atr
-        metadata['curr_adx'] = curr_adx
-        metadata['ema_short'] = curr_short
-        metadata['ema_long'] = curr_long
-        metadata['curr_ema_50'] = curr_ema_50
-        metadata['htf_ema_50'] = latest_htf_ema_50
-        metadata['htf_ema_200'] = latest_htf_ema_200
-        metadata['candle_volume'] = float(ltf_df['volume'].iloc[-2])
 
         vol_pass = (curr_atr / curr_price) >= Config.MIN_ATR_PCT
         metadata['debug_checks']['volatility'] = 'PASS' if vol_pass else 'FAIL'
@@ -185,15 +177,6 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                     active_bearish_fvg = fvg
 
         vwap_tol = Config.VWAP_TOLERANCE * 2 if relaxed else Config.VWAP_TOLERANCE
-
-        metadata['active_ob_details'] = {
-            'bullish': {'bottom': active_bullish_ob['bottom'], 'top': active_bullish_ob['top']} if active_bullish_ob else None,
-            'bearish': {'bottom': active_bearish_ob['bottom'], 'top': active_bearish_ob['top']} if active_bearish_ob else None
-        }
-        metadata['active_fvg_details'] = {
-            'bullish': {'bottom': active_bullish_fvg['bottom'], 'top': active_bullish_fvg['top']} if active_bullish_fvg else None,
-            'bearish': {'bottom': active_bearish_fvg['bottom'], 'top': active_bearish_fvg['top']} if active_bearish_fvg else None
-        }
 
         if htf_trend == 'BULLISH':
             in_zone = False
@@ -247,7 +230,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 reason = f"Liquidity Sweep of Swing Low [{swing_low:.2f}]"
                 
             # Secondary Setups
-            if not in_zone and relaxed and strong_trend:
+            if not in_zone and (relaxed or strong_trend):
                 # VWAP Bounce
                 if in_bounds(curr_price, curr_vwap * 0.999, curr_vwap * 1.001):
                     in_zone = True
@@ -267,9 +250,11 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
 
             metadata['debug_checks']['zone'] = 'PASS' if in_zone else 'FAIL'
 
-            rsi_trigger       = (prev_rsi < Config.RSI_OVERSOLD) and (curr_rsi >= Config.RSI_OVERSOLD)
+            rsi_trigger       = (prev_rsi < Config.RSI_OVERSOLD) or ((prev_rsi < Config.RSI_OVERSOLD + 5) and (curr_rsi >= Config.RSI_OVERSOLD))
             crossover_trigger = (prev_short <= prev_long) and (curr_short > curr_long)
-            trigger_pass = rsi_trigger or crossover_trigger
+            wick_trigger      = (candle_range > 0) and ((min(trigger_open, trigger_close) - trigger_low) / candle_range >= 0.4)
+            engulfing_trigger = (trigger_close > trigger_open) and (ltf_df.iloc[-3]['close'] < ltf_df.iloc[-3]['open']) and (trigger_close > ltf_df.iloc[-3]['open'])
+            trigger_pass      = rsi_trigger or crossover_trigger or wick_trigger or engulfing_trigger
             metadata['debug_checks']['trigger'] = 'PASS' if trigger_pass else 'FAIL'
 
             vwap_pass = curr_vwap > prev_vwap - (prev_vwap * vwap_tol)
@@ -403,7 +388,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 reason = f"Liquidity Sweep of Swing High [{swing_high:.2f}]"
                 
             # Secondary Setups
-            if not in_zone and relaxed and strong_trend:
+            if not in_zone and (relaxed or strong_trend):
                 # VWAP Bounce
                 if in_bounds(curr_price, curr_vwap * 0.999, curr_vwap * 1.001):
                     in_zone = True
@@ -423,9 +408,11 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
 
             metadata['debug_checks']['zone'] = 'PASS' if in_zone else 'FAIL'
 
-            rsi_trigger       = (prev_rsi > Config.RSI_OVERBOUGHT) and (curr_rsi <= Config.RSI_OVERBOUGHT)
+            rsi_trigger       = (prev_rsi > Config.RSI_OVERBOUGHT) or ((prev_rsi > Config.RSI_OVERBOUGHT - 5) and (curr_rsi <= Config.RSI_OVERBOUGHT))
             crossover_trigger = (prev_short >= prev_long) and (curr_short < curr_long)
-            trigger_pass = rsi_trigger or crossover_trigger
+            wick_trigger      = (candle_range > 0) and ((trigger_high - max(trigger_open, trigger_close)) / candle_range >= 0.4)
+            engulfing_trigger = (trigger_close < trigger_open) and (ltf_df.iloc[-3]['close'] > ltf_df.iloc[-3]['open']) and (trigger_close < ltf_df.iloc[-3]['open'])
+            trigger_pass      = rsi_trigger or crossover_trigger or wick_trigger or engulfing_trigger
             metadata['debug_checks']['trigger'] = 'PASS' if trigger_pass else 'FAIL'
 
             vwap_pass = curr_vwap < prev_vwap + (prev_vwap * vwap_tol)

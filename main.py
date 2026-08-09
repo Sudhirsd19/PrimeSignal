@@ -23,9 +23,6 @@ from ml.confirmation import MLSignalConfirmator
 from risk.risk_manager import RiskManager
 from alerts.notifier import TelegramNotifier
 from dashboard.app import app, DashboardState, add_log_message
-from core.trade_logger import TradeLogger
-from core.firebase_manager import FirebaseManager
-import os
 
 class PrimeSignalBot:
     def __init__(self):
@@ -37,7 +34,6 @@ class PrimeSignalBot:
         self.strategy = MultiTimeframeSMCStrategy()
         self.risk = RiskManager()
         self.notifier = TelegramNotifier()
-        self.logger = TradeLogger()
         
         self.ml_models = {sym: MLSignalConfirmator() for sym in Config.SUPPORTED_SYMBOLS}
         
@@ -52,7 +48,6 @@ class PrimeSignalBot:
         self.position_size = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.position_mode = {sym: "STRICT" for sym in Config.SUPPORTED_SYMBOLS}
         self.entry_time = {sym: 0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.trade_metadata = {sym: {} for sym in Config.SUPPORTED_SYMBOLS}
         self.last_trade_time = {sym: 0 for sym in Config.SUPPORTED_SYMBOLS}
         self.last_zone_traded = {sym: None for sym in Config.SUPPORTED_SYMBOLS}
         self.volatility_pause_until = {sym: 0 for sym in Config.SUPPORTED_SYMBOLS}
@@ -92,7 +87,7 @@ class PrimeSignalBot:
     _STATE_FILE = Path("bot_state.json")
 
     def save_state(self):
-        """Persist current position state to disk and Firebase for crash recovery."""
+        """Persist current position state to disk for crash recovery."""
         state = {
             'in_position': self.in_position,
             'position_side': self.position_side,
@@ -105,46 +100,18 @@ class PrimeSignalBot:
             'lowest_price_reached': self.lowest_price_reached,
             '_dry_run_balance_usdt': self._dry_run_balance_usdt,
         }
-        
-        firebase = FirebaseManager()
-        if firebase.is_connected:
-            try:
-                firebase.db.collection("state").document("bot_state").set(state)
-            except Exception as e:
-                print(f"[FIREBASE] Failed to save state: {e}")
-                
         try:
             self._STATE_FILE.write_text(json.dumps(state))
         except Exception as e:
-            print(f"[STATE] Failed to save state to disk: {e}")
+            print(f"[STATE] Failed to save state: {e}")
 
     def load_state(self):
-        """Restore position state from Firebase or disk after a restart."""
-        state = {}
-        loaded_from = "NONE"
-        
-        firebase = FirebaseManager()
-        if firebase.is_connected:
-            try:
-                doc = firebase.db.collection("state").document("bot_state").get()
-                if doc.exists:
-                    state = doc.to_dict()
-                    loaded_from = "FIREBASE"
-            except Exception as e:
-                print(f"[FIREBASE] Failed to load state: {e}")
-
-        # Fallback to local disk if Firebase is empty or unavailable
-        if loaded_from == "NONE" and self._STATE_FILE.exists():
-            try:
-                state = json.loads(self._STATE_FILE.read_text())
-                loaded_from = "DISK"
-            except Exception as e:
-                print(f"[STATE] Failed to load local state: {e}")
-
-        if not state:
+        """Restore position state from disk after a restart."""
+        if not self._STATE_FILE.exists():
             return
-
         try:
+            state = json.loads(self._STATE_FILE.read_text())
+            
             # Helper to safely load dict state, falling back to default if new symbols were added
             def safe_load(key, default_val):
                 loaded_dict = state.get(key, {})
@@ -195,11 +162,6 @@ class PrimeSignalBot:
                 else:
                     add_log_message(f"[WARNING] Balance fetch returned {usdt_balance}. Check account type. Keeping last known value.")
                 DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
-            
-            # Fetch CoinDCX profile
-            coindcx_profile = await self.execution.fetch_coindcx_user_info()
-            if coindcx_profile:
-                DashboardState.coindcx_profile = coindcx_profile
         else:
             DashboardState.balance_usdt = self._dry_run_balance_usdt
             DashboardState.balance_base = 0.0
@@ -217,11 +179,6 @@ class PrimeSignalBot:
 
         DashboardState.latest_price = self.pipeline.latest_prices.get(Config.SYMBOL, 0.0)
         DashboardState.chart_history = self.pipeline.ltf_candles[Config.SYMBOL][-100:] if self.pipeline.ltf_candles[Config.SYMBOL] else []
-        
-        if not self.in_position[Config.SYMBOL]:
-            DashboardState.signal_light = "RED"
-            DashboardState.signal_light_reason = "Waiting for next signal..."
-            
         add_log_message(f"System ready. Multi-symbol watch active. UI viewing {Config.SYMBOL}")
 
     async def on_candle_close(self, symbol):
@@ -271,24 +228,6 @@ class PrimeSignalBot:
         return current_equity
 
     async def _on_candle_close_impl(self, symbol):
-        # Feature 4: Emergency Kill Switch
-        kill_active = os.path.exists("KILL_SWITCH")
-        firebase = FirebaseManager()
-        if not kill_active and firebase.is_connected:
-            try:
-                kill_doc = firebase.db.collection("control").document("kill_switch").get()
-                if kill_doc.exists and kill_doc.to_dict().get("active", False):
-                    kill_active = True
-            except Exception as e:
-                pass
-
-        if kill_active:
-            add_log_message(f"🚨 KILL SWITCH ACTIVE 🚨 Halting all operations for {symbol}")
-            if self.in_position[symbol]:
-                await self.exit_position(symbol, "EMERGENCY_KILL_SWITCH")
-                self.logger.log_kill_switch("FIREBASE_OR_FILE", 1)
-            return
-
         if time.time() < self.global_pause_until:
             return
             
@@ -387,28 +326,6 @@ class PrimeSignalBot:
             else:
                 DashboardState.ml_confidence = 0.5
             DashboardState.chart_history = self.pipeline.ltf_candles[symbol][-100:]
-            
-            # --- SIGNAL LIGHT LOGIC ---
-            debug = metadata.get('debug_checks', {})
-            light_state = "RED"
-            light_reason = metadata.get('reason', 'Waiting for setup...')
-            
-            if self.in_position[symbol]:
-                light_state = "BLUE"
-                light_reason = f"Active {self.position_side[symbol]} position running."
-            elif signal != "HOLD":
-                light_state = "GREEN"
-                light_reason = f"Signal Validated! Initiating {signal}..."
-            elif debug.get('trend') == 'PASS':
-                if debug.get('zone') == 'PASS':
-                    light_state = "ORANGE"
-                    light_reason = "In OB/FVG Zone. Waiting for momentum trigger."
-                else:
-                    light_state = "YELLOW"
-                    light_reason = "HTF Trend aligned. Searching for entry zones."
-            
-            DashboardState.signal_light = light_state
-            DashboardState.signal_light_reason = light_reason
         
         if signal == "HOLD":
             # Log debug checks for rejection reason
@@ -420,12 +337,9 @@ class PrimeSignalBot:
         # Session Volume Block
         if is_low_volume_session:
             avg_vol = ltf_df['volume'].rolling(20).mean().iloc[-2] if len(ltf_df) > 20 else 0.0
-            if ltf_df['volume'].iloc[-1] < 1.2 * avg_vol:
-                msg = f"[{symbol}] Trade skipped: Outside 12-22 UTC and volume not > 1.2x average."
-                add_log_message(msg)
-                if symbol == Config.SYMBOL:
-                    DashboardState.signal_light = "ORANGE"
-                    DashboardState.signal_light_reason = "Signal blocked: Low volume during off-peak session."
+            vol_mult = 1.0 if metadata.get('score', 0) >= 3.5 else 1.2
+            if ltf_df['volume'].iloc[-1] < vol_mult * avg_vol:
+                add_log_message(f"[{symbol}] Trade skipped: Outside 12-22 UTC and volume not > {vol_mult}x average.")
                 return
                 
         # 4H Bias logic
@@ -440,7 +354,6 @@ class PrimeSignalBot:
                 metadata['score'] = metadata.get('score', 3) - 0.5
                 
         add_log_message(f"[{symbol}] Raw strategy signal: {signal} ({metadata.get('reason')})")
-        self.logger.log_signal_generated(symbol, signal, metadata.get('score', 0), metadata.get('mode', 'STRICT'), metadata)
         
         # Position Reversal logic
         if self.in_position[symbol]:
@@ -458,45 +371,30 @@ class PrimeSignalBot:
             if btc_df is not None and not btc_df.empty:
                 btc_last = btc_df.iloc[-1]
                 btc_drop = (btc_last['open'] - btc_last['close']) / btc_last['open']
-                if btc_drop > 0.01:
-                    add_log_message(f"[{symbol}] Trade blocked: BTC dropped > 1% in last 5m. Blocking altcoin longs.")
-                    self.logger.log_signal_filtered(symbol, signal, "BTC correlation drop", "btc_correlation")
-                    if symbol == Config.SYMBOL:
-                        DashboardState.signal_light = "RED"
-                        DashboardState.signal_light_reason = "Signal blocked: BTC dumping >1%."
+                if btc_drop > 0.014:
+                    add_log_message(f"[{symbol}] Trade blocked: BTC dropped > 1.4% in last 5m. Blocking altcoin longs.")
                     return
         
         # Daily Trade Limit
-        if self.trades_today >= Config.MAX_OPEN_TRADES:
-            add_log_message(f"[{symbol}] Trade skipped: Daily maximum ({Config.MAX_OPEN_TRADES}) reached.")
-            if symbol == Config.SYMBOL:
-                DashboardState.signal_light = "RED"
-                DashboardState.signal_light_reason = "Signal blocked: Daily max trades reached."
+        if self.trades_today >= 6:
+            add_log_message(f"[{symbol}] Trade skipped: Max 6 trades per day reached.")
             return
 
         # Cluster Loss Cooldown
-        if time.time() < self.global_pause_until:
+        if time.time() < getattr(self, 'cluster_loss_pause_until', 0):
             add_log_message(f"[{symbol}] Trade skipped: Cluster loss cooldown active.")
-            if symbol == Config.SYMBOL:
-                DashboardState.signal_light = "RED"
-                DashboardState.signal_light_reason = "Signal blocked: Cluster loss cooldown."
             return
 
         # Cooldown Check
-        if time.time() - self.global_last_trade_time < (Config.COOLDOWN_MINUTES * 60):
-            add_log_message(f"[{symbol}] Trade skipped: Cooldown of {Config.COOLDOWN_MINUTES}m not finished.")
-            if symbol == Config.SYMBOL:
-                DashboardState.signal_light = "ORANGE"
-                DashboardState.signal_light_reason = "Signal blocked: Cooldown between trades."
+        if time.time() - self.last_trade_time.get(symbol, 0) < getattr(Config, 'COOLDOWN_MINUTES', 15) * 60:
+            add_log_message(f"[{symbol}] Trade skipped due to cooldown.")
             return
 
         # Same Zone Check with Traded Zones Cache
         zone_id = metadata.get('zone_id')
-        if zone_id and zone_id == self.last_zone_traded[symbol]:
-            add_log_message(f"[{symbol}] Trade skipped: Already traded in this specific zone ({zone_id}).")
-            if symbol == Config.SYMBOL:
-                DashboardState.signal_light = "ORANGE"
-                DashboardState.signal_light_reason = "Signal blocked: Already traded this specific zone."
+        cache_key = f"{symbol}_{zone_id}"
+        if zone_id and self.traded_zones_cache.get(cache_key):
+            add_log_message(f"[{symbol}] Trade skipped: already traded in this zone ({zone_id}).")
             return
             
         # Clear out old cache (basic cleanup - ideally based on candle count but here based on simple dict size)
@@ -651,24 +549,6 @@ class PrimeSignalBot:
         if pos_size <= 0.0:
             return
             
-        # FIX A (CRITICAL-1): CoinDCX is a SPOT exchange — cannot short-sell assets you don't own
-        if signal == "SELL" and self.execution.coindcx_client and Config.COINDCX_TRADE_INR:
-            add_log_message(f"[{symbol}] ⚠️ SELL signal blocked: CoinDCX spot exchange does not support short selling.")
-            self.logger.log_signal_filtered(symbol, signal, "CoinDCX Spot does not support SHORT", "exchange_capability")
-            return
-
-        if symbol == Config.SYMBOL:
-            DashboardState.signal_light = "YELLOW"
-            DashboardState.signal_light_reason = "Validating entry metrics..."
-            
-            # Progress bar simulation for UI
-            for p in [25, 50, 80, 100]:
-                DashboardState.signal_progress = p
-                await asyncio.sleep(0.5)
-                
-            DashboardState.signal_light = "GREEN"
-            DashboardState.signal_light_reason = f"Executing {signal}..."
-        
         if signal == "BUY":
             add_log_message(f"[{symbol}] Executing BUY (LONG). Size: {pos_size:.6f} | SL: {sl:.2f} | TP: {tp:.2f}")
             order = None
@@ -697,7 +577,6 @@ class PrimeSignalBot:
                 self.highest_price_reached[symbol] = entry_price
                 self.position_size[symbol] = pos_size
                 self.entry_time[symbol] = int(time.time() * 1000)
-                self.trade_metadata[symbol] = metadata
                 self.last_trade_time[symbol] = time.time()
                 self.position_mode[symbol] = metadata.get('mode', 'STRICT')
                 self.last_zone_traded[symbol] = metadata.get('zone_id')
@@ -728,7 +607,6 @@ class PrimeSignalBot:
                     f"Reason: {metadata.get('reason', 'N/A')}"
                 )
                 add_log_message(f"[{symbol}] " + msg_str.replace('\\n', ' | '))
-                self.logger.log_trade_executed(symbol, "LONG", pos_size, entry_price, sl, tp, order.get('id', ''), metadata.get('mode', 'STRICT'))
                 await self.notifier.send_message(msg_str)
             else:
                 # FIX #4: Log order rejection with reason
@@ -775,7 +653,6 @@ class PrimeSignalBot:
                 self.lowest_price_reached[symbol] = entry_price
                 self.position_size[symbol] = pos_size
                 self.entry_time[symbol] = int(time.time() * 1000)
-                self.trade_metadata[symbol] = metadata
                 self.last_trade_time[symbol] = time.time()
                 self.position_mode[symbol] = metadata.get('mode', 'STRICT')
                 self.last_zone_traded[symbol] = metadata.get('zone_id')
@@ -792,7 +669,6 @@ class PrimeSignalBot:
                     DashboardState.take_profit = tp
 
                 self.save_state()
-                self.logger.log_trade_executed(symbol, "SHORT", pos_size, entry_price, sl, tp, order.get('id', ''), metadata.get('mode', 'STRICT'))
                 await self.notifier.send_message(msg_str)
             else:
                 add_log_message(f"[{symbol}] ❌ SELL order REJECTED (check execution logs)")
@@ -811,7 +687,7 @@ class PrimeSignalBot:
                     current_eq = DashboardState.balance_usdt if self.has_keys else self.calculate_total_equity()
                     self.risk.reset_daily_equity(current_eq)
                     self._last_reset_date = now_utc.date()
-                    add_log_message("[RISK] Daily equity checkpoint reset at UTC midnight.")
+                    add_log_message(f"[RISK] Daily equity checkpoint reset at UTC midnight.")
 
                 for symbol in Config.SUPPORTED_SYMBOLS:
                     if self.in_position[symbol] and self.pipeline.latest_prices.get(symbol, 0.0) > 0:
@@ -822,11 +698,6 @@ class PrimeSignalBot:
                         
                         if self.position_side[symbol] == "LONG":
                             self.highest_price_reached[symbol] = max(self.highest_price_reached[symbol], curr_price)
-                            
-                            if symbol == Config.SYMBOL:
-                                DashboardState.signal_light = "BLUE"
-                                DashboardState.signal_light_reason = f"Active LONG ({curr_price:.2f})"
-                                DashboardState.signal_progress = 0
                             
                             # TP1 (50%)
                             if not self.partial_tp_taken[symbol] and curr_price >= self.take_profit_1r[symbol]:
@@ -868,11 +739,6 @@ class PrimeSignalBot:
                                 
                         elif self.position_side[symbol] == "SHORT":
                             self.lowest_price_reached[symbol] = min(self.lowest_price_reached[symbol], curr_price)
-                            
-                            if symbol == Config.SYMBOL:
-                                DashboardState.signal_light = "BLUE"
-                                DashboardState.signal_light_reason = f"Active SHORT ({curr_price:.2f})"
-                                DashboardState.signal_progress = 0
                             
                             # TP1 (50%)
                             if not self.partial_tp_taken[symbol] and curr_price <= self.take_profit_1r[symbol]:
@@ -921,29 +787,19 @@ class PrimeSignalBot:
                 if self.pipeline.ltf_candles[sym]:
                     DashboardState.chart_history = self.pipeline.ltf_candles[sym][-100:]
                 
-                # Compile all active positions
-                current_active_positions = {}
-                for s in Config.SUPPORTED_SYMBOLS:
-                    if self.in_position[s] and self.pipeline.latest_prices.get(s, 0.0) > 0:
-                        cp = self.pipeline.latest_prices[s]
-                        if self.position_side[s] == "LONG":
-                            pct = (cp - self.entry_price[s]) / self.entry_price[s] * 100.0
-                            usdt = self.position_size[s] * (cp - self.entry_price[s])
-                        else:
-                            pct = (self.entry_price[s] - cp) / self.entry_price[s] * 100.0
-                            usdt = self.position_size[s] * (self.entry_price[s] - cp)
-                            
-                        current_active_positions[s] = {
-                            "symbol": s,
-                            "side": self.position_side[s],
-                            "entry_price": self.entry_price[s],
-                            "stop_loss": self.stop_loss[s],
-                            "take_profit": self.take_profit[s],
-                            "current_pnl_pct": pct,
-                            "current_pnl_usdt": usdt
-                        }
-                
-                DashboardState.active_positions = current_active_positions
+                if self.in_position[sym] and self.pipeline.latest_prices.get(sym, 0.0) > 0:
+                    curr_price = self.pipeline.latest_prices[sym]
+                    if self.position_side[sym] == "LONG":
+                        pnl_pct = (curr_price - self.entry_price[sym]) / self.entry_price[sym] * 100.0
+                        pnl_usdt = self.position_size[sym] * (curr_price - self.entry_price[sym])
+                    else:
+                        pnl_pct = (self.entry_price[sym] - curr_price) / self.entry_price[sym] * 100.0
+                        pnl_usdt = self.position_size[sym] * (self.entry_price[sym] - curr_price)
+                    DashboardState.current_pnl_pct = pnl_pct
+                    DashboardState.current_pnl_usdt = pnl_usdt
+                else:
+                    DashboardState.current_pnl_pct = 0.0
+                    DashboardState.current_pnl_usdt = 0.0
 
             except Exception as e:
                 import traceback
@@ -976,7 +832,6 @@ class PrimeSignalBot:
                 if not self.has_keys:
                     self._dry_run_balance_usdt += (self.position_size[symbol] * self.entry_price[symbol]) + pnl_usdt
                 
-            self.logger.log_trade_exited(symbol, self.position_side[symbol], self.entry_price[symbol], exit_price, pnl_pct, pnl_usdt, reason, order.get('id', '') if order else '')
             trade_record = {
                 'symbol': symbol,
                 'side': self.position_side[symbol],
@@ -984,36 +839,12 @@ class PrimeSignalBot:
                 'exit_price': exit_price,
                 'pnl_usdt': pnl_usdt,
                 'pnl_pct': pnl_pct,
-                'entry_time': self.entry_time.get(symbol, 0),
-                'exit_time': int(time.time() * 1000),
-                'reason': reason,
-                'metadata': getattr(self, 'trade_metadata', {}).get(symbol, {})
+                'entry_time': self.entry_time[symbol],
+                'exit_time': int(time.time() * 1000)
             }
             DashboardState.trades.append(trade_record)
             if len(DashboardState.trades) > 500:
                 DashboardState.trades = DashboardState.trades[-500:]
-                
-            # Log to local persistent file
-            try:
-                import json
-                import os
-                os.makedirs('data', exist_ok=True)
-                with open('data/trade_logs.jsonl', 'a', encoding='utf-8') as f:
-                    log_entry = {
-                        "action": "SELL",
-                        "symbol": symbol,
-                        "side": trade_record['side'],
-                        "entry_price": trade_record['entry_price'],
-                        "exit_price": trade_record['exit_price'],
-                        "pnl_usdt": trade_record['pnl_usdt'],
-                        "pnl_pct": trade_record['pnl_pct'],
-                        "reason": trade_record['reason'],
-                        "time": trade_record['exit_time'],
-                        "condition": trade_record['metadata']
-                    }
-                    f.write(json.dumps(log_entry) + "\\n")
-            except Exception as e:
-                print(f"[LOGGING] Failed to save trade log: {e}")
 
             # Task 5: Cluster Loss Tracking
             is_loss = pnl_usdt < 0
@@ -1034,14 +865,13 @@ class PrimeSignalBot:
                 self.cluster_risk_penalty = False
 
             # Update relaxed cooldowns
-            trade_mode = self.position_mode.get(symbol, 'STRICT')
-            if trade_mode == 'RELAXED' and is_loss:
+            if metadata.get('mode') == 'RELAXED' and is_loss:
                 self.relaxed_losses += 1
                 if self.relaxed_losses >= 2:
                     self.relaxed_disabled_until = time.time() + 7200
                     add_log_message("🚨 [SAFETY] 2 relaxed losses. Relaxed mode disabled for 2 hours.")
                     self.relaxed_losses = 0
-            elif not is_loss and trade_mode == 'RELAXED':
+            elif not is_loss and metadata.get('mode') == 'RELAXED':
                 self.relaxed_losses = 0
 
             self.in_position[symbol] = False
@@ -1049,9 +879,8 @@ class PrimeSignalBot:
             self.position_size[symbol] = 0.0
             
             if symbol == Config.SYMBOL:
-                DashboardState.signal_light = "RED"
-                DashboardState.signal_light_reason = "Waiting for next signal..."
-                DashboardState.signal_progress = 0
+                DashboardState.in_position = False
+                DashboardState.position_side = "HOLD"
 
             self.save_state()
             await self.notifier.send_message(

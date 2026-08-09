@@ -20,7 +20,7 @@ class Config:
     MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "3"))
     TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015")) # Deprecated in favor of ATR
     TRAILING_ATR_MULT = float(os.getenv("TRAILING_ATR_MULT", "2.0"))
-    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "2.0"))
+    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.8"))
     
     # Strategy settings
     HTF_TIMEFRAME = os.getenv("HTF_TIMEFRAME", "1h")
@@ -35,7 +35,7 @@ class Config:
     ATR_PERIOD = int(os.getenv("ATR_PERIOD", "14"))
     MIN_ATR_PCT = float(os.getenv("MIN_ATR_PCT", "0.0005"))
     MAX_ZONE_AGE_CANDLES = int(os.getenv("MAX_ZONE_AGE_CANDLES", "100"))
-    ZONE_BUFFER_PCT = float(os.getenv("ZONE_BUFFER_PCT", "0.003"))
+    ZONE_BUFFER_PCT = float(os.getenv("ZONE_BUFFER_PCT", "0.005"))
     VWAP_TOLERANCE = float(os.getenv("VWAP_TOLERANCE", "0.002"))
     MAX_SPREAD_PCT = float(os.getenv("MAX_SPREAD_PCT", "0.002"))
     MIN_24H_VOL_USDT = float(os.getenv("MIN_24H_VOL_USDT", "50000000"))
