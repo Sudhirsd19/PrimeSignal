@@ -323,8 +323,13 @@ class PrimeSignalBot:
             DashboardState.active_bearish_ob_level = metadata.get('active_bearish_ob_level', 0.0)
             if self.ml_models[symbol] is not None:
                 DashboardState.ml_confidence = self.ml_models[symbol].predict_bias(ltf_df)
+                nc_pred = self.ml_models[symbol].predict_next_candle(ltf_df)
+                DashboardState.next_candle_color = nc_pred['color']
+                DashboardState.next_candle_prob = nc_pred['confidence_pct']
             else:
                 DashboardState.ml_confidence = 0.5
+                DashboardState.next_candle_color = "GREEN"
+                DashboardState.next_candle_prob = 50.0
             DashboardState.chart_history = self.pipeline.ltf_candles[symbol][-100:]
         
         if signal == "HOLD":

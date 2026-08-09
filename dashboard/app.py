@@ -55,6 +55,8 @@ class DashboardState:
     
     daily_drawdown_pct = 0.0
     ml_confidence = 0.5
+    next_candle_color = "GREEN"
+    next_candle_prob = 50.0
     active_ob = "No OB"
     active_fvg = "No FVG"
     active_ob_level = 0.0
@@ -259,6 +261,8 @@ async def send_state_to_ws(websocket):
         "active_positions": DashboardState.active_positions,
         "daily_drawdown_pct": DashboardState.daily_drawdown_pct,
         "ml_confidence": DashboardState.ml_confidence,
+        "next_candle_color": DashboardState.next_candle_color,
+        "next_candle_prob": DashboardState.next_candle_prob,
         "active_ob": DashboardState.active_ob,
         "active_fvg": DashboardState.active_fvg,
         "active_ob_level": DashboardState.active_ob_level,

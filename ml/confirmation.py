@@ -181,3 +181,45 @@ class MLSignalConfirmator:
             print(f"WARNING: Error predicting ML bias: {e}")
             return 0.5
 
+    def predict_next_candle(self, df):
+        """
+        Predicts the color and probability of the UPCOMING 5m candle.
+        Returns:
+            dict: {'color': 'GREEN' or 'RED', 'confidence_pct': float, 'bullish_prob': float}
+        """
+        if len(df) < 20:
+            return {'color': 'GREEN', 'confidence_pct': 50.0, 'bullish_prob': 50.0}
+
+        try:
+            # 1. Base ML model probability if trained
+            ml_prob = self.predict_bias(df)
+            
+            # 2. Immediate candle momentum & order flow
+            last = df.iloc[-1]
+            body_return = (last['close'] - last['open']) / last['open'] if last['open'] > 0 else 0.0
+            candle_range = last['high'] - last['low']
+            lower_wick = min(last['close'], last['open']) - last['low']
+            upper_wick = last['high'] - max(last['close'], last['open'])
+            
+            wick_bias = 0.0
+            if candle_range > 0:
+                wick_bias = (lower_wick - upper_wick) / candle_range
+            
+            # Composite momentum score (scaled between -0.20 and +0.20)
+            mom_factor = np.clip(body_return * 40.0 + wick_bias * 0.15, -0.20, 0.20)
+            
+            # Final Bullish Probability
+            final_prob = np.clip(ml_prob + mom_factor, 0.15, 0.85)
+            
+            color = "GREEN" if final_prob >= 0.50 else "RED"
+            confidence = final_prob if color == "GREEN" else (1.0 - final_prob)
+            
+            return {
+                'color': color,
+                'confidence_pct': round(float(confidence * 100), 1),
+                'bullish_prob': round(float(final_prob * 100), 1)
+            }
+        except Exception as e:
+            print(f"WARNING: Error predicting next candle color: {e}")
+            return {'color': 'GREEN', 'confidence_pct': 50.0, 'bullish_prob': 50.0}
+
