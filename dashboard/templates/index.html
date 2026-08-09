@@ -1079,9 +1079,12 @@
                                 const sign = pnlUsdt >= 0 ? '+' : '';
                                 
                                 const cardHTML = `
-                                    <div class="border border-[#1f2937] p-3 rounded-lg bg-[#1f2937]/30 flex flex-col gap-2">
+                                    <div class="border border-[#1f2937] hover:border-blue-500/50 p-3 rounded-lg bg-[#1f2937]/30 hover:bg-[#1f2937]/60 cursor-pointer transition-all flex flex-col gap-2" onclick="selectSymbolFromPosition('${sym}')" title="Click to view ${sym} chart">
                                         <div class="flex justify-between items-center">
-                                            <span class="font-bold text-white text-sm">${sym}</span>
+                                            <div class="flex items-center gap-1.5">
+                                                <span class="font-bold text-white text-sm">${sym}</span>
+                                                <span class="text-[9px] text-gray-400 font-normal">(Click for chart)</span>
+                                            </div>
                                             <span class="text-[10px] px-2 py-0.5 font-bold rounded uppercase tracking-wider border ${sideClass}">${pos.side}</span>
                                         </div>
                                         <div class="flex justify-between text-xs">
@@ -1156,7 +1159,16 @@
                     ws.close();
                 };
             } catch (e) {
-                console.error("Failed to connect to WebSocket:", e);
+                console.error("Failed to establish WebSocket connection:", e);
+            }
+        }
+        
+        // Helper: Quick-switch chart symbol when clicking an active position card
+        function selectSymbolFromPosition(sym) {
+            const symbolSelect = document.getElementById('symbol-select');
+            if (symbolSelect && symbolSelect.value !== sym) {
+                symbolSelect.value = sym;
+                symbolSelect.dispatchEvent(new Event('change'));
             }
         }
         

@@ -794,6 +794,32 @@ class PrimeSignalBot:
                 if self.pipeline.ltf_candles[sym]:
                     DashboardState.chart_history = self.pipeline.ltf_candles[sym][-100:]
                 
+                # Sync all active positions to DashboardState for multi-symbol UI rendering
+                active_pos_map = {}
+                for s in Config.SUPPORTED_SYMBOLS:
+                    if self.in_position[s]:
+                        live_p = self.pipeline.latest_prices.get(s, self.entry_price[s])
+                        if live_p > 0 and self.entry_price[s] > 0:
+                            if self.position_side[s] == "LONG":
+                                p_pct = (live_p - self.entry_price[s]) / self.entry_price[s] * 100.0
+                                p_usdt = self.position_size[s] * (live_p - self.entry_price[s])
+                            else:
+                                p_pct = (self.entry_price[s] - live_p) / self.entry_price[s] * 100.0
+                                p_usdt = self.position_size[s] * (self.entry_price[s] - live_p)
+                        else:
+                            p_pct = 0.0
+                            p_usdt = 0.0
+                        active_pos_map[s] = {
+                            'side': self.position_side[s],
+                            'entry_price': self.entry_price[s],
+                            'stop_loss': self.stop_loss[s],
+                            'take_profit': self.take_profit[s],
+                            'position_size': self.position_size[s],
+                            'current_pnl_usdt': p_usdt,
+                            'current_pnl_pct': p_pct
+                        }
+                DashboardState.active_positions = active_pos_map
+
                 if self.in_position[sym] and self.pipeline.latest_prices.get(sym, 0.0) > 0:
                     curr_price = self.pipeline.latest_prices[sym]
                     if self.position_side[sym] == "LONG":
@@ -812,7 +838,7 @@ class PrimeSignalBot:
                 import traceback
                 print(f"[RISK MONITOR] Error: {e}")
                 traceback.print_exc()
-            await asyncio.sleep(5.0)
+            await asyncio.sleep(1.0)
 
     async def exit_position(self, symbol, reason):
         # FIX #5: Better fallback for exit_price to avoid 0.0 values
