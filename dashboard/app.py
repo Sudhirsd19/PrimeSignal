@@ -29,6 +29,9 @@ class SymbolRequest(BaseModel):
 class ModeRequest(BaseModel):
     paper_trading: bool
 
+class TimeframeRequest(BaseModel):
+    timeframe: str
+
 # ─── ATTACK-1 FIX: API Key Auth for mutating endpoints ──────────────────────
 # Without this, anyone on the internet can POST /api/change_symbol and spam
 # the bot with symbol changes, triggering WebSocket restarts and CPU spikes.
@@ -119,6 +122,22 @@ async def set_mode(req: ModeRequest):
     mode_name = "PAPER TRADING" if req.paper_trading else "REAL MONEY"
     add_log_message(f"Trading mode switched to {mode_name}")
     return {"status": "success", "message": f"Switched to {mode_name}"}
+
+@app.post("/api/set_timeframe", dependencies=[Depends(verify_dashboard_key)])
+async def set_timeframe(req: TimeframeRequest):
+    tf = req.timeframe.strip().lower()
+    if tf not in ["1m", "5m"]:
+        return {"status": "error", "message": "Invalid timeframe. Choose 1m or 5m."}
+    
+    Config.LTF_TIMEFRAME = tf
+    if bot_instance is not None:
+        try:
+            asyncio.create_task(bot_instance.change_execution_timeframe(tf))
+        except Exception as e:
+            print(f"[TIMEFRAME SWITCH] Error: {e}")
+            
+    add_log_message(f"Execution timeframe set to {tf.upper()}")
+    return {"status": "success", "message": f"Timeframe switched to {tf.upper()}"}
 
 @app.post("/api/emergency_stop", dependencies=[Depends(verify_dashboard_key)])
 async def emergency_stop():

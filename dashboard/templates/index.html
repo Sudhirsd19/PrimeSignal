@@ -81,9 +81,13 @@
                         <span id="mode-slider" class="inline-block w-12 h-5 rounded-full bg-indigo-500/20 border border-indigo-400/30 transform transition-all duration-300 translate-x-[60px]"></span>
                     </button>
                 </div>
-                <span class="bg-[#1f2937] text-gray-400 text-xs px-3 py-1.5 rounded-md font-semibold tracking-wide border border-[#374151]">
-                    TIMEFRAME: <span id="header-tf" class="text-blue-400 font-bold">5M / 1H</span>
-                </span>
+                <div class="flex items-center bg-[#1f2937] px-3 py-1.5 rounded-md border border-[#374151] gap-2 text-xs font-semibold text-gray-400">
+                    <span>TIMEFRAME:</span>
+                    <div class="flex bg-[#111827] p-0.5 rounded-md border border-[#374151] gap-1">
+                        <button id="tf-btn-1m" class="px-2 py-0.5 rounded text-[10px] font-extrabold text-gray-400 hover:text-white transition-all cursor-pointer">1M</button>
+                        <button id="tf-btn-5m" class="px-2 py-0.5 rounded text-[10px] font-extrabold bg-blue-500 text-white shadow-sm transition-all cursor-pointer">5M</button>
+                    </div>
+                </div>
                 <span id="ws-status" class="bg-red-500/10 text-red-400 text-xs px-3 py-1.5 rounded-md font-bold tracking-wide border border-red-500/20">
                     STATUS: OFFLINE
                 </span>
@@ -725,10 +729,9 @@
                             symbolSelect.value = state.symbol;
                         }
                         
-                        // Sync timeframe label dynamically
-                        const headerTf = document.getElementById('header-tf');
-                        if (headerTf && state.ltf_timeframe && state.htf_timeframe) {
-                            headerTf.innerText = `${state.ltf_timeframe.toUpperCase()} / ${state.htf_timeframe.toUpperCase()}`;
+                        // Sync timeframe toggle visuals dynamically
+                        if (state.ltf_timeframe) {
+                            updateTimeframeVisuals(state.ltf_timeframe);
                         }
                         
                         // Sync paper trading mode toggle
@@ -1262,6 +1265,50 @@
                 }
             }
         }
+
+        // --- 3.6 TIMEFRAME TOGGLE SWITCH (1M / 5M) ---
+        let currentLTF = '5m';
+        function updateTimeframeVisuals(tf) {
+            currentLTF = tf.toLowerCase();
+            const btn1m = document.getElementById('tf-btn-1m');
+            const btn5m = document.getElementById('tf-btn-5m');
+            if (btn1m && btn5m) {
+                if (currentLTF === '1m') {
+                    btn1m.className = "px-2 py-0.5 rounded text-[10px] font-extrabold bg-blue-500 text-white shadow-sm transition-all cursor-pointer";
+                    btn5m.className = "px-2 py-0.5 rounded text-[10px] font-extrabold text-gray-400 hover:text-white transition-all cursor-pointer";
+                } else {
+                    btn5m.className = "px-2 py-0.5 rounded text-[10px] font-extrabold bg-blue-500 text-white shadow-sm transition-all cursor-pointer";
+                    btn1m.className = "px-2 py-0.5 rounded text-[10px] font-extrabold text-gray-400 hover:text-white transition-all cursor-pointer";
+                }
+            }
+        }
+
+        async function requestTimeframeChange(tf) {
+            if (tf === currentLTF) return;
+            console.log("Requesting execution timeframe switch to: " + tf.toUpperCase());
+            const chartLoadingEl = document.getElementById('chart-loading');
+            if (chartLoadingEl) chartLoadingEl.classList.remove('hidden');
+            try {
+                const response = await fetch('/api/set_timeframe', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ timeframe: tf })
+                });
+                if (response.ok) {
+                    updateTimeframeVisuals(tf);
+                    historyLoaded = false; // Reset history load flag to pull new LTF bars
+                }
+            } catch (err) {
+                console.error("Error requesting timeframe change:", err);
+            } finally {
+                if (chartLoadingEl) chartLoadingEl.classList.add('hidden');
+            }
+        }
+
+        const tfBtn1m = document.getElementById('tf-btn-1m');
+        const tfBtn5m = document.getElementById('tf-btn-5m');
+        if (tfBtn1m) tfBtn1m.addEventListener('click', () => requestTimeframeChange('1m'));
+        if (tfBtn5m) tfBtn5m.addEventListener('click', () => requestTimeframeChange('5m'));
 
         document.getElementById('mode-toggle-btn').addEventListener('click', async () => {
             const nextMode = !isPaperTrading;

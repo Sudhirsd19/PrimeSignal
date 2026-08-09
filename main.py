@@ -985,6 +985,32 @@ class PrimeSignalBot:
         else:
             DashboardState.ml_confidence = 0.5
 
+    async def change_execution_timeframe(self, new_tf):
+        new_tf = new_tf.lower()
+        if new_tf not in ['1m', '5m']:
+            return
+        add_log_message(f"⏱️ Switching execution timeframe to {new_tf.upper()}...")
+        Config.LTF_TIMEFRAME = new_tf
+        
+        # Warm up LTF historical candles for the new timeframe across all symbols
+        for sym in Config.SUPPORTED_SYMBOLS:
+            ltf_ohlcv = await self.execution.fetch_ohlcv(
+                symbol=sym,
+                timeframe=new_tf,
+                limit=500
+            )
+            if ltf_ohlcv:
+                self.pipeline.ltf_candles[sym] = ltf_ohlcv
+                if self.ml_models[sym] is not None:
+                    df = prepare_dataframe(ltf_ohlcv)
+                    self.ml_models[sym].train(df)
+        
+        await self.pipeline.restart_streams()
+        sym = Config.SYMBOL
+        DashboardState.ltf_timeframe = new_tf
+        DashboardState.chart_history = self.pipeline.ltf_candles[sym][-100:] if self.pipeline.ltf_candles[sym] else []
+        add_log_message(f"✅ Execution timeframe switched to {new_tf.upper()}. Chart & signals active.")
+
     async def shutdown(self):
         add_log_message("Shutting down exchange sessions gracefully...")
         await self.execution.close()

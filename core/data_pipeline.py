@@ -89,6 +89,19 @@ class RealTimeDataPipeline:
         
         self.websocket_task = asyncio.create_task(self._websocket_loop(url))
 
+    async def restart_streams(self):
+        """Restarts the websocket connection with updated LTF/HTF streams."""
+        if self.websocket_task and not self.websocket_task.done():
+            self.websocket_active = False
+            if self.current_websocket:
+                try:
+                    await self.current_websocket.close()
+                except Exception:
+                    pass
+            self.websocket_task.cancel()
+            await asyncio.sleep(0.5)
+        await self.start()
+
     async def _websocket_loop(self, url):
         self.websocket_active = True
         print(f"[DATA] Connecting to Binance WebSocket feed...")
