@@ -940,8 +940,15 @@ class PrimeSignalBot:
                     await self.exit_position(sym, "EMERGENCY_CLOSE_ALL")
                     closed_symbols.append(sym)
                 except Exception as e:
+                    import traceback
                     add_log_message(f"[{sym}] Error closing position during emergency stop: {e}")
+                    traceback.print_exc()
         
+        DashboardState.active_positions = {}
+        DashboardState.in_position = False
+        DashboardState.position_side = "HOLD"
+        self.save_state()
+
         count = len(closed_symbols)
         msg = f"Emergency stop executed: Closed {count} active positions ({', '.join(closed_symbols) if closed_symbols else 'None'})."
         add_log_message(f"🚨 {msg}")
@@ -1006,26 +1013,42 @@ class PrimeSignalBot:
                 self.cluster_risk_penalty = False
 
             # Update relaxed cooldowns
-            if metadata.get('mode') == 'RELAXED' and is_loss:
+            pos_mode = self.position_mode.get(symbol, 'STRICT')
+            if pos_mode == 'RELAXED' and is_loss:
                 self.relaxed_losses += 1
                 if self.relaxed_losses >= 2:
                     self.relaxed_disabled_until = time.time() + 7200
                     add_log_message("🚨 [SAFETY] 2 relaxed losses. Relaxed mode disabled for 2 hours.")
                     self.relaxed_losses = 0
-            elif not is_loss and metadata.get('mode') == 'RELAXED':
+            elif not is_loss and pos_mode == 'RELAXED':
                 self.relaxed_losses = 0
 
             self.in_position[symbol] = False
             self.position_side[symbol] = "HOLD"
             self.position_size[symbol] = 0.0
-            
+            self.entry_price[symbol] = 0.0
+            self.stop_loss[symbol] = 0.0
+            self.take_profit[symbol] = 0.0
+            self.take_profit_1r[symbol] = 0.0
+            self.take_profit_2r[symbol] = 0.0
+            self.partial_tp_taken[symbol] = False
+            self.tp2_taken[symbol] = False
+
+            if symbol in DashboardState.active_positions:
+                del DashboardState.active_positions[symbol]
+
             if symbol == Config.SYMBOL:
                 DashboardState.in_position = False
                 DashboardState.position_side = "HOLD"
+                DashboardState.entry_price = 0.0
+                DashboardState.stop_loss = 0.0
+                DashboardState.take_profit = 0.0
+                DashboardState.current_pnl_pct = 0.0
+                DashboardState.current_pnl_usdt = 0.0
 
             self.save_state()
             await self.notifier.send_message(
-                f"🚨 *{symbol} LIQUIDATED ({reason})*\nExit Price: {exit_price:.2f}\nPnL: {pnl_pct:+.2f}% ({pnl_usdt:+.2f} USDT)"
+                f"🚨 *{symbol} CLOSED ({reason})*\nExit Price: {exit_price:.2f}\nPnL: {pnl_pct:+.2f}% ({pnl_usdt:+.2f} USDT)"
             )
 
     async def change_bot_symbol(self, new_symbol):
