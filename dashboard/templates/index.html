@@ -1623,19 +1623,21 @@
 
         connectWS();
         
-        // Watchdog & Ping interval: checks every 2s for active connection and automatic reconnect
+        let reconnectPending = false;
+        
+        // Watchdog: checks every 2s for stale connection
         setInterval(() => {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 if (Date.now() - lastWsMsgTime > 5000) {
-                    console.warn("WebSocket stream silent for > 5s. Forcing automatic reconnection...");
+                    console.warn("WebSocket stream silent for > 5s. Closing for reconnect...");
                     try { ws.close(); } catch(e) {}
-                    connectWS();
                 } else {
                     try { ws.send("ping"); } catch (e) {}
                 }
-            } else if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-                console.log("WebSocket disconnected. Reconnecting...");
-                connectWS();
+            } else if (!reconnectPending && (!ws || ws.readyState === WebSocket.CLOSED)) {
+                console.log("WebSocket dead. Triggering reconnect...");
+                reconnectPending = true;
+                setTimeout(() => { reconnectPending = false; connectWS(); }, 1000);
             }
         }, 2000);
     </script>

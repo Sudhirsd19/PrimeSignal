@@ -38,6 +38,7 @@ class RiskManager:
         
         if position_value_usdt > account_equity:
             # De-leverage size to maximum possible cash balance with a 0.1% safety buffer to prevent rounding issues
+            if entry_price <= 0: return 0.0
             position_size = (account_equity * 0.999) / entry_price
             print(f"[RISK] Position size capped at maximum cash balance: {position_size:.6f}")
             
@@ -53,7 +54,10 @@ class RiskManager:
             return True
             
         pnl = current_equity - self.daily_starting_equity
-        self.current_drawdown_pct = (pnl / self.daily_starting_equity) * 100.0
+        if self.daily_starting_equity <= 0:
+            self.current_drawdown_pct = 0.0
+        else:
+            self.current_drawdown_pct = (pnl / self.daily_starting_equity) * 100.0
         
         # Check if max drawdown is exceeded (drawdown is negative PnL)
         if self.current_drawdown_pct <= -Config.MAX_DAILY_LOSS_PCT:

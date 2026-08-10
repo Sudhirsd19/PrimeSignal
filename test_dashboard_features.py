@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 from fastapi.testclient import TestClient
-from dashboard.app import app, DashboardState
+from dashboard.app import app, DashboardState, _DASHBOARD_SECRET
 import websockets
 import time
 import threading
@@ -11,6 +11,7 @@ import uvicorn
 def run_tests():
     client = TestClient(app)
     results = []
+    auth_headers = {"X-API-Key": _DASHBOARD_SECRET}
 
     # 1. Test Dashboard UI Load
     res = client.get("/")
@@ -20,7 +21,7 @@ def run_tests():
         results.append("FAIL: UI Load (GET /)")
 
     # 2. Test API State
-    res = client.get("/api/state")
+    res = client.get("/api/state", headers=auth_headers)
     if res.status_code == 200:
         data = res.json()
         if "latest_price" in data and "active_positions" in data:
@@ -31,7 +32,7 @@ def run_tests():
         results.append(f"FAIL: API State (GET /api/state) - Status {res.status_code}")
 
     # 3. Test API Analytics
-    res = client.get("/api/analytics")
+    res = client.get("/api/analytics", headers=auth_headers)
     if res.status_code == 200:
         data = res.json()
         if "wins" in data and "win_rate" in data:
@@ -42,7 +43,7 @@ def run_tests():
         results.append(f"FAIL: API Analytics (GET /api/analytics) - Status {res.status_code}")
 
     # 4. Test Emergency Stop
-    res = client.post("/api/emergency_stop")
+    res = client.post("/api/emergency_stop", headers=auth_headers)
     if res.status_code == 200:
         if os.path.exists("KILL_SWITCH"):
             results.append("PASS: Emergency Stop (POST /api/emergency_stop) - File created")
@@ -53,14 +54,14 @@ def run_tests():
          results.append(f"FAIL: Emergency Stop (POST /api/emergency_stop) - Status {res.status_code}")
 
     # 5. Test Mode Switch
-    res = client.post("/api/set_mode", json={"paper_trading": True})
+    res = client.post("/api/set_mode", json={"paper_trading": True}, headers=auth_headers)
     if res.status_code == 200:
         results.append("PASS: Set Mode (POST /api/set_mode)")
     else:
         results.append(f"FAIL: Set Mode (POST /api/set_mode) - Status {res.status_code}")
 
     # 6. Test Symbol Change
-    res = client.post("/api/change_symbol", json={"symbol": "ETH/USDT"})
+    res = client.post("/api/change_symbol", json={"symbol": "ETH/USDT"}, headers=auth_headers)
     if res.status_code == 200 and DashboardState.symbol_change_requested == "ETH/USDT":
         results.append("PASS: Change Symbol (POST /api/change_symbol)")
     else:
@@ -75,13 +76,20 @@ def run_tests():
         "condition": "Test Condition",
         "time": int(time.time() * 1000)
     })
-    res = client.get("/api/trades")
+    res = client.get("/api/trades", headers=auth_headers)
     # 8. Test Lock Profit API
-    res = client.post("/api/lock_profit", json={"symbol": "BTC/USDT"})
+    res = client.post("/api/lock_profit", json={"symbol": "BTC/USDT"}, headers=auth_headers)
     if res.status_code == 200:
         results.append("PASS: Lock Profit API (POST /api/lock_profit)")
     else:
         results.append(f"FAIL: Lock Profit API (POST /api/lock_profit) - Status {res.status_code}")
+
+    # 9. Test Auth Rejection (no key)
+    res_no_auth = client.get("/api/state")
+    if res_no_auth.status_code == 403:
+        results.append("PASS: Auth Rejection (GET /api/state without key)")
+    else:
+        results.append(f"FAIL: Auth Rejection - Expected 403, got {res_no_auth.status_code}")
 
     print("\n--- DASHBOARD TESTING RESULTS ---")
     for r in results:

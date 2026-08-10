@@ -111,7 +111,7 @@ class ExecutionEngine:
         if symbol is None:
             symbol = Config.SYMBOL
         if timeframe is None:
-            timeframe = Config.TIMEFRAME
+            timeframe = Config.LTF_TIMEFRAME
         return await self.execute_with_retry(self.public_client.fetch_ohlcv, symbol, timeframe, None, limit)
 
     # ── Feature 1: Order fill confirmation ───────────────────────────────

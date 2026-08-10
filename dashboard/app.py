@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import secrets
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -36,7 +37,9 @@ class TimeframeRequest(BaseModel):
 # Without this, anyone on the internet can POST /api/change_symbol and spam
 # the bot with symbol changes, triggering WebSocket restarts and CPU spikes.
 # Set DASHBOARD_SECRET env var on Render. Omit to disable auth in dev mode.
-_DASHBOARD_SECRET = os.getenv("DASHBOARD_SECRET", "")
+_DASHBOARD_SECRET = os.getenv("DASHBOARD_SECRET") or secrets.token_hex(32)
+if not os.getenv("DASHBOARD_SECRET"):
+    print(f"[SECURITY] Auto-generated dashboard secret: {_DASHBOARD_SECRET}")
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 async def verify_dashboard_key(key: str = Depends(_api_key_header)):
@@ -150,8 +153,10 @@ async def emergency_stop():
         except Exception:
             pass
         
-        with open("KILL_SWITCH", "w") as f:
-            f.write("Triggered via API")
+        def _write_kill_switch():
+            with open("KILL_SWITCH", "w") as f:
+                f.write("Triggered via API")
+        await asyncio.to_thread(_write_kill_switch)
             
         closed_count = 0
         msg = "Emergency stop initiated."
@@ -194,20 +199,24 @@ async def lock_profit(req: LockProfitRequest):
     else:
         return {"status": "error", "message": msg}
 
-@app.get("/api/analytics")
+@app.get("/api/analytics", dependencies=[Depends(verify_dashboard_key)])
 async def get_analytics():
     """Fetch trade logs from local JSONL file and aggregate analytics for the UI."""
     try:
         log_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'trade_logs.jsonl')
         trades = []
         if os.path.exists(log_file):
-            with open(log_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    if line.strip():
-                        try:
-                            trades.append(json.loads(line))
-                        except:
-                            pass
+            def _read_logs():
+                loaded = []
+                with open(log_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if line.strip():
+                            try:
+                                loaded.append(json.loads(line))
+                            except:
+                                pass
+                return loaded
+            trades = await asyncio.to_thread(_read_logs)
             
         wins = 0
         losses = 0
@@ -249,7 +258,7 @@ async def get_analytics():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-@app.get("/api/state")
+@app.get("/api/state", dependencies=[Depends(verify_dashboard_key)])
 async def get_state():
     """Rest API endpoint for current state."""
     return {
@@ -270,7 +279,7 @@ async def get_state():
         "signal_progress": DashboardState.signal_progress
     }
 
-@app.get("/api/trades")
+@app.get("/api/trades", dependencies=[Depends(verify_dashboard_key)])
 async def get_trades():
     return DashboardState.trades
 
@@ -289,10 +298,10 @@ async def websocket_endpoint(websocket: WebSocket):
             if data == "ping":
                 await websocket.send_text("pong")
     except WebSocketDisconnect:
-        DashboardState.active_websockets.remove(websocket)
+        DashboardState.active_websockets.discard(websocket)
     except Exception:
         if websocket in DashboardState.active_websockets:
-            DashboardState.active_websockets.remove(websocket)
+            DashboardState.active_websockets.discard(websocket)
 
 async def send_state_to_ws(websocket):
     """Sends current state dict as JSON to a specific WebSocket client."""
@@ -334,12 +343,15 @@ async def broadcast_state_loop():
         if DashboardState.active_websockets:
             # Create a copy of the set to avoid modification errors during iteration
             sockets = list(DashboardState.active_websockets)
-            for ws in sockets:
+            
+            async def _safe_send(ws):
                 try:
                     await send_state_to_ws(ws)
                 except Exception as e:
                     print(f"[WS] Broadcast error, dropping client: {e}")
                     DashboardState.active_websockets.discard(ws)
+
+            await asyncio.gather(*[_safe_send(ws) for ws in sockets])
         await asyncio.sleep(0.5) # Update twice per second (500ms live stream)
 
 @app.on_event("startup")
