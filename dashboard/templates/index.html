@@ -699,6 +699,7 @@
         let ws;
         let historyLoaded = false;
         let currentChartSymbol = "";
+        let lastWsMsgTime = Date.now();
         
         function connectWS() {
             try {
@@ -717,6 +718,7 @@
                 };
                 
                 ws.onmessage = (event) => {
+                    lastWsMsgTime = Date.now();
                     try {
                         if (event.data === 'pong') {
                             return;
@@ -1100,7 +1102,7 @@
                                     ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20 shadow-[0_0_8px_rgba(16,185,129,0.15)]" 
                                     : "bg-rose-500/10 text-rose-400 border-rose-500/20 shadow-[0_0_8px_rgba(244,63,94,0.15)]";
                                 const entryP = pos.entry_price || 0;
-                                const liveP = pos.live_price || ((state.symbol === sym && state.latest_price) ? state.latest_price : entryP);
+                                const liveP = (state.latest_prices && state.latest_prices[sym]) ? state.latest_prices[sym] : (pos.live_price || ((state.symbol === sym && state.latest_price) ? state.latest_price : entryP));
                                 const slP = pos.stop_loss || 0;
                                 
                                 // Calculate exact PnL Percentage directly from Live Price vs Entry Price
@@ -1621,16 +1623,21 @@
 
         connectWS();
         
-        // Ping to keep connection active
+        // Watchdog & Ping interval: checks every 2s for active connection and automatic reconnect
         setInterval(() => {
             if (ws && ws.readyState === WebSocket.OPEN) {
-                try {
-                    ws.send("ping");
-                } catch (e) {
-                    console.error("Error sending ping:", e);
+                if (Date.now() - lastWsMsgTime > 5000) {
+                    console.warn("WebSocket stream silent for > 5s. Forcing automatic reconnection...");
+                    try { ws.close(); } catch(e) {}
+                    connectWS();
+                } else {
+                    try { ws.send("ping"); } catch (e) {}
                 }
+            } else if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+                console.log("WebSocket disconnected. Reconnecting...");
+                connectWS();
             }
-        }, 15000);
+        }, 2000);
     </script>
 </body>
 </html>

@@ -298,6 +298,7 @@ async def send_state_to_ws(websocket):
     """Sends current state dict as JSON to a specific WebSocket client."""
     state_payload = {
         "latest_price": DashboardState.latest_price,
+        "latest_prices": bot_instance.pipeline.latest_prices if (bot_instance and hasattr(bot_instance, 'pipeline')) else {},
         "balance_usdt": DashboardState.balance_usdt,
         "balance_base": DashboardState.balance_base,
         "active_positions": DashboardState.active_positions,
@@ -339,7 +340,7 @@ async def broadcast_state_loop():
                 except Exception as e:
                     print(f"[WS] Broadcast error, dropping client: {e}")
                     DashboardState.active_websockets.discard(ws)
-        await asyncio.sleep(1.0) # Update once per second
+        await asyncio.sleep(0.5) # Update twice per second (500ms live stream)
 
 @app.on_event("startup")
 async def startup_event():
