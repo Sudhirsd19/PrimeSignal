@@ -868,24 +868,44 @@ class PrimeSignalBot:
                         
                         target_1r = self.take_profit_1r[s] if self.take_profit_1r[s] > 0 else (entry_val + abs(entry_val - sl_val) if is_long else entry_val - abs(entry_val - sl_val))
                         target_2r = self.take_profit_2r[s] if self.take_profit_2r[s] > 0 else (entry_val + 2 * abs(entry_val - sl_val) if is_long else entry_val - 2 * abs(entry_val - sl_val))
+                        final_tp = self.take_profit[s] if self.take_profit[s] > 0 else (entry_val + 3 * abs(entry_val - sl_val) if is_long else entry_val - 3 * abs(entry_val - sl_val))
                         
+                        tp1_hit = self.partial_tp_taken[s]
+                        tp2_hit = self.tp2_taken[s]
+                        
+                        # Dynamic target escalation upon hitting targets
+                        if not tp1_hit:
+                            active_target = target_1r
+                            active_target_name = "TP1 (1R)"
+                            target_stage = 1
+                        elif not tp2_hit:
+                            active_target = target_2r
+                            active_target_name = "TP2 (2R)"
+                            target_stage = 2
+                        else:
+                            active_target = final_tp
+                            active_target_name = "Runner Target"
+                            target_stage = 3
+
                         active_pos_map[s] = {
                             'side': self.position_side[s],
                             'entry_price': entry_val,
                             'stop_loss': sl_val,
-                            'take_profit': target_1r,
+                            'take_profit': active_target,
                             'target_1r': target_1r,
                             'target_2r': target_2r,
-                            'final_target': self.take_profit[s],
+                            'final_target': final_tp,
+                            'active_target': active_target,
+                            'active_target_name': active_target_name,
+                            'target_stage': target_stage,
                             'position_size': self.position_size[s],
                             'current_pnl_usdt': p_usdt,
                             'current_pnl_pct': p_pct,
-                            'tp1_hit': self.partial_tp_taken[s],
-                            'tp2_hit': self.tp2_taken[s],
+                            'tp1_hit': tp1_hit,
+                            'tp2_hit': tp2_hit,
                             'profit_locked': is_profit_locked,
                             'live_price': live_p
                         }
-                DashboardState.active_positions = active_pos_map
                 DashboardState.active_positions = active_pos_map
 
                 if self.in_position[sym] and self.pipeline.latest_prices.get(sym, 0.0) > 0:
@@ -907,6 +927,24 @@ class PrimeSignalBot:
                 print(f"[RISK MONITOR] Error: {e}")
                 traceback.print_exc()
             await asyncio.sleep(1.0)
+
+    async def emergency_close_all(self):
+        """Instantly close all open positions across all supported symbols."""
+        closed_symbols = []
+        add_log_message("🚨 EMERGENCY CLOSE ALL TRIGGERED: Exiting all active positions immediately...")
+        for sym in Config.SUPPORTED_SYMBOLS:
+            if self.in_position[sym]:
+                try:
+                    await self.exit_position(sym, "EMERGENCY_CLOSE_ALL")
+                    closed_symbols.append(sym)
+                except Exception as e:
+                    add_log_message(f"[{sym}] Error closing position during emergency stop: {e}")
+        
+        count = len(closed_symbols)
+        msg = f"Emergency stop executed: Closed {count} active positions ({', '.join(closed_symbols) if closed_symbols else 'None'})."
+        add_log_message(f"🚨 {msg}")
+        await self.notifier.send_message(f"🚨 *EMERGENCY CLOSE ALL EXECUTED*\nClosed {count} active positions.")
+        return count, msg
 
     async def exit_position(self, symbol, reason):
         # FIX #5: Better fallback for exit_price to avoid 0.0 values

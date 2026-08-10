@@ -1117,22 +1117,51 @@
                                 
                                 const entryP = pos.entry_price || 0;
                                 const slP = pos.stop_loss || 0;
-                                const target1P = pos.target_1r || pos.take_profit || (isLong ? entryP * 1.01 : entryP * 0.99);
+                                const target1P = pos.target_1r || (isLong ? entryP * 1.01 : entryP * 0.99);
+                                const target2P = pos.target_2r || (isLong ? entryP * 1.02 : entryP * 0.98);
+                                const finalTargetP = pos.final_target || (isLong ? entryP * 1.05 : entryP * 0.95);
                                 const liveP = pos.live_price || ((state.symbol === sym && state.latest_price) ? state.latest_price : entryP);
+                                
+                                const stage = pos.target_stage || (pos.tp2_hit ? 3 : (pos.tp1_hit ? 2 : 1));
+                                const activeTargetP = pos.active_target || (stage === 1 ? target1P : (stage === 2 ? target2P : finalTargetP));
+                                const activeTargetName = pos.active_target_name || (stage === 1 ? "TP1 (1R)" : (stage === 2 ? "TP2 (2R)" : "Runner"));
                                 
                                 // Check if profit is locked
                                 const isProfitLocked = pos.profit_locked || (isLong ? slP >= entryP : (slP <= entryP && slP > 0));
                                 
-                                // Calculate Target 1 progress percentage (0% to 100%)
+                                // Calculate Progress towards the currently active target stage
                                 let targetProgress = 0;
+                                let stageStartP = entryP;
+                                let stageEndP = target1P;
+                                if (stage === 1) {
+                                    stageStartP = entryP;
+                                    stageEndP = target1P;
+                                } else if (stage === 2) {
+                                    stageStartP = target1P;
+                                    stageEndP = target2P;
+                                } else {
+                                    stageStartP = target2P;
+                                    stageEndP = finalTargetP;
+                                }
+                                
                                 if (isLong) {
-                                    if (target1P > entryP) {
-                                        targetProgress = Math.min(Math.max(((liveP - entryP) / (target1P - entryP)) * 100, 0), 100);
+                                    if (stageEndP > stageStartP) {
+                                        targetProgress = Math.min(Math.max(((liveP - stageStartP) / (stageEndP - stageStartP)) * 100, 0), 100);
                                     }
                                 } else {
-                                    if (entryP > target1P) {
-                                        targetProgress = Math.min(Math.max(((entryP - liveP) / (entryP - target1P)) * 100, 0), 100);
+                                    if (stageStartP > stageEndP) {
+                                        targetProgress = Math.min(Math.max(((stageStartP - liveP) / (stageStartP - stageEndP)) * 100, 0), 100);
                                     }
+                                }
+                                
+                                // Target stage status badge
+                                let stageBadgeHTML = '';
+                                if (stage === 1) {
+                                    stageBadgeHTML = `<span class="text-[9px] px-1.5 py-0.5 font-bold rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">Target 1 Active</span>`;
+                                } else if (stage === 2) {
+                                    stageBadgeHTML = `<span class="text-[9px] px-1.5 py-0.5 font-extrabold rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse">🎯 TP1 HIT ➔ Target 2 Active</span>`;
+                                } else {
+                                    stageBadgeHTML = `<span class="text-[9px] px-1.5 py-0.5 font-extrabold rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 animate-pulse">🚀 TP2 HIT ➔ Runner Target Active</span>`;
                                 }
                                 
                                 // Lock profit button or locked indicator HTML
@@ -1170,13 +1199,13 @@
                                             <div><span class="text-gray-400">Entry:</span> <span class="text-white terminal-font font-bold">${entryP.toFixed(4)}</span></div>
                                             <div><span class="text-gray-400">Live:</span> <span class="terminal-font font-bold ${pnlClass}">${liveP.toFixed(4)}</span></div>
                                             <div><span class="text-gray-400">SL:</span> <span class="text-red-400 terminal-font font-bold">${slP.toFixed(4)}</span> ${isProfitLocked ? '🔒' : ''}</div>
-                                            <div><span class="text-gray-400">Target (TP1):</span> <span class="text-emerald-400 terminal-font font-bold">${target1P.toFixed(4)}</span> ${pos.tp1_hit ? '🎯' : ''}</div>
+                                            <div><span class="text-gray-400">Target (${activeTargetName}):</span> <span class="text-emerald-400 terminal-font font-bold">${activeTargetP.toFixed(4)}</span> ${stage > 1 ? '🎯' : ''}</div>
                                         </div>
 
-                                        <!-- Target Progress Bar -->
+                                        <!-- Target Progress Bar & Stage Indicator -->
                                         <div class="space-y-1">
-                                            <div class="flex justify-between text-[9px] text-gray-400 font-bold uppercase tracking-wider">
-                                                <span>Target 1 Progress</span>
+                                            <div class="flex justify-between items-center text-[9px] font-bold uppercase tracking-wider">
+                                                ${stageBadgeHTML}
                                                 <span class="${targetProgress >= 100 ? 'text-emerald-400 font-extrabold' : 'text-indigo-400'}">${targetProgress.toFixed(0)}%</span>
                                             </div>
                                             <div class="w-full bg-[#0b0f19] h-1.5 rounded-full overflow-hidden border border-[#1f2937] relative">
@@ -1534,16 +1563,17 @@
             btnEmergency.addEventListener('click', async () => {
                 if(confirm("Are you sure you want to execute an emergency close on ALL active positions?")) {
                     try {
+                        const apiKey = localStorage.getItem('dashboard_api_key') || '';
                         const response = await fetch('/api/emergency_stop', {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json',
-                                'X-Dashboard-Key': dashboardKey
+                                'X-API-Key': apiKey
                             }
                         });
                         const data = await response.json();
                         if(data.status === 'success') {
-                            alert("Emergency stop triggered successfully. Closing positions...");
+                            alert("🚨 EMERGENCY CLOSE SUCCESSFUL: " + data.message);
                         } else {
                             alert("Error: " + data.message);
                         }

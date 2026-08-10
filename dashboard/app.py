@@ -141,17 +141,26 @@ async def set_timeframe(req: TimeframeRequest):
 
 @app.post("/api/emergency_stop", dependencies=[Depends(verify_dashboard_key)])
 async def emergency_stop():
-    """Trigger the emergency kill switch via Firebase or local file."""
+    """Trigger emergency close for all open positions."""
     try:
-        firebase = FirebaseManager()
-        if firebase.is_connected:
-            firebase.db.collection("control").document("kill_switch").set({"active": True})
+        try:
+            firebase = FirebaseManager()
+            if firebase.is_connected:
+                firebase.db.collection("control").document("kill_switch").set({"active": True})
+        except Exception:
+            pass
         
         with open("KILL_SWITCH", "w") as f:
             f.write("Triggered via API")
             
-        add_log_message("🚨 EMERGENCY KILL SWITCH TRIGGERED VIA API 🚨")
-        return {"status": "success", "message": "Kill switch activated. All positions will be exited."}
+        closed_count = 0
+        msg = "Emergency stop initiated."
+        if bot_instance is not None:
+            closed_count, msg = await bot_instance.emergency_close_all()
+        else:
+            add_log_message("🚨 EMERGENCY KILL SWITCH TRIGGERED VIA API 🚨")
+            
+        return {"status": "success", "message": msg, "closed_count": closed_count}
     except Exception as e:
         return {"status": "error", "message": f"Failed to activate kill switch: {str(e)}"}
 
