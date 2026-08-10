@@ -751,7 +751,7 @@ class PrimeSignalBot:
                             
                             # TP1 (50%)
                             if not self.partial_tp_taken[symbol] and curr_price >= self.take_profit_1r[symbol]:
-                                add_log_message(f"[{symbol}] TP1 (1R) hit. Booking 50% profit.")
+                                add_log_message(f"[{symbol}] 🎯 Target 1 (1R) hit! Booking 50% profit.")
                                 tp1_size = self.position_size[symbol] * (0.50 / 1.0)
                                 if self.has_keys:
                                     await self.execution.place_order('sell', 'market', tp1_size, symbol=symbol, is_exit_order=True)
@@ -760,14 +760,18 @@ class PrimeSignalBot:
                                 self.position_size[symbol] -= tp1_size
                                 self.partial_tp_taken[symbol] = True
                                 
-                                if self.entry_price[symbol] > self.stop_loss[symbol]:
-                                    self.stop_loss[symbol] = self.entry_price[symbol]
-                                    if symbol == Config.SYMBOL: DashboardState.stop_loss = self.entry_price[symbol]
-                                    add_log_message(f"[{symbol}] Stop Loss moved to breakeven.")
+                                # PROFIT LOCK: Guarantee profit by setting Stop Loss above Entry
+                                r_dist = abs(self.entry_price[symbol] - self.stop_loss[symbol])
+                                profit_lock_sl = self.entry_price[symbol] + (0.2 * r_dist) if r_dist > 0 else self.entry_price[symbol] * 1.001
+                                if profit_lock_sl > self.stop_loss[symbol]:
+                                    self.stop_loss[symbol] = profit_lock_sl
+                                    if symbol == Config.SYMBOL: DashboardState.stop_loss = profit_lock_sl
+                                    add_log_message(f"[{symbol}] 🔒 PROFIT LOCKED at Stop Loss: {profit_lock_sl:.4f}")
+                                    await self.notifier.send_message(f"🔒 *PROFIT LOCKED ({symbol})*\\nTarget 1 Hit! 50% profit booked & SL moved to locked profit level: {profit_lock_sl:.4f}")
                                     
                             # TP2 (30%)
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price >= self.take_profit_2r[symbol]:
-                                add_log_message(f"[{symbol}] TP2 hit. Booking 30% profit. Runner trails.")
+                                add_log_message(f"[{symbol}] 🎯 Target 2 hit! Booking 30% profit. Runner trails.")
                                 tp2_size = self.position_size[symbol] * (0.30 / 0.50)
                                 if self.has_keys:
                                     await self.execution.place_order('sell', 'market', tp2_size, symbol=symbol, is_exit_order=True)
@@ -792,7 +796,7 @@ class PrimeSignalBot:
                             
                             # TP1 (50%)
                             if not self.partial_tp_taken[symbol] and curr_price <= self.take_profit_1r[symbol]:
-                                add_log_message(f"[{symbol}] TP1 (1R) hit. Booking 50% profit.")
+                                add_log_message(f"[{symbol}] 🎯 Target 1 (1R) hit! Booking 50% profit.")
                                 tp1_size = self.position_size[symbol] * (0.50 / 1.0)
                                 if self.has_keys:
                                     await self.execution.place_order('buy', 'market', tp1_size, symbol=symbol, is_exit_order=True)
@@ -801,14 +805,18 @@ class PrimeSignalBot:
                                 self.position_size[symbol] -= tp1_size
                                 self.partial_tp_taken[symbol] = True
                                 
-                                if self.entry_price[symbol] < self.stop_loss[symbol]:
-                                    self.stop_loss[symbol] = self.entry_price[symbol]
-                                    if symbol == Config.SYMBOL: DashboardState.stop_loss = self.entry_price[symbol]
-                                    add_log_message(f"[{symbol}] Stop Loss moved to breakeven.")
+                                # PROFIT LOCK: Guarantee profit by setting Stop Loss below Entry
+                                r_dist = abs(self.entry_price[symbol] - self.stop_loss[symbol])
+                                profit_lock_sl = self.entry_price[symbol] - (0.2 * r_dist) if r_dist > 0 else self.entry_price[symbol] * 0.999
+                                if profit_lock_sl < self.stop_loss[symbol]:
+                                    self.stop_loss[symbol] = profit_lock_sl
+                                    if symbol == Config.SYMBOL: DashboardState.stop_loss = profit_lock_sl
+                                    add_log_message(f"[{symbol}] 🔒 PROFIT LOCKED at Stop Loss: {profit_lock_sl:.4f}")
+                                    await self.notifier.send_message(f"🔒 *PROFIT LOCKED ({symbol})*\\nTarget 1 Hit! 50% profit booked & SL moved to locked profit level: {profit_lock_sl:.4f}")
                                     
                             # TP2 (30%)
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price <= self.take_profit_2r[symbol]:
-                                add_log_message(f"[{symbol}] TP2 hit. Booking 30% profit. Runner trails.")
+                                add_log_message(f"[{symbol}] 🎯 Target 2 hit! Booking 30% profit. Runner trails.")
                                 tp2_size = self.position_size[symbol] * (0.30 / 0.50)
                                 if self.has_keys:
                                     await self.execution.place_order('buy', 'market', tp2_size, symbol=symbol, is_exit_order=True)
@@ -852,15 +860,32 @@ class PrimeSignalBot:
                         else:
                             p_pct = 0.0
                             p_usdt = 0.0
+                        
+                        is_long = (self.position_side[s] == "LONG")
+                        sl_val = self.stop_loss[s]
+                        entry_val = self.entry_price[s]
+                        is_profit_locked = (is_long and sl_val >= entry_val) or (not is_long and sl_val <= entry_val and sl_val > 0)
+                        
+                        target_1r = self.take_profit_1r[s] if self.take_profit_1r[s] > 0 else (entry_val + abs(entry_val - sl_val) if is_long else entry_val - abs(entry_val - sl_val))
+                        target_2r = self.take_profit_2r[s] if self.take_profit_2r[s] > 0 else (entry_val + 2 * abs(entry_val - sl_val) if is_long else entry_val - 2 * abs(entry_val - sl_val))
+                        
                         active_pos_map[s] = {
                             'side': self.position_side[s],
-                            'entry_price': self.entry_price[s],
-                            'stop_loss': self.stop_loss[s],
-                            'take_profit': self.take_profit[s],
+                            'entry_price': entry_val,
+                            'stop_loss': sl_val,
+                            'take_profit': target_1r,
+                            'target_1r': target_1r,
+                            'target_2r': target_2r,
+                            'final_target': self.take_profit[s],
                             'position_size': self.position_size[s],
                             'current_pnl_usdt': p_usdt,
-                            'current_pnl_pct': p_pct
+                            'current_pnl_pct': p_pct,
+                            'tp1_hit': self.partial_tp_taken[s],
+                            'tp2_hit': self.tp2_taken[s],
+                            'profit_locked': is_profit_locked,
+                            'live_price': live_p
                         }
+                DashboardState.active_positions = active_pos_map
                 DashboardState.active_positions = active_pos_map
 
                 if self.in_position[sym] and self.pipeline.latest_prices.get(sym, 0.0) > 0:
@@ -1010,6 +1035,42 @@ class PrimeSignalBot:
         DashboardState.ltf_timeframe = new_tf
         DashboardState.chart_history = self.pipeline.ltf_candles[sym][-100:] if self.pipeline.ltf_candles[sym] else []
         add_log_message(f"✅ Execution timeframe switched to {new_tf.upper()}. Chart & signals active.")
+
+    def lock_position_profit(self, symbol):
+        """Manually lock profit for an active position by adjusting Stop Loss."""
+        if not self.in_position[symbol]:
+            return False, f"No active position open for {symbol}."
+            
+        live_p = self.pipeline.latest_prices.get(symbol, self.entry_price[symbol])
+        entry_p = self.entry_price[symbol]
+        sl_p = self.stop_loss[symbol]
+        is_long = (self.position_side[symbol] == "LONG")
+        r_dist = abs(entry_p - sl_p)
+        
+        if is_long:
+            if live_p > entry_p:
+                # Lock at least breakeven + 0.15R or 50% of current unrealized profit
+                lock_delta = max(0.15 * r_dist, (live_p - entry_p) * 0.5)
+                new_sl = max(sl_p, entry_p + lock_delta)
+            else:
+                new_sl = max(sl_p, entry_p)
+            self.stop_loss[symbol] = new_sl
+            if symbol == Config.SYMBOL:
+                DashboardState.stop_loss = new_sl
+        else:
+            if live_p < entry_p:
+                lock_delta = max(0.15 * r_dist, (entry_p - live_p) * 0.5)
+                new_sl = min(sl_p, entry_p - lock_delta)
+            else:
+                new_sl = min(sl_p, entry_p)
+            self.stop_loss[symbol] = new_sl
+            if symbol == Config.SYMBOL:
+                DashboardState.stop_loss = new_sl
+                
+        self.save_state()
+        msg = f"🔒 Profit locked for {symbol}! New Stop Loss set to {self.stop_loss[symbol]:.4f}"
+        add_log_message(f"[{symbol}] {msg}")
+        return True, msg
 
     async def shutdown(self):
         add_log_message("Shutting down exchange sessions gracefully...")

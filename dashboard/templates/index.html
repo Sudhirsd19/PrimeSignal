@@ -1105,35 +1105,89 @@
                                 const pnlClass = pnlUsdt >= 0 ? "text-emerald-400" : "text-rose-400";
                                 const sign = pnlUsdt >= 0 ? '+' : '';
                                 
-                                // Calculate position progress towards SL or TP (Range 5% to 95%)
-                                let posProgress = 50;
-                                const entryP = pos.entry_price || 0;
-                                const slP = pos.stop_loss || 0;
-                                const tpP = pos.take_profit || 0;
-                                const liveP = (state.symbol === sym && state.latest_price) ? state.latest_price : entryP;
-                                if (isLong && tpP > slP) {
-                                    posProgress = Math.min(Math.max(((liveP - slP) / (tpP - slP)) * 100, 5), 95);
-                                } else if (!isLong && slP > tpP) {
-                                    posProgress = Math.min(Math.max(((slP - liveP) / (slP - tpP)) * 100, 5), 95);
+                                // Status Badge for Plus / Minus
+                                let statusBadgeHTML = '';
+                                if (pnlUsdt > 0.001) {
+                                    statusBadgeHTML = `<span class="text-[9px] px-1.5 py-0.5 font-extrabold rounded uppercase tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 shadow-[0_0_8px_rgba(16,185,129,0.3)] animate-pulse">🟢 PROFIT (+${pnlPct.toFixed(2)}%)</span>`;
+                                } else if (pnlUsdt < -0.001) {
+                                    statusBadgeHTML = `<span class="text-[9px] px-1.5 py-0.5 font-extrabold rounded uppercase tracking-wider bg-rose-500/20 text-rose-400 border border-rose-500/40 shadow-[0_0_8px_rgba(244,63,94,0.3)]">🔴 LOSS (${pnlPct.toFixed(2)}%)</span>`;
+                                } else {
+                                    statusBadgeHTML = `<span class="text-[9px] px-1.5 py-0.5 font-bold rounded uppercase tracking-wider bg-slate-500/20 text-slate-300 border border-slate-500/30">⚪ EVEN (0.00%)</span>`;
                                 }
                                 
+                                const entryP = pos.entry_price || 0;
+                                const slP = pos.stop_loss || 0;
+                                const target1P = pos.target_1r || pos.take_profit || (isLong ? entryP * 1.01 : entryP * 0.99);
+                                const liveP = pos.live_price || ((state.symbol === sym && state.latest_price) ? state.latest_price : entryP);
+                                
+                                // Check if profit is locked
+                                const isProfitLocked = pos.profit_locked || (isLong ? slP >= entryP : (slP <= entryP && slP > 0));
+                                
+                                // Calculate Target 1 progress percentage (0% to 100%)
+                                let targetProgress = 0;
+                                if (isLong) {
+                                    if (target1P > entryP) {
+                                        targetProgress = Math.min(Math.max(((liveP - entryP) / (target1P - entryP)) * 100, 0), 100);
+                                    }
+                                } else {
+                                    if (entryP > target1P) {
+                                        targetProgress = Math.min(Math.max(((entryP - liveP) / (entryP - target1P)) * 100, 0), 100);
+                                    }
+                                }
+                                
+                                // Lock profit button or locked indicator HTML
+                                let lockControlHTML = '';
+                                if (isProfitLocked || pos.tp1_hit) {
+                                    lockControlHTML = `
+                                        <div class="bg-amber-500/10 border border-amber-500/30 rounded px-2 py-1 text-[10px] text-amber-300 font-extrabold flex items-center justify-between shadow-[0_0_8px_rgba(245,158,11,0.2)]">
+                                            <span class="flex items-center gap-1">🔒 PROFIT LOCKED</span>
+                                            <span class="text-amber-400 terminal-font">SL @ ${slP.toFixed(4)}</span>
+                                        </div>
+                                    `;
+                                } else if (pnlUsdt > 0) {
+                                    lockControlHTML = `
+                                        <button onclick="event.stopPropagation(); lockProfitForSymbol('${sym}')" class="w-full bg-gradient-to-r from-amber-500/20 to-emerald-500/20 hover:from-amber-500/40 hover:to-emerald-500/40 text-amber-300 border border-amber-500/40 font-extrabold py-1 px-2.5 rounded text-[10px] flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm">
+                                            <span>🔒</span> Lock Profit Now
+                                        </button>
+                                    `;
+                                }
+
                                 const cardHTML = `
                                     <div class="border border-[#1f2937] hover:border-indigo-500/50 p-3.5 rounded-xl bg-[#161f30]/80 backdrop-blur-md hover:bg-[#1f2b45]/90 cursor-pointer transition-all duration-200 flex flex-col gap-2.5 shadow-md hover:shadow-indigo-500/10 group" onclick="selectSymbolFromPosition('${sym}')" title="Click to view ${sym} chart">
                                         <div class="flex justify-between items-center">
-                                            <div class="flex items-center gap-2">
+                                            <div class="flex items-center gap-1.5">
                                                 <span class="font-bold text-white text-sm tracking-wide group-hover:text-indigo-400 transition-colors">${sym}</span>
                                                 <span class="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-300 font-medium border border-indigo-500/20">Chart ↗</span>
                                             </div>
-                                            <span class="text-[10px] px-2.5 py-0.5 font-extrabold rounded-md uppercase tracking-wider border ${sideClass}">${pos.side}</span>
+                                            <div class="flex items-center gap-1.5">
+                                                ${statusBadgeHTML}
+                                                <span class="text-[10px] px-2 py-0.5 font-extrabold rounded-md uppercase tracking-wider border ${sideClass}">${pos.side}</span>
+                                            </div>
                                         </div>
-                                        <div class="flex justify-between text-xs font-semibold">
-                                            <span class="text-gray-400">Entry: <span class="text-white terminal-font font-bold">${pos.entry_price.toFixed(4)}</span></span>
-                                            <span class="text-gray-400">SL: <span class="text-red-400 terminal-font font-bold">${pos.stop_loss.toFixed(4)}</span></span>
+
+                                        <!-- Price & Target Metrics Grid -->
+                                        <div class="grid grid-cols-2 gap-1.5 text-[11px] font-semibold bg-[#0c101c]/60 p-2 rounded-lg border border-[#1f2937]/60">
+                                            <div><span class="text-gray-400">Entry:</span> <span class="text-white terminal-font font-bold">${entryP.toFixed(4)}</span></div>
+                                            <div><span class="text-gray-400">Live:</span> <span class="terminal-font font-bold ${pnlClass}">${liveP.toFixed(4)}</span></div>
+                                            <div><span class="text-gray-400">SL:</span> <span class="text-red-400 terminal-font font-bold">${slP.toFixed(4)}</span> ${isProfitLocked ? '🔒' : ''}</div>
+                                            <div><span class="text-gray-400">Target (TP1):</span> <span class="text-emerald-400 terminal-font font-bold">${target1P.toFixed(4)}</span> ${pos.tp1_hit ? '🎯' : ''}</div>
                                         </div>
-                                        <!-- Risk / Reward Progress Bar -->
-                                        <div class="w-full bg-[#0b0f19] h-1.5 rounded-full overflow-hidden border border-[#1f2937] relative">
-                                            <div class="h-full ${pnlUsdt >= 0 ? 'bg-gradient-to-r from-emerald-500 to-green-400' : 'bg-gradient-to-r from-red-500 to-rose-400'} transition-all duration-500" style="width: ${posProgress.toFixed(1)}%"></div>
+
+                                        <!-- Target Progress Bar -->
+                                        <div class="space-y-1">
+                                            <div class="flex justify-between text-[9px] text-gray-400 font-bold uppercase tracking-wider">
+                                                <span>Target 1 Progress</span>
+                                                <span class="${targetProgress >= 100 ? 'text-emerald-400 font-extrabold' : 'text-indigo-400'}">${targetProgress.toFixed(0)}%</span>
+                                            </div>
+                                            <div class="w-full bg-[#0b0f19] h-1.5 rounded-full overflow-hidden border border-[#1f2937] relative">
+                                                <div class="h-full ${pnlUsdt >= 0 ? 'bg-gradient-to-r from-emerald-500 to-green-400' : 'bg-gradient-to-r from-red-500 to-rose-400'} transition-all duration-500" style="width: ${targetProgress.toFixed(1)}%"></div>
+                                            </div>
                                         </div>
+
+                                        <!-- Lock Profit Control -->
+                                        ${lockControlHTML}
+
+                                        <!-- Running PnL Footer -->
                                         <div class="flex justify-between items-end border-t border-[#1f2937]/80 pt-2">
                                             <span class="text-gray-400 text-[10px] font-bold uppercase tracking-wider">Running PnL</span>
                                             <div class="flex flex-col items-end">
@@ -1501,6 +1555,28 @@
             });
         }
         
+        async function lockProfitForSymbol(sym) {
+            console.log("Requesting profit lock for: " + sym);
+            try {
+                const response = await fetch('/api/lock_profit', {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
+                    },
+                    body: JSON.stringify({ symbol: sym })
+                });
+                const res = await response.json();
+                if (res.status === 'success') {
+                    console.log("Profit locked successfully: " + res.message);
+                } else {
+                    alert("Failed to lock profit: " + (res.message || "Unknown error"));
+                }
+            } catch (err) {
+                console.error("Error locking profit:", err);
+            }
+        }
+
         connectWS();
         
         // Ping to keep connection active

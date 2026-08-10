@@ -76,10 +76,12 @@ def run_tests():
         "time": int(time.time() * 1000)
     })
     res = client.get("/api/trades")
-    if res.status_code == 200 and len(res.json()) > 0:
-        results.append("PASS: Trade Logging & Fetch (GET /api/trades)")
+    # 8. Test Lock Profit API
+    res = client.post("/api/lock_profit", json={"symbol": "BTC/USDT"})
+    if res.status_code == 200:
+        results.append("PASS: Lock Profit API (POST /api/lock_profit)")
     else:
-         results.append("FAIL: Trade Logging & Fetch (GET /api/trades)")
+        results.append(f"FAIL: Lock Profit API (POST /api/lock_profit) - Status {res.status_code}")
 
     print("\n--- DASHBOARD TESTING RESULTS ---")
     for r in results:

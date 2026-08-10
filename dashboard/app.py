@@ -171,6 +171,20 @@ async def update_risk_settings(settings: RiskSettingsUpdate):
     add_log_message(f"⚙️ Risk Settings Updated: {status_str}")
     return {"status": "success", "message": status_str}
 
+class LockProfitRequest(BaseModel):
+    symbol: str
+
+@app.post("/api/lock_profit", dependencies=[Depends(verify_dashboard_key)])
+async def lock_profit(req: LockProfitRequest):
+    if bot_instance is None:
+        return {"status": "error", "message": "Bot instance is not running."}
+    symbol = req.symbol.strip().upper()
+    success, msg = bot_instance.lock_position_profit(symbol)
+    if success:
+        return {"status": "success", "message": msg}
+    else:
+        return {"status": "error", "message": msg}
+
 @app.get("/api/analytics")
 async def get_analytics():
     """Fetch trade logs from local JSONL file and aggregate analytics for the UI."""
