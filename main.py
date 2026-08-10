@@ -850,13 +850,15 @@ class PrimeSignalBot:
                 for s in Config.SUPPORTED_SYMBOLS:
                     if self.in_position[s]:
                         live_p = self.pipeline.latest_prices.get(s, self.entry_price[s])
-                        if live_p > 0 and self.entry_price[s] > 0:
+                        entry_val = self.entry_price[s]
+                        pos_sz = self.position_size[s] if (self.position_size[s] and self.position_size[s] > 0) else 1.0
+                        if live_p > 0 and entry_val > 0:
                             if self.position_side[s] == "LONG":
-                                p_pct = (live_p - self.entry_price[s]) / self.entry_price[s] * 100.0
-                                p_usdt = self.position_size[s] * (live_p - self.entry_price[s])
+                                p_pct = (live_p - entry_val) / entry_val * 100.0
+                                p_usdt = pos_sz * (live_p - entry_val)
                             else:
-                                p_pct = (self.entry_price[s] - live_p) / self.entry_price[s] * 100.0
-                                p_usdt = self.position_size[s] * (self.entry_price[s] - live_p)
+                                p_pct = (entry_val - live_p) / entry_val * 100.0
+                                p_usdt = pos_sz * (entry_val - live_p)
                         else:
                             p_pct = 0.0
                             p_usdt = 0.0

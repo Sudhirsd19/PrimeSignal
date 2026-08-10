@@ -1099,28 +1099,40 @@
                                 const sideClass = isLong 
                                     ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20 shadow-[0_0_8px_rgba(16,185,129,0.15)]" 
                                     : "bg-rose-500/10 text-rose-400 border-rose-500/20 shadow-[0_0_8px_rgba(244,63,94,0.15)]";
-                                const pnlCurr = state.balance_currency || "USDT";
-                                const pnlUsdt = pos.current_pnl_usdt || 0.0;
-                                const pnlPct = pos.current_pnl_pct || 0.0;
-                                const pnlClass = pnlUsdt >= 0 ? "text-emerald-400" : "text-rose-400";
-                                const sign = pnlUsdt >= 0 ? '+' : '';
+                                const entryP = pos.entry_price || 0;
+                                const liveP = pos.live_price || ((state.symbol === sym && state.latest_price) ? state.latest_price : entryP);
+                                const slP = pos.stop_loss || 0;
                                 
-                                // Status Badge for Plus / Minus
+                                // Calculate exact PnL Percentage directly from Live Price vs Entry Price
+                                let pnlPct = pos.current_pnl_pct || 0.0;
+                                if (entryP > 0 && liveP > 0) {
+                                    pnlPct = isLong ? ((liveP - entryP) / entryP * 100.0) : ((entryP - liveP) / entryP * 100.0);
+                                }
+                                
+                                // Calculate exact PnL USDT
+                                const posSize = (pos.position_size && pos.position_size > 0) ? pos.position_size : 1.0;
+                                let pnlUsdt = pos.current_pnl_usdt || 0.0;
+                                if (entryP > 0 && liveP > 0) {
+                                    pnlUsdt = isLong ? (posSize * (liveP - entryP)) : (posSize * (entryP - liveP));
+                                }
+
+                                const pnlCurr = state.balance_currency || "USDT";
+                                const pnlClass = pnlPct > 0.001 ? "text-emerald-400" : (pnlPct < -0.001 ? "text-rose-400" : "text-slate-300");
+                                const sign = pnlPct > 0.001 ? '+' : '';
+                                
+                                // Status Badge for Plus / Minus (based directly on pnlPct!)
                                 let statusBadgeHTML = '';
-                                if (pnlUsdt > 0.001) {
+                                if (pnlPct > 0.001) {
                                     statusBadgeHTML = `<span class="text-[9px] px-1.5 py-0.5 font-extrabold rounded uppercase tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 shadow-[0_0_8px_rgba(16,185,129,0.3)] animate-pulse">🟢 PROFIT (+${pnlPct.toFixed(2)}%)</span>`;
-                                } else if (pnlUsdt < -0.001) {
+                                } else if (pnlPct < -0.001) {
                                     statusBadgeHTML = `<span class="text-[9px] px-1.5 py-0.5 font-extrabold rounded uppercase tracking-wider bg-rose-500/20 text-rose-400 border border-rose-500/40 shadow-[0_0_8px_rgba(244,63,94,0.3)]">🔴 LOSS (${pnlPct.toFixed(2)}%)</span>`;
                                 } else {
                                     statusBadgeHTML = `<span class="text-[9px] px-1.5 py-0.5 font-bold rounded uppercase tracking-wider bg-slate-500/20 text-slate-300 border border-slate-500/30">⚪ EVEN (0.00%)</span>`;
                                 }
                                 
-                                const entryP = pos.entry_price || 0;
-                                const slP = pos.stop_loss || 0;
                                 const target1P = pos.target_1r || (isLong ? entryP * 1.01 : entryP * 0.99);
                                 const target2P = pos.target_2r || (isLong ? entryP * 1.02 : entryP * 0.98);
                                 const finalTargetP = pos.final_target || (isLong ? entryP * 1.05 : entryP * 0.95);
-                                const liveP = pos.live_price || ((state.symbol === sym && state.latest_price) ? state.latest_price : entryP);
                                 
                                 const stage = pos.target_stage || (pos.tp2_hit ? 3 : (pos.tp1_hit ? 2 : 1));
                                 const activeTargetP = pos.active_target || (stage === 1 ? target1P : (stage === 2 ? target2P : finalTargetP));
