@@ -836,7 +836,7 @@
                                 }
                                 formattedHistory = Array.from(dedupMap.values());
                                 
-                                if (formattedHistory.length === 0) continue;
+                                if (formattedHistory.length > 0) {
                                 
                                 if (!historyLoaded) {
                                     // --- FULL HISTORY LOAD (on symbol change or first connect) ---
@@ -948,6 +948,7 @@
                                         axisLabelVisible: true,
                                         title: 'Take Profit (TP)',
                                     });
+                                }
                                 }
                             } catch (err) {
                                 console.error("Error updating chart data:", err);
