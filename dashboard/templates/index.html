@@ -742,6 +742,7 @@
         let historyLoaded = false;
         let currentChartSymbol = "";
         let lastWsMsgTime = Date.now();
+        let lastChartTime = 0; // Track the latest candle time to prevent stale updates
         let wsReconnectTimer = null;
         let wsReconnectDelay = 2000; // start with 2s, increase on repeated failures
         const WS_MAX_RECONNECT_DELAY = 30000; // cap at 30s
@@ -810,20 +811,35 @@
                             console.log(`Symbol change detected from ${currentChartSymbol} to ${state.symbol}. Resetting chart...`);
                             currentChartSymbol = state.symbol;
                             historyLoaded = false;
+                            lastChartTime = 0;
                         }
                         
                         // Load or update chart data
                         if (state.chart_history && state.chart_history.length > 0 && candleSeries) {
                             try {
                                 const offsetSeconds = -new Date().getTimezoneOffset() * 60;
-                                const formattedHistory = state.chart_history.map(c => ({
+                                
+                                // Build candle objects with proper integer timestamps
+                                let formattedHistory = state.chart_history.map(c => ({
                                     time: Math.floor(c[0] / 1000) + offsetSeconds,
-                                    open: c[1],
-                                    high: c[2],
-                                    low: c[3],
-                                    close: c[4],
-                                    volume: c[5]
-                                }));
+                                    open: parseFloat(c[1]) || 0,
+                                    high: parseFloat(c[2]) || 0,
+                                    low: parseFloat(c[3]) || 0,
+                                    close: parseFloat(c[4]) || 0,
+                                    volume: parseFloat(c[5]) || 0
+                                })).filter(c => c.time && !isNaN(c.time) && c.time > 0);
+                                
+                                // Sort by time ascending (LightweightCharts requires this)
+                                formattedHistory.sort((a, b) => a.time - b.time);
+                                
+                                // Deduplicate: keep only the LAST entry for each timestamp
+                                const dedupMap = new Map();
+                                for (const candle of formattedHistory) {
+                                    dedupMap.set(candle.time, candle);
+                                }
+                                formattedHistory = Array.from(dedupMap.values());
+                                
+                                if (formattedHistory.length === 0) continue;
                                 
                                 if (!historyLoaded) {
                                     // --- FULL HISTORY LOAD (on symbol change or first connect) ---
@@ -833,6 +849,7 @@
                                     if (vwapSeries) vwapSeries.setData([]);
 
                                     candleSeries.setData(formattedHistory);
+                                    lastChartTime = formattedHistory[formattedHistory.length - 1].time;
 
                                     // Calculate and load all indicator lines on initial load
                                     if (ema9Series && ema21Series && vwapSeries) {
@@ -847,18 +864,27 @@
                                     chart.timeScale().fitContent(); // Auto-center candles
                                     console.log("Historical chart data loaded. Bars: " + formattedHistory.length);
                                 } else {
-                                    // --- LIVE UPDATE: only update last candle and last indicator point ---
+                                    // --- LIVE UPDATE ---
                                     const lastCandle = formattedHistory[formattedHistory.length - 1];
-                                    candleSeries.update(lastCandle);
-
-                                    // Efficiently update only the last EMA/VWAP point
-                                    if (ema9Series && ema21Series && vwapSeries && formattedHistory.length >= 21) {
-                                        const ema9Data = calculateEMA(formattedHistory, 9);
-                                        const ema21Data = calculateEMA(formattedHistory, 21);
-                                        const vwapData = calculateVWAP(formattedHistory);
-                                        if (ema9Data.length) ema9Series.update(ema9Data[ema9Data.length - 1]);
-                                        if (ema21Data.length) ema21Series.update(ema21Data[ema21Data.length - 1]);
-                                        if (vwapData.length) vwapSeries.update(vwapData[vwapData.length - 1]);
+                                    
+                                    if (lastCandle.time >= lastChartTime) {
+                                        // Normal case: update or append the latest candle
+                                        candleSeries.update(lastCandle);
+                                        lastChartTime = lastCandle.time;
+                                        
+                                        // Update indicators
+                                        if (ema9Series && ema21Series && vwapSeries && formattedHistory.length >= 21) {
+                                            const ema9Data = calculateEMA(formattedHistory, 9);
+                                            const ema21Data = calculateEMA(formattedHistory, 21);
+                                            const vwapData = calculateVWAP(formattedHistory);
+                                            if (ema9Data.length) ema9Series.update(ema9Data[ema9Data.length - 1]);
+                                            if (ema21Data.length) ema21Series.update(ema21Data[ema21Data.length - 1]);
+                                            if (vwapData.length) vwapSeries.update(vwapData[vwapData.length - 1]);
+                                        }
+                                    } else {
+                                        // Data went backwards (server sent older data) — full reload
+                                        console.warn("Chart data time went backwards. Doing full reload.");
+                                        historyLoaded = false;
                                     }
                                 }
                                 
