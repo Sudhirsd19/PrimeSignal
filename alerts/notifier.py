@@ -35,13 +35,13 @@ class TelegramNotifier:
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
         payload = {
             "chat_id": self.chat_id,
-            "text": f"🔔 *PrimeSignal Alert*\n\n{message}",
-            "parse_mode": "Markdown"
+            "text": f"🔔 PrimeSignal Alert\n\n{message}"
         }
         
         try:
+            timeout = aiohttp.ClientTimeout(total=5)
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, timeout=5) as response:
+                async with session.post(url, json=payload, timeout=timeout) as response:
                     if response.status != 200:
                         text = await response.text()
                         print(f"ERROR: Failed to send Telegram alert: {text}")

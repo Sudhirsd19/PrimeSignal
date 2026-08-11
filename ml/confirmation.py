@@ -97,10 +97,7 @@ class MLSignalConfirmator:
             confirmed: bool (True to execute, False to block)
             probability: float (ML model confidence score)
         """
-        if not self.is_trained:
-            # Fail-safe: Block trades if model is not yet trained.
-            # This prevents unfiltered entries during warm-up.
-            print("WARNING: ML model not yet trained. Blocking signal as a safety measure.")
+        if not self.is_trained or len(df) < 50:
             return False, 0.0
             
         try:
@@ -116,7 +113,7 @@ class MLSignalConfirmator:
             
             vwap = calculate_vwap(data)
             data['vwap_dist'] = (data['close'] - vwap) / vwap
-            data['vol_ratio'] = data['volume'] / data['volume'].rolling(20).mean().replace(0, 1e-9)
+            data['vol_ratio'] = data['volume'] / data['volume'].rolling(20, min_periods=1).mean().replace(0, 1e-9)
             
             # Get feature row for last completed candle
             feature_row = pd.DataFrame([{
@@ -125,7 +122,7 @@ class MLSignalConfirmator:
                 'ema_ratio': data['ema_ratio'].iloc[-2],
                 'vwap_dist': data['vwap_dist'].iloc[-2],
                 'vol_ratio': data['vol_ratio'].iloc[-2]
-            }])
+            }]).fillna(0.0)
             
             # Predict probability of price going up (target = 1)
             prob_up = self.model.predict_proba(feature_row)[0][1]
@@ -166,7 +163,7 @@ class MLSignalConfirmator:
             
             vwap = calculate_vwap(data)
             data['vwap_dist'] = (data['close'] - vwap) / vwap
-            data['vol_ratio'] = data['volume'] / data['volume'].rolling(20).mean().replace(0, 1e-9)
+            data['vol_ratio'] = data['volume'] / data['volume'].rolling(20, min_periods=1).mean().replace(0, 1e-9)
             
             feature_row = pd.DataFrame([{
                 'rsi': data['rsi'].iloc[-2],
@@ -174,7 +171,7 @@ class MLSignalConfirmator:
                 'ema_ratio': data['ema_ratio'].iloc[-2],
                 'vwap_dist': data['vwap_dist'].iloc[-2],
                 'vol_ratio': data['vol_ratio'].iloc[-2]
-            }])
+            }]).fillna(0.0)
             
             return float(self.model.predict_proba(feature_row)[0][1])
         except Exception as e:
@@ -210,6 +207,8 @@ class MLSignalConfirmator:
             
             # Final Bullish Probability
             final_prob = np.clip(ml_prob + mom_factor, 0.15, 0.85)
+            if np.isnan(final_prob):
+                final_prob = 0.50
             
             color = "GREEN" if final_prob >= 0.50 else "RED"
             confidence = final_prob if color == "GREEN" else (1.0 - final_prob)

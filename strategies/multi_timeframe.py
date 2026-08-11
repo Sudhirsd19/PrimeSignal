@@ -78,7 +78,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         obs        = detect_order_blocks(ltf_df)
         
         strong_trend = False
-        ema_dist = abs(latest_htf_ema_50 - latest_htf_ema_200) / latest_htf_ema_200
+        ema_dist = abs(latest_htf_ema_50 - latest_htf_ema_200) / latest_htf_ema_200 if (latest_htf_ema_200 and latest_htf_ema_200 > 0) else 0.0
         
         adx_df = calculate_adx(ltf_df)
         curr_adx = adx_df['adx'].iloc[-2]
@@ -149,7 +149,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         metadata['ltf_rsi']  = curr_rsi
         metadata['ltf_vwap'] = curr_vwap
 
-        vol_pass = (curr_atr / curr_price) >= Config.MIN_ATR_PCT
+        vol_pass = (curr_atr / curr_price >= Config.MIN_ATR_PCT) if curr_price > 0 else False
         metadata['debug_checks']['volatility'] = 'PASS' if vol_pass else 'FAIL'
 
         def in_bounds(price, bottom, top):
@@ -274,15 +274,6 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             if trigger_pass: score += 1
             if micro_bos: score += 1
             
-            # Sudden Wick Filter (1.8%)
-            if candle_range / trigger_low > 0.018:
-                valid_entry = False
-                reason = "Rejected: Setup candle wick/range > 1.8% (Slippage risk)"
-            
-            if metadata['session'] == 'ASIA' and entry_type == 'FVG': score += 1
-            if metadata['session'] == 'LONDON' and strong_trend: score += 1
-            if metadata['session'] == 'NY' and entry_type == 'SWEEP': score += 1
-            
             if market_regime == 'TREND': score_thresh = 2.5
             elif market_regime == 'MIXED': score_thresh = 3.0
             elif market_regime == 'RANGE': score_thresh = 3.5
@@ -303,6 +294,11 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                     valid_entry = True
             else:
                 if score >= score_thresh and (vwap_pass or micro_bos): valid_entry = True
+
+            # Sudden Wick Filter (1.8%) — applied after valid_entry evaluation
+            if valid_entry and trigger_low > 0 and (candle_range / trigger_low > 0.018):
+                valid_entry = False
+                reason = "Rejected: Setup candle wick/range > 1.8% (Slippage risk)"
                 
             if valid_entry and market_regime == 'HIGH_VOL':
                 if entry_type == 'FVG': valid_entry = False
@@ -432,15 +428,6 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             if trigger_pass: score += 1
             if micro_bos: score += 1
             
-            # Sudden Wick Filter (1.8%)
-            if (trigger_high - trigger_low) / trigger_low > 0.018:
-                valid_entry = False
-                reason = "Rejected: Setup candle wick/range > 1.8% (Slippage risk)"
-            
-            if metadata['session'] == 'ASIA' and entry_type == 'FVG': score += 1
-            if metadata['session'] == 'LONDON' and strong_trend: score += 1
-            if metadata['session'] == 'NY' and entry_type == 'SWEEP': score += 1
-            
             if market_regime == 'TREND': score_thresh = 2.5
             elif market_regime == 'MIXED': score_thresh = 3.0
             elif market_regime == 'RANGE': score_thresh = 3.5
@@ -461,6 +448,11 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                     valid_entry = True
             else:
                 if score >= score_thresh and (vwap_pass or micro_bos): valid_entry = True
+
+            # Sudden Wick Filter (1.8%) — applied after valid_entry evaluation
+            if valid_entry and trigger_low > 0 and ((trigger_high - trigger_low) / trigger_low > 0.018):
+                valid_entry = False
+                reason = "Rejected: Setup candle wick/range > 1.8% (Slippage risk)"
                 
             if valid_entry and market_regime == 'HIGH_VOL':
                 if entry_type == 'FVG': valid_entry = False
