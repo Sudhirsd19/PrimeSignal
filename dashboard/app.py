@@ -37,9 +37,11 @@ class TimeframeRequest(BaseModel):
 # Without this, anyone on the internet can POST /api/change_symbol and spam
 # the bot with symbol changes, triggering WebSocket restarts and CPU spikes.
 # Set DASHBOARD_SECRET env var on Render. Omit to disable auth in dev mode.
-_DASHBOARD_SECRET = os.getenv("DASHBOARD_SECRET") or secrets.token_hex(32)
-if not os.getenv("DASHBOARD_SECRET"):
-    print(f"[SECURITY] Auto-generated dashboard secret: {_DASHBOARD_SECRET}")
+_DASHBOARD_SECRET = os.getenv("DASHBOARD_SECRET", "")
+if _DASHBOARD_SECRET:
+    print(f"[SECURITY] Dashboard API key auth is ENABLED.")
+else:
+    print(f"[SECURITY] Dashboard API key auth is DISABLED (DASHBOARD_SECRET not set).")
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 async def verify_dashboard_key(key: str = Depends(_api_key_header)):
@@ -82,7 +84,9 @@ class DashboardState:
 @app.get("/", response_class=HTMLResponse)
 async def get_dashboard(request: Request):
     """Renders the main terminal dashboard page."""
-    return templates.TemplateResponse(request, "index.html", {})
+    return templates.TemplateResponse(request, "index.html", {
+        "dashboard_api_key": _DASHBOARD_SECRET
+    })
 
 @app.post("/api/change_symbol", dependencies=[Depends(verify_dashboard_key)])
 async def change_symbol(req: SymbolRequest):

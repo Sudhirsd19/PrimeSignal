@@ -208,7 +208,7 @@
                 <div class="relative w-full h-80 rounded-lg overflow-hidden bg-[#0e1320]">
                     <div id="chart-container" class="w-full h-full"></div>
                     <!-- Loading Overlay -->
-                    <div id="chart-loading" class="absolute inset-0 flex flex-col items-center justify-center bg-[#0e1320]/80 backdrop-blur-sm z-10 transition-opacity duration-300 hidden">
+                    <div id="chart-loading" class="absolute inset-0 flex flex-col items-center justify-center bg-[#0e1320]/80 backdrop-blur-sm z-10 transition-opacity duration-300">
                         <div class="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
                         <span class="text-xs text-gray-400 font-semibold mt-3 uppercase tracking-wider">Syncing Market Data...</span>
                     </div>
@@ -434,6 +434,14 @@
             });
             logsContainer.scrollTop = logsContainer.scrollHeight;
         }
+
+        // Auto-set dashboard API key from server-injected value
+        (function() {
+            const serverKey = "{{ dashboard_api_key | default('', true) }}";
+            if (serverKey) {
+                localStorage.setItem('dashboard_api_key', serverKey);
+            }
+        })();
 
         let chart = null;
         let candleSeries = null;
@@ -1321,7 +1329,10 @@
             try {
                 const response = await fetch('/api/change_symbol', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
+                    },
                     body: JSON.stringify({ symbol: newSymbol })
                 });
                 if (!response.ok) {
@@ -1389,7 +1400,10 @@
             try {
                 const response = await fetch('/api/set_timeframe', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
+                    },
                     body: JSON.stringify({ timeframe: tf })
                 });
                 if (response.ok) {
@@ -1415,7 +1429,10 @@
             try {
                 const response = await fetch('/api/set_mode', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
+                    },
                     body: JSON.stringify({ paper_trading: nextMode })
                 });
                 if (!response.ok) {
@@ -1477,7 +1494,11 @@
 
         async function loadAnalytics() {
             try {
-                const response = await fetch('/api/analytics');
+                const response = await fetch('/api/analytics', {
+                    headers: {
+                        'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
+                    }
+                });
                 const data = await response.json();
                 
                 if (data.status === 'success') {
