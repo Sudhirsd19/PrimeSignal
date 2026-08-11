@@ -1381,7 +1381,7 @@
                 };
                 
                 ws.onerror = (err) => {
-                    console.error("WebSocket error:", err);
+                    console.warn("WebSocket connection blip (Server restart or brief disconnect). Will reconnect automatically.");
                     // Don't call ws.close() here — the browser will fire onclose automatically after onerror
                 };
             } catch (e) {
