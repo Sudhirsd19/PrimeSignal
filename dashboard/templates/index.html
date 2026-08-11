@@ -708,13 +708,34 @@
         let historyLoaded = false;
         let currentChartSymbol = "";
         let lastWsMsgTime = Date.now();
+        let wsReconnectTimer = null;
+        let wsReconnectDelay = 2000; // start with 2s, increase on repeated failures
+        const WS_MAX_RECONNECT_DELAY = 30000; // cap at 30s
+        
+        function scheduleReconnect() {
+            if (wsReconnectTimer) return; // already scheduled
+            console.log(`Scheduling WebSocket reconnect in ${wsReconnectDelay/1000}s...`);
+            wsReconnectTimer = setTimeout(() => {
+                wsReconnectTimer = null;
+                connectWS();
+            }, wsReconnectDelay);
+            // Increase delay for next attempt (exponential backoff, capped)
+            wsReconnectDelay = Math.min(wsReconnectDelay * 1.5, WS_MAX_RECONNECT_DELAY);
+        }
         
         function connectWS() {
+            // Guard: don't create a new WS if one is already connecting or open
+            if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+                return;
+            }
+            
             try {
                 ws = new WebSocket(wsUrl);
                 
                 ws.onopen = () => {
                     console.log("WebSocket connected!");
+                    lastWsMsgTime = Date.now(); // Reset so watchdog doesn't immediately kill
+                    wsReconnectDelay = 2000; // Reset backoff on successful connect
                     const statusEl = document.getElementById('ws-status');
                     if (statusEl) {
                         statusEl.innerText = "STATUS: LIVE";
@@ -1293,18 +1314,18 @@
                 };
                 
                 ws.onclose = () => {
-                    console.log("WebSocket closed. Attempting reconnect...");
+                    console.log("WebSocket closed. Will reconnect...");
                     const statusEl = document.getElementById('ws-status');
                     if (statusEl) {
                         statusEl.innerText = "STATUS: OFFLINE";
                         statusEl.className = "bg-red-500/10 text-red-400 text-xs px-3 py-1.5 rounded-md font-bold tracking-wide border border-red-500/20";
                     }
-                    setTimeout(connectWS, 2000);
+                    scheduleReconnect();
                 };
                 
                 ws.onerror = (err) => {
                     console.error("WebSocket error:", err);
-                    ws.close();
+                    // Don't call ws.close() here — the browser will fire onclose automatically after onerror
                 };
             } catch (e) {
                 console.error("Failed to establish WebSocket connection:", e);
@@ -1644,23 +1665,22 @@
 
         connectWS();
         
-        let reconnectPending = false;
-        
-        // Watchdog: checks every 2s for stale connection
+        // Watchdog: checks every 5s for stale connection
         setInterval(() => {
             if (ws && ws.readyState === WebSocket.OPEN) {
-                if (Date.now() - lastWsMsgTime > 5000) {
-                    console.warn("WebSocket stream silent for > 5s. Closing for reconnect...");
+                const silentMs = Date.now() - lastWsMsgTime;
+                if (silentMs > 15000) {
+                    console.warn(`WebSocket stream silent for ${Math.round(silentMs/1000)}s. Closing for reconnect...`);
                     try { ws.close(); } catch(e) {}
                 } else {
                     try { ws.send("ping"); } catch (e) {}
                 }
-            } else if (!reconnectPending && (!ws || ws.readyState === WebSocket.CLOSED)) {
-                console.log("WebSocket dead. Triggering reconnect...");
-                reconnectPending = true;
-                setTimeout(() => { reconnectPending = false; connectWS(); }, 1000);
+            } else if (ws && ws.readyState === WebSocket.CLOSED) {
+                // onclose handler should have already scheduled reconnect,
+                // but as a safety net, schedule one if not pending
+                scheduleReconnect();
             }
-        }, 2000);
+        }, 5000);
     </script>
 </body>
 </html>
