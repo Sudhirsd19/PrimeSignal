@@ -208,7 +208,10 @@ async def get_analytics():
     """Fetch trade logs from local JSONL file and aggregate analytics for the UI."""
     try:
         log_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'trade_logs.jsonl')
+        decisions_log = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs', 'trade_decisions.jsonl')
         trades = []
+        
+        # Try primary log file first
         if os.path.exists(log_file):
             def _read_logs():
                 loaded = []
@@ -221,15 +224,40 @@ async def get_analytics():
                                 pass
                 return loaded
             trades = await asyncio.to_thread(_read_logs)
+        
+        # Fallback: also read TRADE_EXITED events from trade_decisions.jsonl
+        if os.path.exists(decisions_log):
+            def _read_decisions():
+                loaded = []
+                with open(decisions_log, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if line.strip():
+                            try:
+                                entry = json.loads(line)
+                                if entry.get("event") == "TRADE_EXITED":
+                                    loaded.append(entry)
+                            except:
+                                pass
+                return loaded
+            decision_trades = await asyncio.to_thread(_read_decisions)
+            trades.extend(decision_trades)
+        
+        # Also include in-memory trades from DashboardState
+        for mem_trade in DashboardState.trades:
+            trades.append(mem_trade)
             
         wins = 0
         losses = 0
         cumulative_pnl = 0.0
         equity_curve = []
         
+        # Per-coin P&L aggregation
+        coin_stats = {}  # symbol -> {wins, losses, total_pnl, trades_count}
+        
         for t in trades:
-            # We assume exit trades have a pnl_usdt value
             pnl = t.get("pnl_usdt", 0.0)
+            symbol = t.get("symbol", "UNKNOWN")
+            
             if pnl > 0:
                 wins += 1
             elif pnl < 0:
@@ -237,11 +265,27 @@ async def get_analytics():
                 
             cumulative_pnl += pnl
             
+            # Aggregate per coin
+            if symbol not in coin_stats:
+                coin_stats[symbol] = {"wins": 0, "losses": 0, "total_pnl": 0.0, "trades_count": 0, "best_trade": 0.0, "worst_trade": 0.0}
+            
+            coin_stats[symbol]["trades_count"] += 1
+            coin_stats[symbol]["total_pnl"] += pnl
+            if pnl > 0:
+                coin_stats[symbol]["wins"] += 1
+            elif pnl < 0:
+                coin_stats[symbol]["losses"] += 1
+            if pnl > coin_stats[symbol]["best_trade"]:
+                coin_stats[symbol]["best_trade"] = pnl
+            if pnl < coin_stats[symbol]["worst_trade"]:
+                coin_stats[symbol]["worst_trade"] = pnl
+            
             # Format time for chart
-            if "time" in t:
+            time_val = t.get("time") or t.get("exit_time")
+            if time_val:
                 import datetime
                 try:
-                    dt = datetime.datetime.fromtimestamp(t["time"] / 1000.0)
+                    dt = datetime.datetime.fromtimestamp(time_val / 1000.0)
                     time_str = dt.strftime("%m-%d %H:%M")
                     equity_curve.append({"time": time_str, "value": cumulative_pnl})
                 except:
@@ -250,6 +294,22 @@ async def get_analytics():
         total = wins + losses
         win_rate = (wins / total * 100) if total > 0 else 0.0
         
+        # Build per-coin response list sorted by total PnL descending
+        coin_pnl_list = []
+        for sym, stats in coin_stats.items():
+            ct = stats["trades_count"]
+            coin_pnl_list.append({
+                "symbol": sym,
+                "total_pnl": round(stats["total_pnl"], 4),
+                "wins": stats["wins"],
+                "losses": stats["losses"],
+                "trades_count": ct,
+                "win_rate": round((stats["wins"] / ct * 100) if ct > 0 else 0, 1),
+                "best_trade": round(stats["best_trade"], 4),
+                "worst_trade": round(stats["worst_trade"], 4),
+            })
+        coin_pnl_list.sort(key=lambda x: x["total_pnl"], reverse=True)
+        
         return {
             "status": "success",
             "wins": wins,
@@ -257,6 +317,7 @@ async def get_analytics():
             "win_rate": win_rate,
             "total_pnl": cumulative_pnl,
             "equity_curve": equity_curve,
+            "coin_pnl": coin_pnl_list,
             "history": list(reversed(trades))[:50]
         }
     except Exception as e:

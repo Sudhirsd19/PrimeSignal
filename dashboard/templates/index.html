@@ -255,21 +255,55 @@
 
                     <!-- Tab Content: Analytics -->
                     <div id="content-analytics" class="hidden flex-col flex-grow overflow-hidden p-4">
-                        <div class="flex justify-between items-center mb-4">
-                            <span class="text-xs font-semibold text-gray-500 uppercase">Win Rate</span>
-                            <span id="analytics-winrate-text" class="text-lg font-bold text-blue-400">0%</span>
+                        <div class="flex-grow overflow-y-auto space-y-4 pr-1" style="max-height: 430px;">
+                            <!-- Summary Row -->
+                            <div class="grid grid-cols-2 gap-3">
+                                <div class="bg-[#171e2e] border border-[#1f2937] p-3 rounded-lg">
+                                    <span class="text-[10px] font-semibold text-gray-500 uppercase">Win Rate</span>
+                                    <div class="flex items-center gap-2 mt-1">
+                                        <span id="analytics-winrate-text" class="text-lg font-bold text-blue-400">0%</span>
+                                        <div class="flex-1" style="height: 50px;">
+                                            <canvas id="winRateChart"></canvas>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="bg-[#171e2e] border border-[#1f2937] p-3 rounded-lg">
+                                    <span class="text-[10px] font-semibold text-gray-500 uppercase">Total PnL</span>
+                                    <div class="mt-1">
+                                        <span id="analytics-pnl-text" class="text-lg font-bold text-white">0.00 USDT</span>
+                                    </div>
+                                    <div class="w-full mt-1" style="height: 40px;">
+                                        <canvas id="equityChart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Per-Coin P&L Breakdown -->
+                            <div>
+                                <h4 class="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">Profit / Loss by Coin</h4>
+                                <div class="bg-[#171e2e] border border-[#1f2937] rounded-lg overflow-hidden">
+                                    <table class="w-full text-[11px] text-left">
+                                        <thead>
+                                            <tr class="text-gray-500 uppercase border-b border-[#1f2937] text-[9px] font-bold">
+                                                <th class="py-2 px-3">Coin</th>
+                                                <th class="py-2 px-2 text-right">P&L</th>
+                                                <th class="py-2 px-2 text-center">W/L</th>
+                                                <th class="py-2 px-2 text-center">Trades</th>
+                                                <th class="py-2 px-2 text-right">Win%</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="coin-pnl-tbody" class="divide-y divide-[#1f2937]/50">
+                                            <tr>
+                                                <td class="py-3 px-3 text-gray-500 text-center" colspan="5">No trade data yet</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
                         </div>
-                        <div class="w-full flex justify-center mb-4" style="height: 120px;">
-                            <canvas id="winRateChart"></canvas>
-                        </div>
-                        <div class="flex justify-between items-center mb-2 mt-4">
-                            <span class="text-xs font-semibold text-gray-500 uppercase">Total PnL</span>
-                            <span id="analytics-pnl-text" class="text-sm font-bold text-white">0.00 USDT</span>
-                        </div>
-                        <div class="w-full" style="height: 120px;">
-                            <canvas id="equityChart"></canvas>
-                        </div>
-                        <button onclick="loadAnalytics()" class="mt-auto w-full bg-[#1f2937] hover:bg-gray-700 text-white text-xs font-bold py-2 rounded transition-colors">
+                        
+                        <button onclick="loadAnalytics()" class="mt-3 w-full bg-[#1f2937] hover:bg-gray-700 text-white text-xs font-bold py-2 rounded transition-colors flex items-center justify-center gap-2">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
                             REFRESH DATA
                         </button>
                     </div>
@@ -1524,9 +1558,17 @@
                 
                 if (data.status === 'success') {
                     window.analyticsLoaded = true;
-                    document.getElementById('analytics-winrate-text').textContent = data.win_rate + '%';
-                    document.getElementById('analytics-pnl-text').textContent = data.total_pnl + ' USDT';
                     
+                    // Update summary stats with color coding
+                    const winrateEl = document.getElementById('analytics-winrate-text');
+                    winrateEl.textContent = data.win_rate.toFixed(1) + '%';
+                    
+                    const pnlEl = document.getElementById('analytics-pnl-text');
+                    const totalPnl = data.total_pnl;
+                    pnlEl.textContent = (totalPnl >= 0 ? '+' : '') + totalPnl.toFixed(2) + ' USDT';
+                    pnlEl.className = `text-lg font-bold ${totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
+                    
+                    // Win Rate Donut Chart
                     const winCtx = document.getElementById('winRateChart').getContext('2d');
                     if (winRateChartInstance) winRateChartInstance.destroy();
                     winRateChartInstance = new Chart(winCtx, {
@@ -1534,7 +1576,7 @@
                         data: {
                             labels: ['Wins', 'Losses'],
                             datasets: [{
-                                data: [data.wins, data.losses],
+                                data: [data.wins || 0, data.losses || 0],
                                 backgroundColor: ['#3b82f6', '#ef4444'],
                                 borderWidth: 0
                             }]
@@ -1542,12 +1584,14 @@
                         options: {
                             responsive: true,
                             maintainAspectRatio: false,
+                            cutout: '65%',
                             plugins: {
                                 legend: { display: false }
                             }
                         }
                     });
                     
+                    // Equity Curve Chart
                     const eqCtx = document.getElementById('equityChart').getContext('2d');
                     if (equityChartInstance) equityChartInstance.destroy();
                     const labels = data.equity_curve.map(d => d.time);
@@ -1559,10 +1603,12 @@
                             labels: labels,
                             datasets: [{
                                 data: values,
-                                borderColor: '#10b981',
-                                tension: 0.2,
+                                borderColor: totalPnl >= 0 ? '#10b981' : '#ef4444',
+                                backgroundColor: totalPnl >= 0 ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+                                fill: true,
+                                tension: 0.3,
                                 pointRadius: 0,
-                                borderWidth: 2
+                                borderWidth: 1.5
                             }]
                         },
                         options: {
@@ -1577,6 +1623,56 @@
                             }
                         }
                     });
+                    
+                    // === Per-Coin P&L Table ===
+                    const coinTbody = document.getElementById('coin-pnl-tbody');
+                    if (coinTbody && data.coin_pnl && data.coin_pnl.length > 0) {
+                        coinTbody.innerHTML = '';
+                        data.coin_pnl.forEach(coin => {
+                            const tr = document.createElement('tr');
+                            tr.className = 'hover:bg-[#1f2937]/30 transition-colors';
+                            
+                            const isProfitable = coin.total_pnl >= 0;
+                            const pnlColor = isProfitable ? 'text-emerald-400' : 'text-red-400';
+                            const pnlSign = isProfitable ? '+' : '';
+                            const winRateColor = coin.win_rate >= 60 ? 'text-emerald-400' : coin.win_rate >= 40 ? 'text-yellow-400' : 'text-red-400';
+                            
+                            // Coin symbol
+                            const coinTd = document.createElement('td');
+                            coinTd.className = 'py-2.5 px-3 font-bold text-white text-[11px]';
+                            const coinName = coin.symbol.replace('/USDT', '').replace('/INR', '');
+                            coinTd.innerHTML = `<span class="text-blue-400">${coinName}</span><span class="text-gray-600 text-[8px] ml-0.5">/USDT</span>`;
+                            
+                            // P&L
+                            const pnlTd = document.createElement('td');
+                            pnlTd.className = `py-2.5 px-2 text-right font-bold terminal-font text-[11px] ${pnlColor}`;
+                            pnlTd.textContent = `${pnlSign}${coin.total_pnl.toFixed(2)}`;
+                            
+                            // W/L
+                            const wlTd = document.createElement('td');
+                            wlTd.className = 'py-2.5 px-2 text-center text-[10px]';
+                            wlTd.innerHTML = `<span class="text-emerald-400 font-bold">${coin.wins}</span><span class="text-gray-600">/</span><span class="text-red-400 font-bold">${coin.losses}</span>`;
+                            
+                            // Trades count
+                            const tradesTd = document.createElement('td');
+                            tradesTd.className = 'py-2.5 px-2 text-center text-gray-400 font-semibold text-[10px]';
+                            tradesTd.textContent = coin.trades_count;
+                            
+                            // Win Rate %
+                            const winTd = document.createElement('td');
+                            winTd.className = `py-2.5 px-2 text-right font-bold text-[10px] ${winRateColor}`;
+                            winTd.textContent = coin.win_rate.toFixed(0) + '%';
+                            
+                            tr.appendChild(coinTd);
+                            tr.appendChild(pnlTd);
+                            tr.appendChild(wlTd);
+                            tr.appendChild(tradesTd);
+                            tr.appendChild(winTd);
+                            coinTbody.appendChild(tr);
+                        });
+                    } else if (coinTbody) {
+                        coinTbody.innerHTML = '<tr><td class="py-3 px-3 text-gray-500 text-center" colspan="5">No trade data yet</td></tr>';
+                    }
                 }
             } catch (e) {
                 console.error("Failed to load analytics", e);
