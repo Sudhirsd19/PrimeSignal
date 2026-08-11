@@ -255,7 +255,7 @@ async def get_analytics():
         coin_stats = {}  # symbol -> {wins, losses, total_pnl, trades_count}
         
         for t in trades:
-            pnl = t.get("pnl_usdt", 0.0)
+            pnl = float(t.get("pnl_usdt", 0) or 0)
             symbol = t.get("symbol", "UNKNOWN")
             
             if pnl > 0:
@@ -281,14 +281,17 @@ async def get_analytics():
                 coin_stats[symbol]["worst_trade"] = pnl
             
             # Format time for chart
-            time_val = t.get("time") or t.get("exit_time")
+            time_val = t.get("time") or t.get("exit_time") or t.get("ts")
             if time_val:
                 import datetime
                 try:
-                    dt = datetime.datetime.fromtimestamp(time_val / 1000.0)
+                    if isinstance(time_val, str):
+                        dt = datetime.datetime.fromisoformat(time_val.replace('Z', '+00:00'))
+                    else:
+                        dt = datetime.datetime.fromtimestamp(float(time_val) / 1000.0)
                     time_str = dt.strftime("%m-%d %H:%M")
                     equity_curve.append({"time": time_str, "value": cumulative_pnl})
-                except:
+                except Exception:
                     pass
                     
         total = wins + losses
@@ -368,9 +371,9 @@ async def websocket_endpoint(websocket: WebSocket):
         if websocket in DashboardState.active_websockets:
             DashboardState.active_websockets.discard(websocket)
 
-async def send_state_to_ws(websocket):
-    """Sends current state dict as JSON to a specific WebSocket client."""
-    state_payload = {
+def _build_state_payload():
+    """Build the state dict to broadcast to WebSocket clients."""
+    return {
         "latest_price": DashboardState.latest_price,
         "latest_prices": bot_instance.pipeline.latest_prices if (bot_instance and hasattr(bot_instance, 'pipeline')) else {},
         "balance_usdt": DashboardState.balance_usdt,
@@ -400,7 +403,11 @@ async def send_state_to_ws(websocket):
         "signal_light_reason": DashboardState.signal_light_reason,
         "signal_progress": DashboardState.signal_progress
     }
-    await websocket.send_text(json.dumps(state_payload))
+
+async def send_state_to_ws(websocket):
+    """Sends current state dict as JSON to a specific WebSocket client."""
+    state_payload = _build_state_payload()
+    await websocket.send_text(json.dumps(state_payload, default=str))
 
 async def broadcast_state_loop():
     """Background task that broadcasts state updates to all connected WebSockets."""
@@ -409,12 +416,25 @@ async def broadcast_state_loop():
             # Create a copy of the set to avoid modification errors during iteration
             sockets = list(DashboardState.active_websockets)
             
+            # Serialize payload ONCE for all clients
+            try:
+                state_payload = _build_state_payload()
+                json_str = json.dumps(state_payload, default=str)
+            except Exception as e:
+                print(f"[WS] Serialization error: {e}")
+                await asyncio.sleep(0.5)
+                continue
+            
             async def _safe_send(ws):
                 try:
-                    await send_state_to_ws(ws)
+                    await ws.send_text(json_str)
                 except Exception as e:
                     print(f"[WS] Broadcast error, dropping client: {e}")
                     DashboardState.active_websockets.discard(ws)
+                    try:
+                        await ws.close()
+                    except Exception:
+                        pass
 
             await asyncio.gather(*[_safe_send(ws) for ws in sockets])
         await asyncio.sleep(0.5) # Update twice per second (500ms live stream)

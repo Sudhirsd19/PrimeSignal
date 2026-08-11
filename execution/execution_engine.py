@@ -224,8 +224,8 @@ class ExecutionEngine:
             if price is None:
                 print("[EXECUTION] Order error: Limit orders require a price.")
                 return None
-            args = [symbol, side.lower(), amount, price]
             fn = self.trade_client.create_order
+            args = [symbol, 'limit', side.lower(), amount, price]
 
         if fn is None:
             fn = self.trade_client.create_order

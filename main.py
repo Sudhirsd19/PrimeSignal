@@ -317,12 +317,14 @@ class PrimeSignalBot:
             if move_pct > getattr(Config, 'MAX_CANDLE_MOVE_PCT', 0.015):
                 avg_vol = ltf_df['volume'].rolling(14).mean().iloc[-1] if len(ltf_df) > 14 else 0.0
                 if last_candle['volume'] < 1.5 * avg_vol:
-                    self.volatility_pause_until[symbol] = len(ltf_df) + getattr(Config, 'VOLATILITY_PAUSE_CANDLES', 2)
+                    pause_candles = getattr(Config, 'VOLATILITY_PAUSE_CANDLES', 2)
+                    tf_minutes = int(Config.LTF_TIMEFRAME.replace('m', '').replace('h', '')) * (60 if 'h' in Config.LTF_TIMEFRAME else 1)
+                    self.volatility_pause_until[symbol] = time.time() + (pause_candles * tf_minutes * 60)
                     add_log_message(f"[{symbol}] Trading paused: High volatility detected ({move_pct*100:.2f}% move) on LOW volume.")
                 else:
                     add_log_message(f"[{symbol}] High volatility ({move_pct*100:.2f}%) on HIGH volume. Institutional move allowed.")
 
-        if len(ltf_df) < self.volatility_pause_until.get(symbol, 0):
+        if time.time() < self.volatility_pause_until.get(symbol, 0):
             return
 
         
@@ -333,7 +335,8 @@ class PrimeSignalBot:
         
         if self.has_keys:
             open_time = ltf_df.iloc[-1]['time'] / 1000.0 if 'time' in ltf_df.columns else ltf_df.index[-1].timestamp()
-            close_time = open_time + (5 * 60)
+            tf_mins = int(Config.LTF_TIMEFRAME.replace('m', '').replace('h', '')) * (60 if 'h' in Config.LTF_TIMEFRAME else 1)
+            close_time = open_time + (tf_mins * 60)
             delay = time.time() - close_time
             if delay > 10:
                 add_log_message(f"[{symbol}] Trade skipped: Execution delay ({delay:.1f}s) > 10s. Stale signal protection.")
@@ -1095,7 +1098,9 @@ class PrimeSignalBot:
             self.tp2_taken[symbol] = False
 
             if symbol in DashboardState.active_positions:
-                del DashboardState.active_positions[symbol]
+                new_positions = DashboardState.active_positions.copy()
+                del new_positions[symbol]
+                DashboardState.active_positions = new_positions
 
             if symbol == Config.SYMBOL:
                 DashboardState.in_position = False

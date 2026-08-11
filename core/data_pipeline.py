@@ -198,9 +198,18 @@ class RealTimeDataPipeline:
         if new_candle[0] == cache_list[-1][0]:
             # Update current live candle
             cache_list[-1] = new_candle
-        else:
-            # Append new candle
+        elif new_candle[0] > cache_list[-1][0]:
+            # Append new candle (normal case — newer timestamp)
             cache_list.append(new_candle)
+        else:
+            # Out-of-order candle — insert at correct chronological position
+            for i in range(len(cache_list) - 1, -1, -1):
+                if cache_list[i][0] == new_candle[0]:
+                    cache_list[i] = new_candle
+                    break
+                elif cache_list[i][0] < new_candle[0]:
+                    cache_list.insert(i + 1, new_candle)
+                    break
             
         # Keep cache length bounded to prevent memory issues
         if len(cache_list) > 1000:
