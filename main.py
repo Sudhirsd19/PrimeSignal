@@ -106,6 +106,7 @@ class PrimeSignalBot:
             'position_mode': self.position_mode,
             'last_trade_time': self.last_trade_time,
             'last_zone_traded': self.last_zone_traded,
+            'closed_trades': list(DashboardState.trades[-100:]),
         }
         try:
             self._STATE_FILE.write_text(json.dumps(state))
@@ -144,6 +145,8 @@ class PrimeSignalBot:
                 print(f"[STATE] Failed to load local state: {e}")
                 
         if not state:
+            # Check if historical trades exist in data/trade_logs.jsonl
+            self._load_trade_logs()
             return
 
         try:
@@ -170,6 +173,14 @@ class PrimeSignalBot:
             self.last_trade_time = safe_load('last_trade_time', 0)
             self.last_zone_traded = safe_load('last_zone_traded', None)
             
+            # Restore closed trades history
+            saved_trades = state.get('closed_trades', [])
+            if saved_trades:
+                DashboardState.trades = list(saved_trades)
+            
+            # Sync any additional logs from data/trade_logs.jsonl
+            self._load_trade_logs()
+
             # Sync to dashboard for active UI symbol
             sym = Config.SYMBOL
             DashboardState.in_position = self.in_position[sym]
@@ -201,6 +212,31 @@ class PrimeSignalBot:
                 add_log_message("[STATE] State loaded — no open positions to recover.")
         except Exception as e:
             print(f"[STATE] Failed to process state: {e}")
+
+    def _load_trade_logs(self):
+        """Read historical closed trades from data/trade_logs.jsonl into DashboardState.trades."""
+        try:
+            log_file = Path("data") / "trade_logs.jsonl"
+            if log_file.exists():
+                existing_keys = {
+                    f"{t.get('symbol')}_{t.get('exit_time') or t.get('time') or 0}_{round(float(t.get('pnl_usdt', 0) or 0), 4)}"
+                    for t in DashboardState.trades
+                }
+                with open(log_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.strip():
+                            try:
+                                tr = json.loads(line)
+                                k = f"{tr.get('symbol')}_{tr.get('exit_time') or tr.get('time') or 0}_{round(float(tr.get('pnl_usdt', 0) or 0), 4)}"
+                                if k not in existing_keys:
+                                    DashboardState.trades.append(tr)
+                                    existing_keys.add(k)
+                            except Exception:
+                                pass
+                if len(DashboardState.trades) > 500:
+                    DashboardState.trades = DashboardState.trades[-500:]
+        except Exception as e:
+            print(f"[STATE] Failed to read data/trade_logs.jsonl: {e}")
 
     async def initialize(self):
         add_log_message("Starting system initialization for all supported symbols...")
@@ -1057,6 +1093,16 @@ class PrimeSignalBot:
             DashboardState.trades.append(trade_record)
             if len(DashboardState.trades) > 500:
                 DashboardState.trades = DashboardState.trades[-500:]
+
+            # Persist to data/trade_logs.jsonl on disk
+            try:
+                log_dir = Path("data")
+                log_dir.mkdir(parents=True, exist_ok=True)
+                log_file = log_dir / "trade_logs.jsonl"
+                with open(log_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(trade_record) + "\n")
+            except Exception as e:
+                print(f"[LOG] Failed to write trade log: {e}")
 
             # Task 5: Cluster Loss Tracking
             is_loss = pnl_usdt < 0

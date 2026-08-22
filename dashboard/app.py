@@ -250,6 +250,19 @@ async def get_analytics():
         for mem_trade in DashboardState.trades:
             trades.append(mem_trade)
             
+        # Deduplicate trades by symbol + exit time + pnl
+        seen_trades = set()
+        unique_trades = []
+        for t in trades:
+            sym = t.get("symbol", "")
+            ext = t.get("exit_time") or t.get("time") or t.get("ts") or 0
+            pnl_val = round(float(t.get("pnl_usdt", 0) or 0), 4)
+            key = f"{sym}_{ext}_{pnl_val}"
+            if key not in seen_trades:
+                seen_trades.add(key)
+                unique_trades.append(t)
+        trades = unique_trades
+            
         wins = 0
         losses = 0
         cumulative_pnl = 0.0
