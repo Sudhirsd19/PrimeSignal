@@ -18,6 +18,7 @@ class Config:
     RISK_PCT = float(os.getenv("RISK_PCT", "1.0"))
     MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "5.0"))
     MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "3"))
+    MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "6"))
     TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015")) # Deprecated in favor of ATR
     TRAILING_ATR_MULT = float(os.getenv("TRAILING_ATR_MULT", "2.0"))
     MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.8"))

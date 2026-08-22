@@ -443,8 +443,9 @@ class PrimeSignalBot:
                         return
         
         # Daily Trade Limit
-        if self.trades_today >= 6:
-            add_log_message(f"[{symbol}] Trade skipped: Max 6 trades per day reached.")
+        max_daily_trades = getattr(Config, 'MAX_DAILY_TRADES', 6)
+        if self.trades_today >= max_daily_trades:
+            add_log_message(f"[{symbol}] Trade skipped: Max {max_daily_trades} trades per day reached ({self.trades_today}/{max_daily_trades}).")
             return
 
         # Cluster Loss Cooldown

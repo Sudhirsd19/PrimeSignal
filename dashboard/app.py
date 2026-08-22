@@ -176,6 +176,7 @@ async def emergency_stop():
 class RiskSettingsUpdate(BaseModel):
     tsl_enabled: bool
     tsl_multiplier: float
+    max_daily_trades: int | None = None
 
 @app.post("/api/update_risk_settings", dependencies=[Depends(verify_dashboard_key)])
 async def update_risk_settings(settings: RiskSettingsUpdate):
@@ -185,9 +186,12 @@ async def update_risk_settings(settings: RiskSettingsUpdate):
     if not settings.tsl_enabled:
         Config.TRAILING_ATR_MULT = 999.0 # Effectively disables it
     
-    status_str = f"TSL {'Enabled' if settings.tsl_enabled else 'Disabled'} ({settings.tsl_multiplier}x)"
+    if settings.max_daily_trades is not None and settings.max_daily_trades > 0:
+        Config.MAX_DAILY_TRADES = settings.max_daily_trades
+    
+    status_str = f"TSL {'Enabled' if settings.tsl_enabled else 'Disabled'} ({settings.tsl_multiplier}x) | Max Daily Trades: {Config.MAX_DAILY_TRADES}"
     add_log_message(f"⚙️ Risk Settings Updated: {status_str}")
-    return {"status": "success", "message": status_str}
+    return {"status": "success", "message": status_str, "max_daily_trades": Config.MAX_DAILY_TRADES}
 
 class LockProfitRequest(BaseModel):
     symbol: str
@@ -342,6 +346,8 @@ async def get_state():
         "active_ob_type": DashboardState.active_ob_type,
         "symbol": Config.SYMBOL,
         "trades_count": len(DashboardState.trades),
+        "trades_today": bot_instance.trades_today if bot_instance else 0,
+        "max_daily_trades": getattr(Config, 'MAX_DAILY_TRADES', 6),
         "signal_light": DashboardState.signal_light,
         "signal_light_reason": DashboardState.signal_light_reason,
         "signal_progress": DashboardState.signal_progress
@@ -395,6 +401,8 @@ def _build_state_payload():
         "paper_trading": Config.PAPER_TRADING,
         "balance_currency": "USDT" if (Config.PAPER_TRADING or not Config.COINDCX_TRADE_INR) else "INR",
         "trades": DashboardState.trades[-5:],  # Last 5 trades
+        "trades_today": bot_instance.trades_today if bot_instance else 0,
+        "max_daily_trades": getattr(Config, 'MAX_DAILY_TRADES', 6),
         "logs": DashboardState.logs[-10:],     # Last 10 logs
         "chart_history": DashboardState.chart_history,
         "coindcx_profile": DashboardState.coindcx_profile,

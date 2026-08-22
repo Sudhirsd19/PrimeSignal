@@ -118,7 +118,10 @@
 
             <!-- Drawdown & Risk -->
             <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between h-32">
-                <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Daily Drawdown Limit</span>
+                <div class="flex justify-between items-center">
+                    <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Daily Drawdown</span>
+                    <span id="daily-trades-badge" class="text-[10px] bg-blue-500/20 text-blue-400 border border-blue-500/30 px-1.5 py-0.5 rounded font-bold">0/6 TRADES</span>
+                </div>
                 <div class="flex items-baseline space-x-1 mt-2">
                     <span id="drawdown-display" class="text-3xl font-extrabold text-blue-400 terminal-font">0.00%</span>
                     <span class="text-xs text-gray-500 font-bold">/ 5.0%</span>
@@ -159,19 +162,25 @@
                 </div>
             </div>
 
-            <!-- Trailing Stop Loss -->
-            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between h-32 relative">
+            <!-- Risk Controls & Daily Limit -->
+            <div class="bg-[#111827] border border-[#1f2937] p-4 rounded-xl flex flex-col justify-between h-32 relative">
                 <div class="flex justify-between items-center">
-                    <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Trailing Stop</span>
-                    <label class="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" id="tsl-toggle" class="sr-only peer" checked>
-                        <div class="w-7 h-4 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-500"></div>
-                    </label>
+                    <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Risk Controls</span>
+                    <div class="flex items-center gap-1">
+                        <span class="text-[9px] text-gray-400 font-bold uppercase">Daily Max:</span>
+                        <input type="number" id="max-trades-input" min="1" max="50" value="6" class="w-11 bg-[#1f2937] border border-[#374151] rounded px-1 text-center text-xs font-bold text-blue-400 focus:outline-none focus:border-blue-500 cursor-pointer" title="Max trades allowed per day">
+                    </div>
                 </div>
-                <div class="flex flex-col mt-2">
-                    <div class="flex justify-between text-[10px] text-gray-400 font-bold mb-1">
-                        <span>Offset (ATR)</span>
-                        <span id="tsl-val-display" class="text-blue-400 text-xs">2.0x</span>
+                <div class="flex flex-col mt-1">
+                    <div class="flex justify-between items-center text-[10px] text-gray-400 font-bold mb-1">
+                        <div class="flex items-center gap-1.5">
+                            <span>Trailing Stop</span>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="tsl-toggle" class="sr-only peer" checked>
+                                <div class="w-6 h-3.5 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[1px] after:left-[1px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-500"></div>
+                            </label>
+                        </div>
+                        <span id="tsl-val-display" class="text-blue-400 text-xs">2.0x ATR</span>
                     </div>
                     <input type="range" id="tsl-slider" min="0.5" max="5.0" step="0.1" value="2.0" class="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer">
                 </div>
@@ -1061,6 +1070,23 @@
                             ddBar.style.background = '#3b82f6'; // blue — safe
                             ddEl.className = 'text-3xl font-extrabold text-blue-400 terminal-font';
                         }
+
+                        // Daily Trades Badge update
+                        const dailyTradesBadge = document.getElementById('daily-trades-badge');
+                        if (dailyTradesBadge && state.max_daily_trades !== undefined) {
+                            const executed = state.trades_today || 0;
+                            const maxTr = state.max_daily_trades || 6;
+                            dailyTradesBadge.innerText = `${executed}/${maxTr} TRADES`;
+                            if (executed >= maxTr) {
+                                dailyTradesBadge.className = "text-[10px] bg-red-500/20 text-red-400 border border-red-500/40 px-1.5 py-0.5 rounded font-extrabold animate-pulse";
+                            } else {
+                                dailyTradesBadge.className = "text-[10px] bg-blue-500/20 text-blue-400 border border-blue-500/30 px-1.5 py-0.5 rounded font-bold";
+                            }
+                        }
+                        const maxTradesInputEl = document.getElementById('max-trades-input');
+                        if (maxTradesInputEl && document.activeElement !== maxTradesInputEl && state.max_daily_trades) {
+                            maxTradesInputEl.value = state.max_daily_trades;
+                        }
                         
                         // ML display
                         const mlVal = (state.ml_confidence || 0.5) * 100;
@@ -1702,13 +1728,15 @@
             }
         }
         
-        // TSL Listeners
+        // Risk Controls & TSL Listeners
         const tslToggle = document.getElementById('tsl-toggle');
         const tslSlider = document.getElementById('tsl-slider');
         const tslValDisplay = document.getElementById('tsl-val-display');
+        const maxTradesInput = document.getElementById('max-trades-input');
 
         async function updateRiskSettings() {
             try {
+                const maxTr = parseInt(maxTradesInput ? maxTradesInput.value : "6") || 6;
                 await fetch('/api/update_risk_settings', {
                     method: 'POST',
                     headers: {
@@ -1716,8 +1744,9 @@
                         'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
                     },
                     body: JSON.stringify({
-                        tsl_enabled: tslToggle.checked,
-                        tsl_multiplier: parseFloat(tslSlider.value)
+                        tsl_enabled: tslToggle ? tslToggle.checked : true,
+                        tsl_multiplier: parseFloat(tslSlider ? tslSlider.value : 2.0),
+                        max_daily_trades: maxTr
                     })
                 });
             } catch (err) {
@@ -1725,12 +1754,16 @@
             }
         }
 
-        if(tslToggle && tslSlider) {
+        if (tslToggle && tslSlider) {
             tslToggle.addEventListener('change', updateRiskSettings);
             tslSlider.addEventListener('input', (e) => {
-                tslValDisplay.textContent = parseFloat(e.target.value).toFixed(1) + 'x';
+                tslValDisplay.textContent = parseFloat(e.target.value).toFixed(1) + 'x ATR';
             });
             tslSlider.addEventListener('change', updateRiskSettings);
+        }
+
+        if (maxTradesInput) {
+            maxTradesInput.addEventListener('change', updateRiskSettings);
         }
         
         const btnEmergency = document.getElementById('btn-emergency-close');
