@@ -22,12 +22,11 @@ async def main():
     ltf_file = os.path.join(_base_dir, "ltf_data.json")
     
     if os.path.exists(htf_file) and os.path.exists(ltf_file):
-        print("[DATA] Loading historical data from local cache...")
+        print("[DATA] Loading 30-day historical data from local cache...")
         with open(htf_file, 'r') as f:
             htf_ohlcv = json.load(f)
         with open(ltf_file, 'r') as f:
             ltf_ohlcv = json.load(f)
-            ltf_ohlcv = ltf_ohlcv[-4000:]  # Limit to roughly 1 week + warmup
         await execution.close()
     else:
         # Fetch HTF (1h) history (Binance max limit is 1000)
@@ -60,8 +59,23 @@ async def main():
     if not htf_ohlcv or not ltf_ohlcv:
         print("ERROR: Failed to fetch historical data from Binance.")
         return
+
+    import pandas as pd
+    if Config.LTF_TIMEFRAME == "15m":
+        df = prepare_dataframe(ltf_ohlcv)
+        df_15m = df.resample('15min').agg({
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last',
+            'volume': 'sum'
+        }).dropna()
+        ltf_ohlcv = [
+            [int(ts.timestamp() * 1000), float(row['open']), float(row['high']), float(row['low']), float(row['close']), float(row['volume'])]
+            for ts, row in df_15m.iterrows()
+        ]
         
-    print(f"[DATA] Received {len(htf_ohlcv)} HTF candles and {len(ltf_ohlcv)} LTF candles.")
+    print(f"[DATA] Prepared {len(htf_ohlcv)} HTF ({Config.HTF_TIMEFRAME}) candles and {len(ltf_ohlcv)} LTF ({Config.LTF_TIMEFRAME}) candles.")
 
     # 2. Setup strategy and ML components
     strategy = MultiTimeframeSMCStrategy()
@@ -83,14 +97,17 @@ async def main():
         ml_confirmator = None
 
     # 3. Setup Backtest Engine
-    # Backtest on the remaining out-of-sample candles
-    test_ltf_candles = ltf_ohlcv[split_idx:split_idx+500]
+    # Backtest on the remaining out-of-sample candles (Full 30-day period)
+    test_ltf_candles = ltf_ohlcv[split_idx:]
     
     test_ltf_df = prepare_dataframe(test_ltf_candles)
     if len(test_ltf_df) == 0:
         print("ERROR: No test candles found after splitting.")
         return
         
+    bars_per_day = 96.0 if Config.LTF_TIMEFRAME == "15m" else 288.0
+    duration_days = len(test_ltf_df) / bars_per_day
+    print(f"\n[BACKTEST] Testing out-of-sample period: {len(test_ltf_df)} candles ({duration_days:.1f} Days @ {Config.LTF_TIMEFRAME})...")
     initial_capital = 10000.0
     
     # 1. Backtest WITH ML Confirmation

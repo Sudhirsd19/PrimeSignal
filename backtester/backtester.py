@@ -63,10 +63,10 @@ class BacktestEngine:
         fee_rate = getattr(Config, 'FEE_RATE', 0.001)
         slippage_pct = getattr(Config, 'MAX_SLIPPAGE_PCT', 0.002)
 
-        # We start loop from index where indicators are warmed up on both sides
-        start_idx = max(Config.TREND_EMA * 12, 100) # Ensure HTF EMA is warm (1h EMA 200 = 200 hours, so at 5m we need at least 2400 bars)
+        # We start loop from index where indicators are warmed up
+        start_idx = max(Config.LONG_EMA * 4, 100)
         if start_idx >= len(ltf_df) - 50:
-            start_idx = Config.LONG_EMA + 20
+            start_idx = max(10, len(ltf_df) // 4)
             
         last_trade_day = ltf_df.index[start_idx].date()
         print(f"[BACKTEST] Running simulation loop from bar {start_idx} to {len(ltf_df)}...")
@@ -75,12 +75,12 @@ class BacktestEngine:
             ltf_time = ltf_df.index[i]
             curr_candle = ltf_df.iloc[i]
             
-            # Slice historical data to prevent look-ahead bias
+            # Slice historical data to prevent look-ahead bias (matches live 250-bar rolling window)
             # For LTF, we use index up to i (meaning candle i is the current live candle, i-1 is the last completed)
-            sub_ltf = ltf_df.iloc[:i+1]
+            sub_ltf = ltf_df.iloc[max(0, i-250):i+1]
             
             # For HTF, we can only see candles that closed BEFORE the current LTF timestamp
-            sub_htf = htf_df[htf_df.index < ltf_time]
+            sub_htf = htf_df[htf_df.index < ltf_time].iloc[-250:]
             
             current_close = curr_candle['close']
             current_high = curr_candle['high']
@@ -110,9 +110,13 @@ class BacktestEngine:
                     # Update highest price for trailing stop
                     highest_price = max(highest_price, current_high)
                     
-                    # Update trailing stop after price moves significantly in our favor
-                    if current_high >= entry_price + (entry_price - stop_loss) * 0.5:
-                        # Price moved 0.5R in our favor, tighten stop
+                    # Early Profit Lock / Trailing Stop:
+                    # When price reaches 1.0R in profit, lock Stop Loss to Breakeven (+ fees)
+                    risk_distance = abs(entry_price - initial_stop_loss)
+                    tsl_r = getattr(Config, 'TSL_ACTIVATION_R', 1.0)
+                    if highest_price >= entry_price + (risk_distance * tsl_r):
+                        breakeven_sl = entry_price * 1.0015
+                        stop_loss = max(stop_loss, breakeven_sl)
                         stop_loss = self.risk.update_trailing_stop(entry_price, highest_price, stop_loss, curr_atr, "LONG")
                     
                     # PRIORITY EXIT CHECK: Take Profit checked FIRST
@@ -198,9 +202,13 @@ class BacktestEngine:
                     # For short, we track lowest price reached
                     lowest_price = min(lowest_price, current_low)
                     
-                    # Update trailing stop after price moves in our favor
-                    if current_low <= entry_price - (stop_loss - entry_price) * 0.5:
-                        # Price moved 0.5R in our favor, tighten stop
+                    # Early Profit Lock / Trailing Stop:
+                    # When price reaches 1.0R in profit, lock Stop Loss to Breakeven (- fees)
+                    risk_distance = abs(entry_price - initial_stop_loss)
+                    tsl_r = getattr(Config, 'TSL_ACTIVATION_R', 1.0)
+                    if lowest_price <= entry_price - (risk_distance * tsl_r):
+                        breakeven_sl = entry_price * 0.9985
+                        stop_loss = min(stop_loss, breakeven_sl)
                         stop_loss = self.risk.update_trailing_stop(entry_price, lowest_price, stop_loss, curr_atr, "SHORT")
                     
                     # PRIORITY EXIT CHECK: Take Profit checked FIRST
@@ -330,6 +338,7 @@ class BacktestEngine:
                     
                     entry_time = ltf_time
                     stop_loss = sl
+                    initial_stop_loss = sl
                     take_profit = tp
                     highest_price = entry_price
                     lowest_price = entry_price

@@ -21,11 +21,13 @@ class Config:
     MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "6"))
     TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015")) # Deprecated in favor of ATR
     TRAILING_ATR_MULT = float(os.getenv("TRAILING_ATR_MULT", "2.0"))
+    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.0"))
     MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.8"))
     
     # Strategy settings
     HTF_TIMEFRAME = os.getenv("HTF_TIMEFRAME", "1h")
-    LTF_TIMEFRAME = os.getenv("LTF_TIMEFRAME", "5m")
+    LTF_TIMEFRAME = os.getenv("LTF_TIMEFRAME", "15m")
+    ADX_MIN_THRESHOLD = float(os.getenv("ADX_MIN_THRESHOLD", "25.0"))
     SHORT_EMA = int(os.getenv("SHORT_EMA", "9"))
     LONG_EMA = int(os.getenv("LONG_EMA", "21"))
     TREND_EMA = int(os.getenv("TREND_EMA", "200"))

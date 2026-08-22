@@ -90,14 +90,15 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         curr_atr = ltf_atr.iloc[-2]
         if curr_atr > 1.2 * avg_atr_14:
             market_regime = 'HIGH_VOL'
-        else:
-            if curr_adx > 25: market_regime = 'TREND'
-            elif curr_adx >= 15: market_regime = 'MIXED'
-            else: market_regime = 'RANGE'
+        adx_threshold = getattr(Config, 'ADX_MIN_THRESHOLD', 25.0)
+        if curr_adx >= adx_threshold: market_regime = 'TREND'
+        elif curr_adx >= 20.0: market_regime = 'MIXED'
+        else: market_regime = 'RANGE'
         metadata['market_regime'] = market_regime
 
-        if curr_adx < 15 and ema_dist < 0.002:
-            metadata['reason'] = "Chop Market Filter (ADX<15 & EMA diff<0.2%)"
+        # Trend Regime Filter: Block trades in chop/consolidation (ADX < 25)
+        if curr_adx < adx_threshold:
+            metadata['reason'] = f"Chop Market Filter (ADX {curr_adx:.1f} < {adx_threshold:.1f})"
             return "HOLD", metadata
             
         if ema_dist >= 0.005 or adx_rising:
@@ -235,24 +236,24 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 zone_ts = ltf_df.index[-2]
                 reason = f"Liquidity Sweep of Swing Low [{swing_low:.2f}]"
                 
-            # Secondary Setups
-            if not in_zone and (relaxed or strong_trend):
-                # VWAP Bounce
-                if in_bounds(curr_price, curr_vwap * 0.999, curr_vwap * 1.001):
+            # Dynamic Pullback Setups (Primary winning conditions: VWAP Bounce & EMA 50 Pullback)
+            if not in_zone:
+                # VWAP Dynamic Bounce
+                if in_bounds(curr_price, curr_vwap * 0.9985, curr_vwap * 1.0015):
                     in_zone = True
                     entry_type = "VWAP"
-                    zone_bottom = curr_vwap * 0.999
-                    zone_top = curr_vwap * 1.001
+                    zone_bottom = curr_vwap * 0.9985
+                    zone_top = curr_vwap * 1.0015
                     zone_ts = ltf_df.index[-2]
-                    reason = f"Secondary Setup: VWAP Bounce"
-                # EMA Pullback
-                elif in_bounds(curr_price, curr_ema_50 * 0.999, curr_ema_50 * 1.001):
+                    reason = f"Dynamic Setup: VWAP Bounce"
+                # EMA 50 Trend Pullback
+                elif in_bounds(curr_price, curr_ema_50 * 0.9985, curr_ema_50 * 1.0015):
                     in_zone = True
                     entry_type = "EMA"
-                    zone_bottom = curr_ema_50 * 0.999
-                    zone_top = curr_ema_50 * 1.001
+                    zone_bottom = curr_ema_50 * 0.9985
+                    zone_top = curr_ema_50 * 1.0015
                     zone_ts = ltf_df.index[-2]
-                    reason = f"Secondary Setup: EMA 50 Pullback"
+                    reason = f"Dynamic Setup: EMA 50 Pullback"
 
             metadata['debug_checks']['zone'] = 'PASS' if in_zone else 'FAIL'
 
@@ -266,10 +267,11 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             vwap_pass = curr_vwap > prev_vwap - (prev_vwap * vwap_tol)
             metadata['debug_checks']['vwap'] = 'PASS' if vwap_pass else 'FAIL'
 
+            # Micro-BOS: Reversal candle confirming buyers took control
             micro_bos = (ltf_df.iloc[-2]['close'] > ltf_df.iloc[-2]['open']) and (ltf_df.iloc[-2]['close'] > ltf_df.iloc[-3]['high'])
             
             score = 0
-            if in_zone and entry_type in ["OB", "FVG", "SWEEP"]: score += 2
+            if in_zone and entry_type in ["OB", "FVG", "SWEEP", "VWAP", "EMA"]: score += 2
             if vwap_pass: score += 1
             if trigger_pass: score += 1
             if micro_bos: score += 1
@@ -286,14 +288,16 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 
             metadata['score'] = score
             
+            # Require micro_bos confirmation across winning dynamic pullbacks and zone entries
             valid_entry = False
-            if relaxed:
-                if entry_type in ["EMA", "VWAP"]:
-                    if micro_bos: valid_entry = True
-                elif in_zone and trigger_pass and vwap_pass:
+            if in_zone and entry_type in ["EMA", "VWAP"]:
+                if micro_bos:
                     valid_entry = True
-            else:
-                if score >= score_thresh and (vwap_pass or micro_bos): valid_entry = True
+            elif in_zone and entry_type in ["OB", "FVG", "SWEEP"]:
+                if micro_bos and (trigger_pass or vwap_pass):
+                    valid_entry = True
+            elif relaxed and in_zone and trigger_pass and vwap_pass:
+                valid_entry = True
 
             # Sudden Wick Filter (1.8%) — applied after valid_entry evaluation
             if valid_entry and trigger_low > 0 and (candle_range / trigger_low > 0.018):
@@ -389,24 +393,24 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 zone_ts = ltf_df.index[-2]
                 reason = f"Liquidity Sweep of Swing High [{swing_high:.2f}]"
                 
-            # Secondary Setups
-            if not in_zone and (relaxed or strong_trend):
-                # VWAP Bounce
-                if in_bounds(curr_price, curr_vwap * 0.999, curr_vwap * 1.001):
+            # Dynamic Pullback Setups (Primary winning conditions: VWAP Bounce & EMA 50 Pullback)
+            if not in_zone:
+                # VWAP Dynamic Bounce
+                if in_bounds(curr_price, curr_vwap * 0.9985, curr_vwap * 1.0015):
                     in_zone = True
                     entry_type = "VWAP"
-                    zone_bottom = curr_vwap * 0.999
-                    zone_top = curr_vwap * 1.001
+                    zone_bottom = curr_vwap * 0.9985
+                    zone_top = curr_vwap * 1.0015
                     zone_ts = ltf_df.index[-2]
-                    reason = f"Secondary Setup: VWAP Bounce"
-                # EMA Pullback
-                elif in_bounds(curr_price, curr_ema_50 * 0.999, curr_ema_50 * 1.001):
+                    reason = f"Dynamic Setup: VWAP Bounce"
+                # EMA 50 Trend Pullback
+                elif in_bounds(curr_price, curr_ema_50 * 0.9985, curr_ema_50 * 1.0015):
                     in_zone = True
                     entry_type = "EMA"
-                    zone_bottom = curr_ema_50 * 0.999
-                    zone_top = curr_ema_50 * 1.001
+                    zone_bottom = curr_ema_50 * 0.9985
+                    zone_top = curr_ema_50 * 1.0015
                     zone_ts = ltf_df.index[-2]
-                    reason = f"Secondary Setup: EMA 50 Pullback"
+                    reason = f"Dynamic Setup: EMA 50 Pullback"
 
             metadata['debug_checks']['zone'] = 'PASS' if in_zone else 'FAIL'
 
@@ -420,10 +424,11 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             vwap_pass = curr_vwap < prev_vwap + (prev_vwap * vwap_tol)
             metadata['debug_checks']['vwap'] = 'PASS' if vwap_pass else 'FAIL'
 
+            # Micro-BOS: Reversal candle confirming sellers took control
             micro_bos = (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-2]['open']) and (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-3]['low'])
             
             score = 0
-            if in_zone and entry_type in ["OB", "FVG", "SWEEP"]: score += 2
+            if in_zone and entry_type in ["OB", "FVG", "SWEEP", "VWAP", "EMA"]: score += 2
             if vwap_pass: score += 1
             if trigger_pass: score += 1
             if micro_bos: score += 1
@@ -440,14 +445,16 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 
             metadata['score'] = score
             
+            # Require micro_bos confirmation across winning dynamic pullbacks and zone entries
             valid_entry = False
-            if relaxed:
-                if entry_type in ["EMA", "VWAP"]:
-                    if micro_bos: valid_entry = True
-                elif in_zone and trigger_pass and vwap_pass:
+            if in_zone and entry_type in ["EMA", "VWAP"]:
+                if micro_bos:
                     valid_entry = True
-            else:
-                if score >= score_thresh and (vwap_pass or micro_bos): valid_entry = True
+            elif in_zone and entry_type in ["OB", "FVG", "SWEEP"]:
+                if micro_bos and (trigger_pass or vwap_pass):
+                    valid_entry = True
+            elif relaxed and in_zone and trigger_pass and vwap_pass:
+                valid_entry = True
 
             # Sudden Wick Filter (1.8%) — applied after valid_entry evaluation
             if valid_entry and trigger_low > 0 and ((trigger_high - trigger_low) / trigger_low > 0.018):
