@@ -98,6 +98,69 @@ def calculate_adx(df, period=14):
     
     return pd.DataFrame({'plus_di': plus_di, 'minus_di': minus_di, 'adx': adx})
 
+def detect_rsi_divergence(df, rsi_series, lookback=20):
+    """
+    Detects RSI divergence by comparing price swing points with RSI swing points.
+    
+    Bullish Divergence: Price makes a LOWER low, but RSI makes a HIGHER low.
+    Bearish Divergence: Price makes a HIGHER high, but RSI makes a LOWER high.
+    
+    Args:
+        df: DataFrame with OHLCV data
+        rsi_series: pandas Series of RSI values (same index as df)
+        lookback: number of bars to scan for swing points
+        
+    Returns:
+        str or None: 'BULLISH', 'BEARISH', or None
+    """
+    if len(df) < lookback + 5 or len(rsi_series) < lookback + 5:
+        return None
+    
+    # Use the completed candle window (exclude live candle at -1)
+    end = len(df) - 1  # last completed = -2, but we use iloc indices
+    start = max(0, end - lookback)
+    
+    price_lows = df['low'].iloc[start:end]
+    price_highs = df['high'].iloc[start:end]
+    rsi_window = rsi_series.iloc[start:end]
+    
+    if len(price_lows) < 10:
+        return None
+    
+    # Find swing lows (local minima with 3-bar lookback/forward)
+    swing_lows = []
+    swing_highs = []
+    for i in range(3, len(price_lows) - 3):
+        # Swing low: lower than 3 bars on each side
+        if price_lows.iloc[i] == price_lows.iloc[i-3:i+4].min():
+            swing_lows.append(i)
+        # Swing high: higher than 3 bars on each side
+        if price_highs.iloc[i] == price_highs.iloc[i-3:i+4].max():
+            swing_highs.append(i)
+    
+    # Check for Bullish Divergence (need at least 2 swing lows)
+    if len(swing_lows) >= 2:
+        latest_sw = swing_lows[-1]
+        prev_sw = swing_lows[-2]
+        # Price made lower low
+        if price_lows.iloc[latest_sw] < price_lows.iloc[prev_sw]:
+            # But RSI made higher low
+            if rsi_window.iloc[latest_sw] > rsi_window.iloc[prev_sw]:
+                return 'BULLISH'
+    
+    # Check for Bearish Divergence (need at least 2 swing highs)
+    if len(swing_highs) >= 2:
+        latest_sw = swing_highs[-1]
+        prev_sw = swing_highs[-2]
+        # Price made higher high
+        if price_highs.iloc[latest_sw] > price_highs.iloc[prev_sw]:
+            # But RSI made lower high
+            if rsi_window.iloc[latest_sw] < rsi_window.iloc[prev_sw]:
+                return 'BEARISH'
+    
+    return None
+
+
 def prepare_dataframe(ohlcv_data):
     """
     Converts list of list OHLCV candles to a pandas DataFrame.

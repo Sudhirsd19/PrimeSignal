@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import datetime
 from config import Config
 from strategies.indicators import prepare_dataframe
 from risk.risk_manager import RiskManager
@@ -44,6 +43,7 @@ class BacktestEngine:
         entry_price = 0.0
         position_size = 0.0
         stop_loss = 0.0
+        initial_stop_loss = 0.0
         take_profit = 0.0
         highest_price = 0.0
         lowest_price = 999999.0
@@ -113,7 +113,7 @@ class BacktestEngine:
                     # Early Profit Lock / Trailing Stop:
                     # When price reaches 1.0R in profit, lock Stop Loss to Breakeven (+ fees)
                     risk_distance = abs(entry_price - initial_stop_loss)
-                    tsl_r = getattr(Config, 'TSL_ACTIVATION_R', 1.0)
+                    tsl_r = getattr(Config, 'TSL_ACTIVATION_R', 0.50)
                     if highest_price >= entry_price + (risk_distance * tsl_r):
                         breakeven_sl = entry_price * 1.0015
                         stop_loss = max(stop_loss, breakeven_sl)
@@ -205,7 +205,7 @@ class BacktestEngine:
                     # Early Profit Lock / Trailing Stop:
                     # When price reaches 1.0R in profit, lock Stop Loss to Breakeven (- fees)
                     risk_distance = abs(entry_price - initial_stop_loss)
-                    tsl_r = getattr(Config, 'TSL_ACTIVATION_R', 1.0)
+                    tsl_r = getattr(Config, 'TSL_ACTIVATION_R', 0.50)
                     if lowest_price <= entry_price - (risk_distance * tsl_r):
                         breakeven_sl = entry_price * 0.9985
                         stop_loss = min(stop_loss, breakeven_sl)

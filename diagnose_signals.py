@@ -2,7 +2,7 @@
 Diagnostic script: runs the strategy's generate_signal() for all 20 coins
 using cached data to find WHERE each coin's signal is getting blocked.
 """
-import sys, asyncio, os, json
+import sys, os, json
 sys.path.insert(0, os.path.dirname(__file__))
 
 from config import Config
@@ -62,7 +62,7 @@ def main():
         htf_df = prepare_dataframe(htf_ohlcv)
         signal_s, meta_s = strategy.generate_signal(htf_df, window_ltf_df, relaxed=False)
         # Relaxed
-        signal_r, meta_r = strategy.generate_signal(htf_df, window_ltf_df, relaxed=True, super_relaxed=True)
+        signal_r, meta_r = strategy.generate_signal(htf_df, window_ltf_df, relaxed=True)
         
         dbg = meta_s.get('debug_checks', {})
         trend = meta_s.get('htf_trend', 'N/A')

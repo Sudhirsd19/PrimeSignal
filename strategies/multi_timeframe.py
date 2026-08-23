@@ -1,14 +1,13 @@
 from strategies.base import BaseStrategy
-from strategies.indicators import calculate_ema, calculate_rsi, calculate_atr, calculate_vwap, calculate_adx
+from strategies.indicators import calculate_ema, calculate_rsi, calculate_atr, calculate_vwap, calculate_adx, detect_rsi_divergence
 from strategies.smc import detect_fvgs, detect_order_blocks, detect_structure
 from config import Config
-import numpy as np
 
 class MultiTimeframeSMCStrategy(BaseStrategy):
     def __init__(self):
         super().__init__(name="MultiTimeframeSMC")
 
-    def generate_signal(self, htf_df, ltf_df, relaxed=False, super_relaxed=False):
+    def generate_signal(self, htf_df, ltf_df, relaxed=False):
         """
         Executes Multi-Timeframe Smart Money Concepts strategy.
         """
@@ -37,7 +36,9 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 'zone': 'FAIL',
                 'trigger': 'FAIL',
                 'vwap': 'FAIL',
-                'volatility': 'FAIL'
+                'volatility': 'FAIL',
+                'structure': 'N/A',
+                'rsi_divergence': 'N/A'
             }
         }
 
@@ -76,6 +77,19 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
 
         fvgs       = detect_fvgs(ltf_df)
         obs        = detect_order_blocks(ltf_df)
+        htf_fvgs   = detect_fvgs(htf_df)
+        htf_obs    = detect_order_blocks(htf_df)
+        bos_series, choch_series = detect_structure(ltf_df)
+        
+        # RSI Divergence detection on LTF
+        rsi_div_lookback = getattr(Config, 'RSI_DIVERGENCE_LOOKBACK', 20)
+        ltf_rsi_div = detect_rsi_divergence(ltf_df, ltf_rsi, lookback=rsi_div_lookback)
+        metadata['ltf_rsi_divergence'] = ltf_rsi_div
+        
+        # HTF RSI divergence (additional confluence)
+        htf_rsi = calculate_rsi(htf_df, Config.RSI_PERIOD)
+        htf_rsi_div = detect_rsi_divergence(htf_df, htf_rsi, lookback=rsi_div_lookback)
+        metadata['htf_rsi_divergence'] = htf_rsi_div
         
         strong_trend = False
         ema_dist = abs(latest_htf_ema_50 - latest_htf_ema_200) / latest_htf_ema_200 if (latest_htf_ema_200 and latest_htf_ema_200 > 0) else 0.0
@@ -126,12 +140,20 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         metadata['strong_trend'] = strong_trend
 
         import datetime
-        current_hour = datetime.datetime.utcnow().hour
+        now_dt = datetime.datetime.utcnow()
+        current_hour = now_dt.hour
+        current_weekday = now_dt.weekday()
+        
         session_name = 'OTHER'
-        if 0 <= current_hour < 8: session_name = 'ASIA'
-        elif 8 <= current_hour < 13: session_name = 'LONDON'
+        if 0 <= current_hour < 7: session_name = 'ASIA'
+        elif 7 <= current_hour < 13: session_name = 'LONDON'
         elif 13 <= current_hour < 22: session_name = 'NY'
         metadata['session'] = session_name
+        
+        # Weekend Filter: Block trades during low-liquidity weekend chop unless in powerful trend
+        if getattr(Config, 'ENABLE_WEEKEND_FILTER', False) and current_weekday in (5, 6) and not strong_trend:
+            metadata['reason'] = "Weekend Low-Liquidity Filter (Sat/Sun)"
+            return "HOLD", metadata
         
         curr_price = ltf_closes.iloc[-2]
         curr_rsi   = ltf_rsi.iloc[-2]
@@ -153,6 +175,9 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         vol_pass = (curr_atr / curr_price >= Config.MIN_ATR_PCT) if curr_price > 0 else False
         metadata['debug_checks']['volatility'] = 'PASS' if vol_pass else 'FAIL'
 
+        # ATR-scaled dynamic zone band for VWAP/EMA pullback zones
+        zone_half_band = min(0.5 * curr_atr, curr_price * 0.003) if curr_atr > 0 else curr_price * 0.0015
+
         def in_bounds(price, bottom, top):
             return (bottom * (1 - Config.ZONE_BUFFER_PCT)) <= price <= (top * (1 + Config.ZONE_BUFFER_PCT))
 
@@ -164,24 +189,90 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             if relaxed and zone.get('partially_mitigated', False): return True
             return False
 
-        for idx in range(len(ltf_df) - 2, max(0, len(ltf_df) - 2 - Config.MAX_ZONE_AGE_CANDLES), -1):
-            ob = obs.iloc[idx]
+        # Structure validation: find the latest counter-BOS to invalidate stale zones
+        struct_lookback = getattr(Config, 'STRUCTURE_LOOKBACK', 30)
+        latest_bearish_bos_idx = None
+        latest_bullish_bos_idx = None
+        for idx in range(len(ltf_df) - 2, max(0, len(ltf_df) - 2 - struct_lookback), -1):
+            bos = bos_series.iloc[idx]
+            if bos:
+                if bos['type'] == 'BEARISH' and latest_bearish_bos_idx is None:
+                    latest_bearish_bos_idx = idx
+                elif bos['type'] == 'BULLISH' and latest_bullish_bos_idx is None:
+                    latest_bullish_bos_idx = idx
+            if latest_bearish_bos_idx is not None and latest_bullish_bos_idx is not None:
+                break
+        
+        # Also check for CHoCH (Change of Character) — high-quality reversal signal
+        latest_bullish_choch = None
+        latest_bearish_choch = None
+        for idx in range(len(ltf_df) - 2, max(0, len(ltf_df) - 2 - struct_lookback), -1):
+            choch = choch_series.iloc[idx]
+            if choch:
+                if choch['type'] == 'BULLISH' and latest_bullish_choch is None:
+                    latest_bullish_choch = idx
+                elif choch['type'] == 'BEARISH' and latest_bearish_choch is None:
+                    latest_bearish_choch = idx
+
+        def is_zone_structurally_valid(zone, zone_type):
+            """Check if a zone hasn't been invalidated by a counter-BOS after its creation."""
+            zone_ts = zone.get('timestamp')
+            if zone_ts is None:
+                return True  # Can't validate, assume valid
+            # For bullish zones: invalidated if a bearish BOS occurred AFTER the zone was created
+            if zone_type == 'BULLISH' and latest_bearish_bos_idx is not None:
+                bos_time = ltf_df.index[latest_bearish_bos_idx]
+                if bos_time > zone_ts:
+                    return False
+            # For bearish zones: invalidated if a bullish BOS occurred AFTER the zone was created
+            if zone_type == 'BEARISH' and latest_bullish_bos_idx is not None:
+                bos_time = ltf_df.index[latest_bullish_bos_idx]
+                if bos_time > zone_ts:
+                    return False
+            return True
+
+        # 1. Search HTF Institutional Zones (Highest Conviction)
+        for idx in range(len(htf_df) - 2, max(0, len(htf_df) - 2 - Config.MAX_ZONE_AGE_CANDLES), -1):
+            ob = htf_obs.iloc[idx]
             if ob:
                 if ob['type'] == 'BULLISH' and is_zone_active(ob) and active_bullish_ob is None:
                     active_bullish_ob = ob
                 elif ob['type'] == 'BEARISH' and is_zone_active(ob) and active_bearish_ob is None:
                     active_bearish_ob = ob
 
+        # 2. Search LTF Zones if HTF not already found
+        for idx in range(len(ltf_df) - 2, max(0, len(ltf_df) - 2 - Config.MAX_ZONE_AGE_CANDLES), -1):
+            ob = obs.iloc[idx]
+            if ob:
+                if ob['type'] == 'BULLISH' and is_zone_active(ob) and active_bullish_ob is None:
+                    if is_zone_structurally_valid(ob, 'BULLISH'):
+                        active_bullish_ob = ob
+                elif ob['type'] == 'BEARISH' and is_zone_active(ob) and active_bearish_ob is None:
+                    if is_zone_structurally_valid(ob, 'BEARISH'):
+                        active_bearish_ob = ob
+
         active_bullish_fvg = None
         active_bearish_fvg = None
 
-        for idx in range(len(ltf_df) - 2, max(0, len(ltf_df) - 2 - Config.MAX_ZONE_AGE_CANDLES), -1):
-            fvg = fvgs.iloc[idx]
+        # 1. Search HTF FVGs
+        for idx in range(len(htf_df) - 2, max(0, len(htf_df) - 2 - Config.MAX_ZONE_AGE_CANDLES), -1):
+            fvg = htf_fvgs.iloc[idx]
             if fvg:
                 if fvg['type'] == 'BULLISH' and is_zone_active(fvg) and active_bullish_fvg is None:
                     active_bullish_fvg = fvg
                 elif fvg['type'] == 'BEARISH' and is_zone_active(fvg) and active_bearish_fvg is None:
                     active_bearish_fvg = fvg
+
+        # 2. Search LTF FVGs
+        for idx in range(len(ltf_df) - 2, max(0, len(ltf_df) - 2 - Config.MAX_ZONE_AGE_CANDLES), -1):
+            fvg = fvgs.iloc[idx]
+            if fvg:
+                if fvg['type'] == 'BULLISH' and is_zone_active(fvg) and active_bullish_fvg is None:
+                    if is_zone_structurally_valid(fvg, 'BULLISH'):
+                        active_bullish_fvg = fvg
+                elif fvg['type'] == 'BEARISH' and is_zone_active(fvg) and active_bearish_fvg is None:
+                    if is_zone_structurally_valid(fvg, 'BEARISH'):
+                        active_bearish_fvg = fvg
 
         vwap_tol = Config.VWAP_TOLERANCE * 2 if relaxed else Config.VWAP_TOLERANCE
 
@@ -236,24 +327,29 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 zone_ts = ltf_df.index[-2]
                 reason = f"Liquidity Sweep of Swing Low [{swing_low:.2f}]"
                 
-            # Dynamic Pullback Setups (Primary winning conditions: VWAP Bounce & EMA 50 Pullback)
+            # Dynamic Pullback Setups (ATR-scaled bands instead of fixed ±0.15%)
             if not in_zone:
                 # VWAP Dynamic Bounce
-                if in_bounds(curr_price, curr_vwap * 0.9985, curr_vwap * 1.0015):
+                vwap_lo = curr_vwap - zone_half_band
+                vwap_hi = curr_vwap + zone_half_band
+                if in_bounds(curr_price, vwap_lo, vwap_hi):
                     in_zone = True
                     entry_type = "VWAP"
-                    zone_bottom = curr_vwap * 0.9985
-                    zone_top = curr_vwap * 1.0015
+                    zone_bottom = vwap_lo
+                    zone_top = vwap_hi
                     zone_ts = ltf_df.index[-2]
                     reason = f"Dynamic Setup: VWAP Bounce"
                 # EMA 50 Trend Pullback
-                elif in_bounds(curr_price, curr_ema_50 * 0.9985, curr_ema_50 * 1.0015):
-                    in_zone = True
-                    entry_type = "EMA"
-                    zone_bottom = curr_ema_50 * 0.9985
-                    zone_top = curr_ema_50 * 1.0015
-                    zone_ts = ltf_df.index[-2]
-                    reason = f"Dynamic Setup: EMA 50 Pullback"
+                else:
+                    ema_lo = curr_ema_50 - zone_half_band
+                    ema_hi = curr_ema_50 + zone_half_band
+                    if in_bounds(curr_price, ema_lo, ema_hi):
+                        in_zone = True
+                        entry_type = "EMA"
+                        zone_bottom = ema_lo
+                        zone_top = ema_hi
+                        zone_ts = ltf_df.index[-2]
+                        reason = f"Dynamic Setup: EMA 50 Pullback"
 
             metadata['debug_checks']['zone'] = 'PASS' if in_zone else 'FAIL'
 
@@ -270,33 +366,52 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             # Micro-BOS: Reversal candle confirming buyers took control
             micro_bos = (ltf_df.iloc[-2]['close'] > ltf_df.iloc[-2]['open']) and (ltf_df.iloc[-2]['close'] > ltf_df.iloc[-3]['high'])
             
+            # RSI Divergence confluence
+            rsi_div_bonus = 0
+            if ltf_rsi_div == 'BULLISH':
+                rsi_div_bonus = 1
+                metadata['debug_checks']['rsi_divergence'] = 'BULLISH_PASS'
+            if htf_rsi_div == 'BULLISH':
+                rsi_div_bonus = 1  # HTF divergence is equally valuable
+                metadata['debug_checks']['rsi_divergence'] = 'HTF_BULLISH_PASS'
+            
+            # CHoCH confluence bonus
+            choch_bonus = 0
+            if latest_bullish_choch is not None:
+                choch_bonus = 1
+                metadata['debug_checks']['structure'] = 'CHOCH_BULLISH'
+            elif latest_bearish_bos_idx is None:
+                metadata['debug_checks']['structure'] = 'CLEAN'
+            else:
+                metadata['debug_checks']['structure'] = 'COUNTER_BOS_PRESENT'
+            
             score = 0
             if in_zone and entry_type in ["OB", "FVG", "SWEEP", "VWAP", "EMA"]: score += 2
             if vwap_pass: score += 1
             if trigger_pass: score += 1
             if micro_bos: score += 1
+            score += rsi_div_bonus
+            score += choch_bonus
             
             if market_regime == 'TREND': score_thresh = 2.5
             elif market_regime == 'MIXED': score_thresh = 3.0
             elif market_regime == 'RANGE': score_thresh = 3.5
             elif market_regime == 'HIGH_VOL': score_thresh = 4.0
             else: score_thresh = 3.0
-            
-            if super_relaxed:
-                score_thresh -= 0.5
-                vwap_pass = True
                 
             metadata['score'] = score
             
-            # Require micro_bos confirmation across winning dynamic pullbacks and zone entries
+            # Multi-Trigger Valid Entry:
+            # 1. Zone Setups (OB, FVG, SWEEP) with rejection trigger OR micro_bos
+            # 2. Dynamic Pullback Setups (EMA, VWAP) with trend alignment + trigger
             valid_entry = False
-            if in_zone and entry_type in ["EMA", "VWAP"]:
-                if micro_bos:
+            if in_zone and entry_type in ["OB", "FVG", "SWEEP"]:
+                if (micro_bos or trigger_pass or rsi_trigger) and (vwap_pass or strong_trend or score >= 2):
                     valid_entry = True
-            elif in_zone and entry_type in ["OB", "FVG", "SWEEP"]:
-                if micro_bos and (trigger_pass or vwap_pass):
+            elif in_zone and entry_type in ["EMA", "VWAP"]:
+                if (micro_bos or trigger_pass) and (curr_rsi < 65 and vwap_pass):
                     valid_entry = True
-            elif relaxed and in_zone and trigger_pass and vwap_pass:
+            elif relaxed and in_zone and (trigger_pass or vwap_pass):
                 valid_entry = True
 
             # Sudden Wick Filter (1.8%) — applied after valid_entry evaluation
@@ -311,22 +426,21 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             # FIX #3: Removed redundant vol_pass check - vol_pass already validated at line 146
             if valid_entry:
                 if entry_type in ["OB", "FVG"]:
-                    ob_sl = zone_bottom * 0.998
+                    ob_sl = zone_bottom * 0.9985
                 else:
                     ob_sl = 0.0
-                atr_sl = curr_price - (2.0 * curr_atr)
+                atr_sl = curr_price - (1.5 * curr_atr)
                 
-                # Tighter of structure or ATR, but minimum 0.3% distance
-                tightest_sl = max(ob_sl, atr_sl) if ob_sl > 0 else atr_sl
-                min_sl = curr_price * (1 - 0.003)
-                last_5_range = ltf_df['high'].iloc[-7:-2].max() - ltf_df['low'].iloc[-7:-2].min()
-                range_sl = curr_price - (0.8 * last_5_range)
-                stop_loss = min(tightest_sl, min_sl, range_sl)
+                # Structural invalidation SL: tighter of OB boundary or 1.5x ATR
+                stop_loss = max(ob_sl, atr_sl) if ob_sl > 0 else atr_sl
+                # Ensure minimum 0.3% and maximum 2.5% bounds
+                stop_loss = min(stop_loss, curr_price * (1 - 0.003))
+                stop_loss = max(stop_loss, curr_price * (1 - 0.025))
 
                 risk        = max(curr_price - stop_loss, 1e-9)
-                fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.001) * 2.0
-                take_profit_1r = curr_price + risk + fee_adj
-                take_profit = curr_price + (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.0)) + fee_adj
+                fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
+                take_profit_1r = curr_price + (risk * getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)) + fee_adj
+                take_profit = curr_price + (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.5)) + fee_adj
 
                 metadata['stop_loss']  = stop_loss
                 metadata['take_profit_1r'] = take_profit_1r
@@ -393,24 +507,29 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 zone_ts = ltf_df.index[-2]
                 reason = f"Liquidity Sweep of Swing High [{swing_high:.2f}]"
                 
-            # Dynamic Pullback Setups (Primary winning conditions: VWAP Bounce & EMA 50 Pullback)
+            # Dynamic Pullback Setups (ATR-scaled bands instead of fixed ±0.15%)
             if not in_zone:
                 # VWAP Dynamic Bounce
-                if in_bounds(curr_price, curr_vwap * 0.9985, curr_vwap * 1.0015):
+                vwap_lo = curr_vwap - zone_half_band
+                vwap_hi = curr_vwap + zone_half_band
+                if in_bounds(curr_price, vwap_lo, vwap_hi):
                     in_zone = True
                     entry_type = "VWAP"
-                    zone_bottom = curr_vwap * 0.9985
-                    zone_top = curr_vwap * 1.0015
+                    zone_bottom = vwap_lo
+                    zone_top = vwap_hi
                     zone_ts = ltf_df.index[-2]
                     reason = f"Dynamic Setup: VWAP Bounce"
                 # EMA 50 Trend Pullback
-                elif in_bounds(curr_price, curr_ema_50 * 0.9985, curr_ema_50 * 1.0015):
-                    in_zone = True
-                    entry_type = "EMA"
-                    zone_bottom = curr_ema_50 * 0.9985
-                    zone_top = curr_ema_50 * 1.0015
-                    zone_ts = ltf_df.index[-2]
-                    reason = f"Dynamic Setup: EMA 50 Pullback"
+                else:
+                    ema_lo = curr_ema_50 - zone_half_band
+                    ema_hi = curr_ema_50 + zone_half_band
+                    if in_bounds(curr_price, ema_lo, ema_hi):
+                        in_zone = True
+                        entry_type = "EMA"
+                        zone_bottom = ema_lo
+                        zone_top = ema_hi
+                        zone_ts = ltf_df.index[-2]
+                        reason = f"Dynamic Setup: EMA 50 Pullback"
 
             metadata['debug_checks']['zone'] = 'PASS' if in_zone else 'FAIL'
 
@@ -427,33 +546,52 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             # Micro-BOS: Reversal candle confirming sellers took control
             micro_bos = (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-2]['open']) and (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-3]['low'])
             
+            # RSI Divergence confluence
+            rsi_div_bonus = 0
+            if ltf_rsi_div == 'BEARISH':
+                rsi_div_bonus = 1
+                metadata['debug_checks']['rsi_divergence'] = 'BEARISH_PASS'
+            if htf_rsi_div == 'BEARISH':
+                rsi_div_bonus = 1
+                metadata['debug_checks']['rsi_divergence'] = 'HTF_BEARISH_PASS'
+            
+            # CHoCH confluence bonus
+            choch_bonus = 0
+            if latest_bearish_choch is not None:
+                choch_bonus = 1
+                metadata['debug_checks']['structure'] = 'CHOCH_BEARISH'
+            elif latest_bullish_bos_idx is None:
+                metadata['debug_checks']['structure'] = 'CLEAN'
+            else:
+                metadata['debug_checks']['structure'] = 'COUNTER_BOS_PRESENT'
+            
             score = 0
             if in_zone and entry_type in ["OB", "FVG", "SWEEP", "VWAP", "EMA"]: score += 2
             if vwap_pass: score += 1
             if trigger_pass: score += 1
             if micro_bos: score += 1
+            score += rsi_div_bonus
+            score += choch_bonus
             
             if market_regime == 'TREND': score_thresh = 2.5
             elif market_regime == 'MIXED': score_thresh = 3.0
             elif market_regime == 'RANGE': score_thresh = 3.5
             elif market_regime == 'HIGH_VOL': score_thresh = 4.0
             else: score_thresh = 3.0
-            
-            if super_relaxed:
-                score_thresh -= 0.5
-                vwap_pass = True
                 
             metadata['score'] = score
             
-            # Require micro_bos confirmation across winning dynamic pullbacks and zone entries
+            # Multi-Trigger Valid Entry:
+            # 1. Zone Setups (OB, FVG, SWEEP) with rejection trigger OR micro_bos
+            # 2. Dynamic Pullback Setups (EMA, VWAP) with trend alignment + trigger
             valid_entry = False
-            if in_zone and entry_type in ["EMA", "VWAP"]:
-                if micro_bos:
+            if in_zone and entry_type in ["OB", "FVG", "SWEEP"]:
+                if (micro_bos or trigger_pass or rsi_trigger) and (vwap_pass or strong_trend or score >= 2):
                     valid_entry = True
-            elif in_zone and entry_type in ["OB", "FVG", "SWEEP"]:
-                if micro_bos and (trigger_pass or vwap_pass):
+            elif in_zone and entry_type in ["EMA", "VWAP"]:
+                if (micro_bos or trigger_pass) and (curr_rsi > 35 and vwap_pass):
                     valid_entry = True
-            elif relaxed and in_zone and trigger_pass and vwap_pass:
+            elif relaxed and in_zone and (trigger_pass or vwap_pass):
                 valid_entry = True
 
             # Sudden Wick Filter (1.8%) — applied after valid_entry evaluation
@@ -467,24 +605,21 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
 
             if valid_entry:
                 if entry_type in ["OB", "FVG"]:
-                    ob_sl = zone_top * 1.002
+                    ob_sl = zone_top * 1.0015
                 else:
                     ob_sl = 999999999.0
-                atr_sl = curr_price + (2.0 * curr_atr)
+                atr_sl = curr_price + (1.5 * curr_atr)
                 
-                # Tighter of structure or ATR, but minimum 0.3% distance
-                tightest_sl = min(ob_sl, atr_sl) if entry_type in ["OB", "FVG"] else atr_sl
-                min_sl = curr_price * (1 + 0.003)
-                
-                # Range stop loss for BEARISH
-                last_5_range = ltf_df['high'].iloc[-7:-2].max() - ltf_df['low'].iloc[-7:-2].min()
-                range_sl = curr_price + (0.8 * last_5_range)
-                stop_loss = max(tightest_sl, min_sl, range_sl)
+                # Structural invalidation SL: tighter of OB boundary or 1.5x ATR
+                stop_loss = min(ob_sl, atr_sl) if entry_type in ["OB", "FVG"] else atr_sl
+                # Ensure minimum 0.3% and maximum 2.5% bounds
+                stop_loss = max(stop_loss, curr_price * (1 + 0.003))
+                stop_loss = min(stop_loss, curr_price * (1 + 0.025))
 
                 risk        = max(stop_loss - curr_price, 1e-9)
-                fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.001) * 2.0
-                take_profit_1r = curr_price - risk - fee_adj
-                take_profit = curr_price - (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.0)) - fee_adj
+                fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
+                take_profit_1r = curr_price - (risk * getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)) - fee_adj
+                take_profit = curr_price - (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.5)) - fee_adj
 
                 metadata['stop_loss']  = stop_loss
                 metadata['take_profit_1r'] = take_profit_1r

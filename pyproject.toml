@@ -1,0 +1,18 @@
+[tool.pyrefly]
+search_paths = [
+    "c:/Users/Admin/.gemini/antigravity/scratch/PrimeSignal/.venv/Lib/site-packages",
+    "c:/Users/Admin/.gemini/antigravity/scratch/PrimeSignal",
+    ".venv/Lib/site-packages",
+    "."
+]
+site_package_path = "c:/Users/Admin/.gemini/antigravity/scratch/PrimeSignal/.venv/Lib/site-packages"
+venv = ".venv"
+venv_path = "."
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+extraPaths = [
+    ".venv/Lib/site-packages",
+    "."
+]

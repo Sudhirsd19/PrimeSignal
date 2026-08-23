@@ -248,7 +248,6 @@ class CoinDCXClient:
 
     async def wait_for_fill(self, order_id: str, timeout: float = 30.0) -> dict | None:
         """Polls CoinDCX order status until filled, cancelled, or timeout."""
-        import asyncio
         start = time.time()
         poll_interval = 1.0
         while time.time() - start < timeout:

@@ -3,78 +3,91 @@ import numpy as np
 
 def detect_fvgs(df):
     """
-    Detects Fair Value Gaps (FVGs) in the DataFrame.
+    Detects Fair Value Gaps (FVGs) in the DataFrame using vectorized numpy arrays.
     Returns:
         fvg_series: pandas Series of dicts containing FVG details or None.
     """
-    fvg_list = [None] * len(df)
-    
-    # Needs at least 3 candles
-    for i in range(2, len(df)):
-        c_prev2 = df.iloc[i-2]
-        c_prev = df.iloc[i-1]
-        c_curr = df.iloc[i]
-        
+    n = len(df)
+    fvg_list = [None] * n
+    if n < 3:
+        return pd.Series(fvg_list, index=df.index)
+
+    opens = df['open'].values
+    highs = df['high'].values
+    lows = df['low'].values
+    closes = df['close'].values
+    volumes = df['volume'].values
+    timestamps = df.index
+
+    # Precalculate rolling volume average using pandas
+    avg_vols = df['volume'].rolling(14, min_periods=1).mean().values
+
+    # Step 1: Detect raw FVGs
+    for i in range(2, n):
         # Bullish FVG: Low of candle i is greater than High of candle i-2
-        if c_curr['low'] > c_prev2['high']:
-            # Verify it's an impulsive expansion candle
-            if c_prev['close'] > c_prev['open']:
+        if lows[i] > highs[i-2]:
+            if closes[i-1] > opens[i-1]:
                 fvg_list[i] = {
                     'type': 'BULLISH',
-                    'top': c_curr['low'],
-                    'bottom': c_prev2['high'],
+                    'top': lows[i],
+                    'bottom': highs[i-2],
                     'mitigated': False,
-                    'timestamp': df.index[i-1]
+                    'partially_mitigated': False,
+                    'timestamp': timestamps[i-1]
                 }
-                
         # Bearish FVG: High of candle i is less than Low of candle i-2
-        elif c_curr['high'] < c_prev2['low']:
-            if c_prev['close'] < c_prev['open']:
+        elif highs[i] < lows[i-2]:
+            if closes[i-1] < opens[i-1]:
                 fvg_list[i] = {
                     'type': 'BEARISH',
-                    'top': c_prev2['low'],
-                    'bottom': c_curr['high'],
+                    'top': lows[i-2],
+                    'bottom': highs[i],
                     'mitigated': False,
-                    'timestamp': df.index[i-1]
+                    'partially_mitigated': False,
+                    'timestamp': timestamps[i-1]
                 }
-                
-    # --- MITIGATION PASS FOR FVGS ---
-    for i in range(len(fvg_list)):
+
+    # Step 2: Mitigation pass (vectorized lookahead)
+    for i in range(n):
         fvg = fvg_list[i]
         if fvg is None:
             continue
-        
-        fvg['partially_mitigated'] = False
-        for k in range(i + 1, min(len(df), i + 150)):
-            candle = df.iloc[k]
-            
-            # Check if price touches the FVG zone
-            if candle['low'] <= fvg['top'] and candle['high'] >= fvg['bottom']:
+
+        fvg_top = fvg['top']
+        fvg_bottom = fvg['bottom']
+        fvg_type = fvg['type']
+        end_k = min(n, i + 150)
+
+        for k in range(i + 1, end_k):
+            k_low = lows[k]
+            k_high = highs[k]
+
+            if k_low <= fvg_top and k_high >= fvg_bottom:
                 fvg['mitigated'] = True
-                
-                # Check for smart partial mitigation (wick rejection)
-                candle_range = candle['high'] - candle['low']
+                candle_range = k_high - k_low
                 is_partial = False
-                
+
                 if candle_range > 0:
-                    avg_vol = df['volume'].iloc[max(0, k-14):k].mean()
-                    if fvg['type'] == 'BULLISH':
-                        lower_body = min(candle['open'], candle['close'])
-                        wick_len = lower_body - candle['low']
-                        if candle['close'] > fvg['bottom'] and (wick_len / candle_range) >= 0.30 and candle['volume'] >= 1.2 * avg_vol:
+                    avg_v = avg_vols[k]
+                    k_open = opens[k]
+                    k_close = closes[k]
+                    k_vol = volumes[k]
+
+                    if fvg_type == 'BULLISH':
+                        lower_body = min(k_open, k_close)
+                        wick_len = lower_body - k_low
+                        if k_close > fvg_bottom and (wick_len / candle_range) >= 0.30 and k_vol >= 1.2 * avg_v:
                             is_partial = True
-                            
-                    elif fvg['type'] == 'BEARISH':
-                        upper_body = max(candle['open'], candle['close'])
-                        wick_len = candle['high'] - upper_body
-                        if candle['close'] < fvg['top'] and (wick_len / candle_range) >= 0.30 and candle['volume'] >= 1.2 * avg_vol:
+                    elif fvg_type == 'BEARISH':
+                        upper_body = max(k_open, k_close)
+                        wick_len = k_high - upper_body
+                        if k_close < fvg_top and (wick_len / candle_range) >= 0.30 and k_vol >= 1.2 * avg_v:
                             is_partial = True
 
                 fvg['partially_mitigated'] = is_partial
-                
-                # If it's fully mitigated (not partial), or closes through the zone completely, it's dead
                 if not is_partial:
                     break
+
         fvg_list[i] = fvg
 
     return pd.Series(fvg_list, index=df.index)
@@ -82,138 +95,151 @@ def detect_fvgs(df):
 
 def detect_order_blocks(df, lookback=50):
     """
-    Identifies bullish and bearish order blocks.
-    Bullish OB: Last bearish candle before a strong bullish impulsive move.
-    Bearish OB: Last bullish candle before a strong bearish impulsive move.
-    After detection, a mitigation pass checks if price has since traded
-    through the OB zone, marking it as mitigated so stale OBs are filtered out.
+    Identifies bullish and bearish order blocks using high-performance numpy arrays.
     """
-    ob_list = [None] * len(df)
-    
-    # Precompute rolling average body size to avoid recalculating inside the loop (massive speedup!)
-    avg_bodies = abs(df['close'] - df['open']).rolling(14).mean()
-    avg_vols = df['volume'].rolling(14).mean()
-    
-    for i in range(5, len(df)):
-        # Calculate displacement / momentum: candle size relative to Average True Range
-        candle_body = abs(df.iloc[i]['close'] - df.iloc[i]['open'])
-        avg_body = avg_bodies.iloc[i]
-        candle_vol = df.iloc[i]['volume']
-        avg_vol = avg_vols.iloc[i]
-        
-        # If we have a strong bullish move
-        if df.iloc[i]['close'] > df.iloc[i]['open'] and candle_body > 1.5 * avg_body and candle_vol >= 1.5 * avg_vol:
-            # Look back to find the last bearish candle
-            for j in range(i-1, i-5, -1):
-                if df.iloc[j]['close'] < df.iloc[j]['open']:
-                    ob_list[i] = {
-                        'type': 'BULLISH',
-                        'top': max(df.iloc[j]['open'], df.iloc[j]['high']),
-                        'bottom': df.iloc[j]['low'],
-                        'mitigated': False,
-                        'timestamp': df.index[j]
-                    }
-                    break
-                    
-        # If we have a strong bearish move
-        elif df.iloc[i]['close'] < df.iloc[i]['open'] and candle_body > 1.5 * avg_body and candle_vol >= 1.5 * avg_vol:
-            # Look back to find the last bullish candle
-            for j in range(i-1, i-5, -1):
-                if df.iloc[j]['close'] > df.iloc[j]['open']:
-                    ob_list[i] = {
-                        'type': 'BEARISH',
-                        'top': df.iloc[j]['high'],
-                        'bottom': min(df.iloc[j]['open'], df.iloc[j]['low']),
-                        'mitigated': False,
-                        'timestamp': df.index[j]
-                    }
-                    break
+    n = len(df)
+    ob_list = [None] * n
+    if n < 6:
+        return pd.Series(ob_list, index=df.index)
 
-    # --- MITIGATION PASS ---
-    # An OB is 'mitigated' when price touches the zone.
-    for i in range(len(ob_list)):
+    opens = df['open'].values
+    highs = df['high'].values
+    lows = df['low'].values
+    closes = df['close'].values
+    volumes = df['volume'].values
+    timestamps = df.index
+
+    # Rolling averages
+    body_diff = np.abs(closes - opens)
+    avg_bodies = pd.Series(body_diff).rolling(14, min_periods=1).mean().values
+    avg_vols = pd.Series(volumes).rolling(14, min_periods=1).mean().values
+
+    # Step 1: Detect OB formation
+    for i in range(5, n):
+        candle_body = body_diff[i]
+        avg_body = avg_bodies[i]
+        candle_vol = volumes[i]
+        avg_vol = avg_vols[i]
+
+        if candle_body > 1.5 * avg_body and candle_vol >= 1.5 * avg_vol:
+            # Bullish move
+            if closes[i] > opens[i]:
+                for j in range(i-1, max(-1, i-5), -1):
+                    if closes[j] < opens[j]:
+                        ob_list[i] = {
+                            'type': 'BULLISH',
+                            'top': max(opens[j], highs[j]),
+                            'bottom': lows[j],
+                            'mitigated': False,
+                            'partially_mitigated': False,
+                            'timestamp': timestamps[j]
+                        }
+                        break
+            # Bearish move
+            elif closes[i] < opens[i]:
+                for j in range(i-1, max(-1, i-5), -1):
+                    if closes[j] > opens[j]:
+                        ob_list[i] = {
+                            'type': 'BEARISH',
+                            'top': highs[j],
+                            'bottom': min(opens[j], lows[j]),
+                            'mitigated': False,
+                            'partially_mitigated': False,
+                            'timestamp': timestamps[j]
+                        }
+                        break
+
+    # Step 2: Mitigation pass
+    for i in range(n):
         ob = ob_list[i]
         if ob is None:
             continue
-            
-        ob['partially_mitigated'] = False
-        # Cap lookforward at 150 bars to prevent lag
-        for k in range(i + 1, min(len(df), i + 150)):
-            candle = df.iloc[k]
-            # Price touches the zone boundaries
-            if candle['low'] <= ob['top'] and candle['high'] >= ob['bottom']:
+
+        ob_top = ob['top']
+        ob_bottom = ob['bottom']
+        ob_type = ob['type']
+        end_k = min(n, i + 150)
+
+        for k in range(i + 1, end_k):
+            k_low = lows[k]
+            k_high = highs[k]
+
+            if k_low <= ob_top and k_high >= ob_bottom:
                 ob['mitigated'] = True
-                
-                candle_range = candle['high'] - candle['low']
+                candle_range = k_high - k_low
                 is_partial = False
-                
+
                 if candle_range > 0:
-                    avg_vol = df['volume'].iloc[max(0, k-14):k].mean()
-                    if ob['type'] == 'BULLISH':
-                        lower_body = min(candle['open'], candle['close'])
-                        wick_len = lower_body - candle['low']
-                        if candle['close'] > ob['bottom'] and (wick_len / candle_range) >= 0.30 and candle['volume'] >= 1.2 * avg_vol:
+                    avg_v = avg_vols[k]
+                    k_open = opens[k]
+                    k_close = closes[k]
+                    k_vol = volumes[k]
+
+                    if ob_type == 'BULLISH':
+                        lower_body = min(k_open, k_close)
+                        wick_len = lower_body - k_low
+                        if k_close > ob_bottom and (wick_len / candle_range) >= 0.30 and k_vol >= 1.2 * avg_v:
                             is_partial = True
-                            
-                    elif ob['type'] == 'BEARISH':
-                        upper_body = max(candle['open'], candle['close'])
-                        wick_len = candle['high'] - upper_body
-                        if candle['close'] < ob['top'] and (wick_len / candle_range) >= 0.30 and candle['volume'] >= 1.2 * avg_vol:
+                    elif ob_type == 'BEARISH':
+                        upper_body = max(k_open, k_close)
+                        wick_len = k_high - upper_body
+                        if k_close < ob_top and (wick_len / candle_range) >= 0.30 and k_vol >= 1.2 * avg_v:
                             is_partial = True
-                            
+
                 ob['partially_mitigated'] = is_partial
-                
                 if not is_partial:
                     break
+
         ob_list[i] = ob
-                    
+
     return pd.Series(ob_list, index=df.index)
 
 
 def detect_structure(df, period=5):
     """
-    Identifies market structure changes (BOS / CHOCH) by finding swing points.
-    A swing high has period lower highs on left and right.
-    A swing low has period higher lows on left and right.
+    Identifies market structure changes (BOS / CHOCH) using numpy arrays.
     """
-    bos_list = [None] * len(df)
-    choch_list = [None] * len(df)
-    
+    n = len(df)
+    bos_list = [None] * n
+    choch_list = [None] * n
+    if n < period * 2 + 1:
+        return pd.Series(bos_list, index=df.index), pd.Series(choch_list, index=df.index)
+
+    highs = df['high'].values
+    lows = df['low'].values
+    closes = df['close'].values
+    timestamps = df.index
+
     swing_highs = []
     swing_lows = []
-    
-    current_trend = 1  # 1 for bullish, -1 for bearish
-    
-    for i in range(period, len(df) - period):
-        idx = df.index[i]
-        highs = df['high'].iloc[i-period:i+period+1]
-        lows = df['low'].iloc[i-period:i+period+1]
-        
-        is_swing_high = (highs.max() == df['high'].iloc[i])
-        is_swing_low = (lows.min() == df['low'].iloc[i])
-        
+    current_trend = 1
+
+    for i in range(period, n - period):
+        window_highs = highs[i-period:i+period+1]
+        window_lows = lows[i-period:i+period+1]
+
+        val_h = highs[i]
+        val_l = lows[i]
+
+        is_swing_high = (window_highs.max() == val_h)
+        is_swing_low = (window_lows.min() == val_l)
+
         if is_swing_high:
-            swing_highs.append((idx, df['high'].iloc[i]))
+            swing_highs.append((timestamps[i], val_h))
         if is_swing_low:
-            swing_lows.append((idx, df['low'].iloc[i]))
-            
-        # Check for Breaks of Structure (BOS)
-        close_price = df['close'].iloc[i]
-        
-        # Bullish BOS: Price closes above previous swing high in an uptrend
+            swing_lows.append((timestamps[i], val_l))
+
+        close_price = closes[i]
+
         if current_trend == 1 and swing_highs:
             prev_high = swing_highs[-2][1] if len(swing_highs) > 1 else swing_highs[-1][1]
             if close_price > prev_high:
                 bos_list[i] = {'type': 'BULLISH', 'level': prev_high}
-                # If was in downtrend, this would be a CHOCH
-                
-        # Bearish BOS: Price closes below previous swing low in a downtrend
         elif current_trend == -1 and swing_lows:
             prev_low = swing_lows[-2][1] if len(swing_lows) > 1 else swing_lows[-1][1]
             if close_price < prev_low:
                 bos_list[i] = {'type': 'BEARISH', 'level': prev_low}
-                
-        # Trend Reversals (CHOCH - Change of Character)
+
         if current_trend == 1 and swing_lows:
             last_low = swing_lows[-1][1]
             if close_price < last_low:
@@ -224,5 +250,5 @@ def detect_structure(df, period=5):
             if close_price > last_high:
                 choch_list[i] = {'type': 'BULLISH', 'level': last_high}
                 current_trend = 1
-                
+
     return pd.Series(bos_list, index=df.index), pd.Series(choch_list, index=df.index)

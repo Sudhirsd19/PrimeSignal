@@ -9,25 +9,32 @@ class Config:
     SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "")
     USE_TESTNET = os.getenv("USE_TESTNET", "True").lower() in ("true", "1", "yes")
     
-    # Product Settings
+    # Product Settings (Elite 5 High-Liquidity SMC Momentum Pairs)
     SYMBOL = os.getenv("SYMBOL", "BTC/USDT")
-    SUPPORTED_SYMBOLS = os.getenv("SUPPORTED_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT,LINK/USDT,ATOM/USDT,ETC/USDT,FIL/USDT,APT/USDT,NEAR/USDT,ARB/USDT,OP/USDT,POL/USDT").split(",")
+    SUPPORTED_SYMBOLS = os.getenv("SUPPORTED_SYMBOLS", "BTC/USDT,XRP/USDT,SOL/USDT,LTC/USDT,OP/USDT").split(",")
     TRADE_AMOUNT = float(os.getenv("TRADE_AMOUNT", "0.001"))
     
-    # Risk parameters
-    RISK_PCT = float(os.getenv("RISK_PCT", "1.0"))
-    MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "5.0"))
-    MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "3"))
+    # Risk parameters (Zero Net Capital Loss Architecture)
+    RISK_PCT = float(os.getenv("RISK_PCT", "0.8"))
+    MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "2.0"))
+    CONSECUTIVE_LOSS_LIMIT = int(os.getenv("CONSECUTIVE_LOSS_LIMIT", "2"))
+    MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "2"))
     MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "6"))
     TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015")) # Deprecated in favor of ATR
-    TRAILING_ATR_MULT = float(os.getenv("TRAILING_ATR_MULT", "2.0"))
-    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.0"))
-    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.8"))
+    TRAILING_ATR_MULT = float(os.getenv("TRAILING_ATR_MULT", "1.5"))
+    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "0.75")) # Zero-Risk Breakeven Lock at +0.75R
+    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.5")) # TP1 60% scale-out at 1.5R
+    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.5")) # TP2 40% runner at 2.5R
+    ML_CONFIDENCE_THRESHOLD = float(os.getenv("ML_CONFIDENCE_THRESHOLD", "0.60"))
+    
+    # Session & Timing Filters
+    ENABLE_SESSION_FILTER = os.getenv("ENABLE_SESSION_FILTER", "True").lower() in ("true", "1", "yes")
+    ENABLE_WEEKEND_FILTER = os.getenv("ENABLE_WEEKEND_FILTER", "True").lower() in ("true", "1", "yes")
     
     # Strategy settings
     HTF_TIMEFRAME = os.getenv("HTF_TIMEFRAME", "1h")
     LTF_TIMEFRAME = os.getenv("LTF_TIMEFRAME", "15m")
-    ADX_MIN_THRESHOLD = float(os.getenv("ADX_MIN_THRESHOLD", "25.0"))
+    ADX_MIN_THRESHOLD = float(os.getenv("ADX_MIN_THRESHOLD", "24.0"))
     SHORT_EMA = int(os.getenv("SHORT_EMA", "9"))
     LONG_EMA = int(os.getenv("LONG_EMA", "21"))
     TREND_EMA = int(os.getenv("TREND_EMA", "200"))
@@ -44,13 +51,17 @@ class Config:
     MIN_24H_VOL_USDT = float(os.getenv("MIN_24H_VOL_USDT", "50000000"))
     MAX_CANDLE_MOVE_PCT = float(os.getenv("MAX_CANDLE_MOVE_PCT", "0.015"))
     VOLATILITY_PAUSE_CANDLES = int(os.getenv("VOLATILITY_PAUSE_CANDLES", "2"))
-    COOLDOWN_MINUTES = int(os.getenv("COOLDOWN_MINUTES", "15"))
+    COOLDOWN_MINUTES = int(os.getenv("COOLDOWN_MINUTES", "20"))
     MAX_SLIPPAGE_PCT = float(os.getenv("MAX_SLIPPAGE_PCT", "0.004"))
-    FEE_RATE = float(os.getenv("FEE_RATE", "0.001"))
+    FEE_RATE = float(os.getenv("FEE_RATE", "0.00075"))
+    
+    # Structure & Divergence settings
+    STRUCTURE_LOOKBACK = int(os.getenv("STRUCTURE_LOOKBACK", "30"))
+    RSI_DIVERGENCE_LOOKBACK = int(os.getenv("RSI_DIVERGENCE_LOOKBACK", "20"))
     
     # Machine Learning configurations
-    ML_CONFIRMATION_THRESHOLD = float(os.getenv("ML_CONFIRMATION_THRESHOLD", "0.65"))
-    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "1.5"))
+    ML_CONFIRMATION_THRESHOLD = float(os.getenv("ML_CONFIRMATION_THRESHOLD", "0.60"))
+    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.5"))
     ML_TRAIN_BARS = int(os.getenv("ML_TRAIN_BARS", "2000"))
     
     # Test Mode config
