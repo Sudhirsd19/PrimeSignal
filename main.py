@@ -946,8 +946,15 @@ class PrimeSignalBot:
                                     if profit_lock_sl > self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = profit_lock_sl
                                         if symbol == Config.SYMBOL: DashboardState.stop_loss = profit_lock_sl
-                                        add_log_message(f"[{symbol}] 🔒 PROFIT LOCKED at Stop Loss: {profit_lock_sl:.4f}")
-                                        await self.notifier.send_message(f"🔒 *PROFIT LOCKED ({symbol})*\nTarget 1 Hit! 50% profit booked & SL moved to locked profit level: {profit_lock_sl:.4f}")
+                                        guar_pnl_pct = max(0.0, (profit_lock_sl - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0)
+                                        guar_pnl_usdt = max(0.0, self.position_size[symbol] * (profit_lock_sl - self.entry_price[symbol]))
+                                        add_log_message(f"[{symbol}] 🔒 PROFIT LOCKED at Stop Loss: {profit_lock_sl:.4f} (+{guar_pnl_usdt:.2f} USDT). New Target: TP2 @ {self.take_profit_2r[symbol]:.4f}")
+                                        await self.notifier.send_message(
+                                            f"🔒 *PROFIT LOCKED ({symbol})*\n"
+                                            f"🎯 TP1 Hit! 50% profit booked.\n"
+                                            f"🔒 Guaranteed Locked Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
+                                            f"🎯 New Active Target: TP2 (2.2R) @ {self.take_profit_2r[symbol]:.4f}"
+                                        )
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP1 order REJECTED by exchange. State NOT updated.")
@@ -970,7 +977,15 @@ class PrimeSignalBot:
                                     if self.take_profit_1r[symbol] > self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = self.take_profit_1r[symbol]
                                         if symbol == Config.SYMBOL: DashboardState.stop_loss = self.take_profit_1r[symbol]
+                                    guar_pnl_pct = max(0.0, (self.stop_loss[symbol] - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0)
+                                    guar_pnl_usdt = max(0.0, self.position_size[symbol] * (self.stop_loss[symbol] - self.entry_price[symbol]))
                                     add_log_message(f"[{symbol}] 🚀 TP2 Hit! SL locked at TP1 level ({self.stop_loss[symbol]:.4f}). Trailing Runner active.")
+                                    await self.notifier.send_message(
+                                        f"🚀 *DEEP PROFIT LOCKED ({symbol})*\n"
+                                        f"🎯 TP2 Hit! 30% profit booked.\n"
+                                        f"🔒 Guaranteed Deep Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
+                                        f"🎯 New Active Target: Runner Target (3.5R) @ {self.take_profit[symbol]:.4f}"
+                                    )
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP2 order REJECTED by exchange. State NOT updated.")
@@ -1052,8 +1067,15 @@ class PrimeSignalBot:
                                     if profit_lock_sl < self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = profit_lock_sl
                                         if symbol == Config.SYMBOL: DashboardState.stop_loss = profit_lock_sl
-                                        add_log_message(f"[{symbol}] 🔒 PROFIT LOCKED at Stop Loss: {profit_lock_sl:.4f}")
-                                        await self.notifier.send_message(f"🔒 *PROFIT LOCKED ({symbol})*\nTarget 1 Hit! 50% profit booked & SL moved to locked profit level: {profit_lock_sl:.4f}")
+                                        guar_pnl_pct = max(0.0, (self.entry_price[symbol] - profit_lock_sl) / self.entry_price[symbol] * 100.0)
+                                        guar_pnl_usdt = max(0.0, self.position_size[symbol] * (self.entry_price[symbol] - profit_lock_sl))
+                                        add_log_message(f"[{symbol}] 🔒 PROFIT LOCKED at Stop Loss: {profit_lock_sl:.4f} (+{guar_pnl_usdt:.2f} USDT). New Target: TP2 @ {self.take_profit_2r[symbol]:.4f}")
+                                        await self.notifier.send_message(
+                                            f"🔒 *PROFIT LOCKED ({symbol})*\n"
+                                            f"🎯 TP1 Hit! 50% profit booked.\n"
+                                            f"🔒 Guaranteed Locked Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
+                                            f"🎯 New Active Target: TP2 (2.2R) @ {self.take_profit_2r[symbol]:.4f}"
+                                        )
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP1 order REJECTED by exchange. State NOT updated.")
@@ -1076,7 +1098,15 @@ class PrimeSignalBot:
                                     if self.take_profit_1r[symbol] < self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = self.take_profit_1r[symbol]
                                         if symbol == Config.SYMBOL: DashboardState.stop_loss = self.take_profit_1r[symbol]
+                                    guar_pnl_pct = max(0.0, (self.entry_price[symbol] - self.stop_loss[symbol]) / self.entry_price[symbol] * 100.0)
+                                    guar_pnl_usdt = max(0.0, self.position_size[symbol] * (self.entry_price[symbol] - self.stop_loss[symbol]))
                                     add_log_message(f"[{symbol}] 🚀 TP2 Hit! SL locked at TP1 level ({self.stop_loss[symbol]:.4f}). Trailing Runner active.")
+                                    await self.notifier.send_message(
+                                        f"🚀 *DEEP PROFIT LOCKED ({symbol})*\n"
+                                        f"🎯 TP2 Hit! 30% profit booked.\n"
+                                        f"🔒 Guaranteed Deep Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
+                                        f"🎯 New Active Target: Runner Target (3.5R) @ {self.take_profit[symbol]:.4f}"
+                                    )
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP2 order REJECTED by exchange. State NOT updated.")
@@ -1163,6 +1193,17 @@ class PrimeSignalBot:
                             active_target_name = "Runner Target"
                             target_stage = 3
 
+                        # Calculate guaranteed locked profit in USDT and %
+                        guaranteed_pnl_usdt = 0.0
+                        guaranteed_pnl_pct = 0.0
+                        if is_profit_locked and entry_val > 0:
+                            if is_long:
+                                guaranteed_pnl_pct = max(0.0, (sl_val - entry_val) / entry_val * 100.0)
+                                guaranteed_pnl_usdt = max(0.0, pos_sz * (sl_val - entry_val))
+                            else:
+                                guaranteed_pnl_pct = max(0.0, (entry_val - sl_val) / entry_val * 100.0)
+                                guaranteed_pnl_usdt = max(0.0, pos_sz * (entry_val - sl_val))
+
                         active_pos_map[s] = {
                             'side': self.position_side[s],
                             'entry_price': entry_val,
@@ -1177,6 +1218,8 @@ class PrimeSignalBot:
                             'position_size': self.position_size[s],
                             'current_pnl_usdt': p_usdt,
                             'current_pnl_pct': p_pct,
+                            'guaranteed_pnl_usdt': guaranteed_pnl_usdt,
+                            'guaranteed_pnl_pct': guaranteed_pnl_pct,
                             'tp1_hit': tp1_hit,
                             'tp2_hit': tp2_hit,
                             'profit_locked': is_profit_locked,
