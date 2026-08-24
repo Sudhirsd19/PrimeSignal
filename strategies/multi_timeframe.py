@@ -1,11 +1,15 @@
 from strategies.base import BaseStrategy
 from strategies.indicators import calculate_ema, calculate_rsi, calculate_atr, calculate_vwap, calculate_adx, calculate_bollinger_bands, detect_rsi_divergence
 from strategies.smc import detect_fvgs, detect_order_blocks, detect_structure
+from core.liquidation_engine import LiquidationEngine
+from core.orderflow_engine import OrderFlowEngine
 from config import Config
 
 class MultiTimeframeSMCStrategy(BaseStrategy):
     def __init__(self):
         super().__init__(name="MultiTimeframeSMC")
+        self.liq_engine = LiquidationEngine()
+        self.orderflow_engine = OrderFlowEngine()
 
     def generate_signal(self, htf_df, ltf_df, relaxed=False):
         """
@@ -90,6 +94,12 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         htf_rsi = calculate_rsi(htf_df, Config.RSI_PERIOD)
         htf_rsi_div = detect_rsi_divergence(htf_df, htf_rsi, lookback=rsi_div_lookback)
         metadata['htf_rsi_divergence'] = htf_rsi_div
+        
+        # Next-Gen Quant Engines: Liquidation Magnet & Order Flow CVD
+        liq_info = self.liq_engine.calculate_liquidation_pools(ltf_df)
+        cvd_info = self.orderflow_engine.detect_absorption_divergence(ltf_df)
+        metadata['liquidation'] = liq_info
+        metadata['cvd'] = cvd_info
         
         strong_trend = False
         ema_dist = abs(latest_htf_ema_50 - latest_htf_ema_200) / latest_htf_ema_200 if (latest_htf_ema_200 and latest_htf_ema_200 > 0) else 0.0
@@ -407,6 +417,14 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             score += rsi_div_bonus
             score += choch_bonus
             
+            # Next-Gen Quant Confluence: CVD Absorption & Liquidation Hunt
+            if cvd_info.get('absorption') == 'BULLISH_ABSORPTION':
+                score += 1.5
+                metadata['debug_checks']['cvd_absorption'] = 'BULLISH_ABSORPTION_PASS'
+            if liq_info.get('hunt_signal') == 'BULLISH_LIQUIDATION_HUNT':
+                score += 1.5
+                metadata['debug_checks']['liq_hunt'] = 'BULLISH_LIQ_HUNT_PASS'
+            
             if market_regime == 'TREND': score_thresh = 2.5
             elif market_regime == 'MIXED': score_thresh = 3.0
             elif market_regime == 'RANGE': score_thresh = 3.5
@@ -586,6 +604,14 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             if micro_bos: score += 1
             score += rsi_div_bonus
             score += choch_bonus
+            
+            # Next-Gen Quant Confluence: CVD Absorption & Liquidation Hunt
+            if cvd_info.get('absorption') == 'BEARISH_ABSORPTION':
+                score += 1.5
+                metadata['debug_checks']['cvd_absorption'] = 'BEARISH_ABSORPTION_PASS'
+            if liq_info.get('hunt_signal') == 'BEARISH_LIQUIDATION_HUNT':
+                score += 1.5
+                metadata['debug_checks']['liq_hunt'] = 'BEARISH_LIQ_HUNT_PASS'
             
             if market_regime == 'TREND': score_thresh = 2.5
             elif market_regime == 'MIXED': score_thresh = 3.0

@@ -20,6 +20,8 @@ from core.data_pipeline import RealTimeDataPipeline
 from strategies.multi_timeframe import MultiTimeframeSMCStrategy
 from strategies.indicators import prepare_dataframe, calculate_atr
 from ml.confirmation import MLSignalConfirmator
+from ml.adversarial_debate import AdversarialDebateCourtroom
+from core.lead_lag_arbitrage import LeadLagArbitrageEngine
 from risk.risk_manager import RiskManager
 from alerts.notifier import TelegramNotifier
 from dashboard.app import app, DashboardState, add_log_message
@@ -34,6 +36,8 @@ class PrimeSignalBot:
         self.strategy = MultiTimeframeSMCStrategy()
         self.risk = RiskManager()
         self.notifier = TelegramNotifier()
+        self.lead_lag = LeadLagArbitrageEngine()
+        self.courtroom = AdversarialDebateCourtroom()
         
         self.ml_models = {sym: MLSignalConfirmator() for sym in Config.SUPPORTED_SYMBOLS}
         
@@ -700,6 +704,22 @@ class PrimeSignalBot:
         pos_size = pos_size * (trade_risk_pct / (getattr(Config, 'RISK_PCT', 0.8) / 100.0))
         if pos_size <= 0.0:
             return
+
+        # ── Next-Gen Proprietary Edge: Dual-Brain Adversarial AI Debate Courtroom ──
+        market_context = {
+            'cvd': metadata.get('cvd', {}),
+            'liquidation': metadata.get('liquidation', {}),
+            'ml_confidence': prob,
+            'funding_rate': fr if 'fr' in locals() else 0.0,
+            'bb_squeeze': False,
+            'spread_pct': spread if 'spread' in locals() else 0.0005
+        }
+        debate_result = self.courtroom.conduct_debate(signal, metadata, market_context)
+        if debate_result.get('verdict') != 'APPROVED':
+            add_log_message(f"[{symbol}] ⚖️ Trade REJECTED by Dual-Brain AI Courtroom ({debate_result['conviction_pct']}% conviction): {', '.join(debate_result['prosecutor_objections'])}")
+            return
+        else:
+            add_log_message(f"[{symbol}] ⚖️ Trade APPROVED by Dual-Brain AI Courtroom ({debate_result['conviction_pct']}% conviction)!")
             
         if signal == "BUY":
             add_log_message(f"[{symbol}] Executing BUY (LONG). Size: {pos_size:.6f} | SL: {sl:.2f} | TP: {tp:.2f}")
@@ -846,6 +866,14 @@ class PrimeSignalBot:
                     add_log_message(f"[RISK] Daily equity checkpoint reset at UTC midnight.")
 
                 for symbol in Config.SUPPORTED_SYMBOLS:
+                    sym_price = self.pipeline.latest_prices.get(symbol, 0.0)
+                    if sym_price > 0:
+                        self.lead_lag.record_tick(symbol, sym_price)
+                        if symbol != "BTC/USDT":
+                            lead_lag_opp = self.lead_lag.evaluate_lead_lag(symbol)
+                            if lead_lag_opp.get('signal') != 'NONE':
+                                add_log_message(f"[{symbol}] ⚡ Cross-Asset Lead-Lag Impulse: {lead_lag_opp['signal']} (BTC Velocity: {lead_lag_opp['btc_velocity_pct']}%, Lag Edge: +{lead_lag_opp['edge_pct']}%)")
+
                     if self.in_position[symbol] and self.pipeline.latest_prices.get(symbol, 0.0) > 0:
                         curr_price = self.pipeline.latest_prices[symbol]
                         

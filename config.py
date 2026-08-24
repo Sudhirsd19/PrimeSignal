@@ -49,6 +49,24 @@ class Config:
     ENABLE_MACRO_NEWS_FILTER = os.getenv("ENABLE_MACRO_NEWS_FILTER", "True").lower() in ("true", "1", "yes")
     MACRO_PAUSE_MINUTES = int(os.getenv("MACRO_PAUSE_MINUTES", "15"))
     
+    # ─── NEXT-GEN PROPRIETARY QUANT INNOVATIONS ───
+    # 1. Liquidation Magnetic Heatmap & Hunt Engine
+    ENABLE_LIQUIDATION_MAGNET = os.getenv("ENABLE_LIQUIDATION_MAGNET", "True").lower() in ("true", "1", "yes")
+    LIQUIDATION_PROXIMITY_PCT = float(os.getenv("LIQUIDATION_PROXIMITY_PCT", "0.003")) # 0.3% pool proximity
+    
+    # 2. Real-Time CVD Absorption & Footprint Divergence Engine
+    ENABLE_CVD_ABSORPTION = os.getenv("ENABLE_CVD_ABSORPTION", "True").lower() in ("true", "1", "yes")
+    CVD_DIVERGENCE_LOOKBACK = int(os.getenv("CVD_DIVERGENCE_LOOKBACK", "20"))
+    
+    # 3. Cross-Asset Lead-Lag Latency Momentum Arbitrage (BTC Velocity Propagation)
+    ENABLE_LEAD_LAG_ARBITRAGE = os.getenv("ENABLE_LEAD_LAG_ARBITRAGE", "True").lower() in ("true", "1", "yes")
+    BTC_IMPULSE_VELOCITY_PCT = float(os.getenv("BTC_IMPULSE_VELOCITY_PCT", "0.0030")) # 0.30% spike in 30s
+    ALT_LAG_MAX_REACTION_PCT = float(os.getenv("ALT_LAG_MAX_REACTION_PCT", "0.0008")) # alt moved < 0.08%
+    
+    # 4. Dual-Brain Adversarial AI Debate Courtroom
+    ENABLE_ADVERSARIAL_DEBATE = os.getenv("ENABLE_ADVERSARIAL_DEBATE", "True").lower() in ("true", "1", "yes")
+    MIN_AI_CONVICTION_PCT = float(os.getenv("MIN_AI_CONVICTION_PCT", "0.70")) # 70% net dominance required
+    
     # Session & Timing Filters
     ENABLE_SESSION_FILTER = os.getenv("ENABLE_SESSION_FILTER", "True").lower() in ("true", "1", "yes")
     ENABLE_WEEKEND_FILTER = os.getenv("ENABLE_WEEKEND_FILTER", "True").lower() in ("true", "1", "yes")
