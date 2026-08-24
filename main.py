@@ -746,15 +746,16 @@ class PrimeSignalBot:
                     DashboardState.take_profit = self.take_profit[symbol]
 
                 self.save_state()
-                # FIX #1: Define msg_str in BUY branch before sending notification
+                # Telegram Notification with 3-Stage Target Levels
                 msg_str = (
                     f"🟢 *BUY (LONG) {symbol}*\\n"
                     f"Mode: {metadata.get('mode', 'STRICT')}\\n"
                     f"Setup Type: {metadata.get('setup_type', 'NONE')}\\n"
                     f"Entry: {entry_price:.4f}\\n"
                     f"Stop Loss: {sl:.4f}\\n"
-                    f"TP1 (1R): {metadata.get('tp1', 0.0):.4f}\\n"
-                    f"TP2 (2R): {metadata.get('tp2', 0.0):.4f}\\n"
+                    f"TP1 (1.2R - 50%): {self.take_profit_1r[symbol]:.4f}\\n"
+                    f"TP2 (2.2R - 30%): {self.take_profit_2r[symbol]:.4f}\\n"
+                    f"Runner (3.5R - 20%): {self.take_profit[symbol]:.4f}\\n"
                     f"Position Size: {pos_size:.6f}\\n"
                     f"Confidence: {prob:.2f}\\n"
                     f"Reason: {metadata.get('reason', 'N/A')}"
@@ -767,19 +768,6 @@ class PrimeSignalBot:
                 await self.notifier.send_message(f"⚠️ BUY REJECTED {symbol}: Order failed to execute. Check bot logs.")
                 
         elif signal == "SELL":
-            msg_str = (
-                f"🔴 *SELL (SHORT) {symbol}*\\n"
-                f"Mode: {metadata.get('mode', 'STRICT')}\\n"
-                f"Setup Type: {metadata.get('setup_type', 'NONE')}\\n"
-                f"Entry: {entry_price:.4f}\\n"
-                f"Stop Loss: {sl:.4f}\\n"
-                f"TP1 (1R): {metadata.get('tp1', 0.0):.4f}\\n"
-                f"TP2 (2R): {metadata.get('tp2', 0.0):.4f}\\n"
-                f"Position Size: {pos_size:.6f}\\n"
-                f"Confidence: {prob:.2f}\\n"
-                f"Reason: {metadata.get('reason', 'N/A')}"
-            )
-            add_log_message(f"[{symbol}] " + msg_str.replace('\\n', ' | '))
             order = None
             if self.has_keys:
                 order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol)
@@ -823,6 +811,20 @@ class PrimeSignalBot:
                     DashboardState.take_profit = self.take_profit[symbol]
 
                 self.save_state()
+                msg_str = (
+                    f"🔴 *SELL (SHORT) {symbol}*\\n"
+                    f"Mode: {metadata.get('mode', 'STRICT')}\\n"
+                    f"Setup Type: {metadata.get('setup_type', 'NONE')}\\n"
+                    f"Entry: {entry_price:.4f}\\n"
+                    f"Stop Loss: {sl:.4f}\\n"
+                    f"TP1 (1.2R - 50%): {self.take_profit_1r[symbol]:.4f}\\n"
+                    f"TP2 (2.2R - 30%): {self.take_profit_2r[symbol]:.4f}\\n"
+                    f"Runner (3.5R - 20%): {self.take_profit[symbol]:.4f}\\n"
+                    f"Position Size: {pos_size:.6f}\\n"
+                    f"Confidence: {prob:.2f}\\n"
+                    f"Reason: {metadata.get('reason', 'N/A')}"
+                )
+                add_log_message(f"[{symbol}] " + msg_str.replace('\\n', ' | '))
                 await self.notifier.send_message(msg_str)
             else:
                 add_log_message(f"[{symbol}] ❌ SELL order REJECTED (check execution logs)")
