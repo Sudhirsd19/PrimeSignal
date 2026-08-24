@@ -1,4 +1,4 @@
-﻿import numpy as np
+import numpy as np
 import pandas as pd
 from config import Config
 
@@ -24,7 +24,7 @@ class LiquidationEngine:
             }
 
         recent_df = df.iloc[-min(len(df), lookback):]
-        curr_price = float(df['close'].iloc[-1])
+        curr_price = max(float(df['close'].iloc[-1]), 1e-6)
         
         # Find swing highs and lows
         highs = recent_df['high'].values

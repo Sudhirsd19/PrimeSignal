@@ -1,4 +1,4 @@
-﻿from config import Config
+from config import Config
 
 class AdversarialDebateCourtroom:
     """
@@ -99,7 +99,7 @@ class AdversarialDebateCourtroom:
         conviction_pct = round(net_conviction * 100.0, 1)
 
         min_conviction_req = getattr(Config, 'MIN_AI_CONVICTION_PCT', 0.70) * 100.0
-        approved = (conviction_pct >= min_conviction_req) and (advocate_score >= 50) and (prosecutor_score <= 40)
+        approved = (conviction_pct >= min_conviction_req) and (advocate_score >= 45) and (prosecutor_score <= 40)
         verdict = "APPROVED" if approved else "REJECTED_BY_AI_COURTROOM"
 
         transcript = (
