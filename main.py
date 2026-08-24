@@ -311,7 +311,7 @@ class PrimeSignalBot:
     def calculate_total_equity(self):
         current_equity = self._dry_run_balance_usdt
         for sym in Config.SUPPORTED_SYMBOLS:
-            if self.in_position[sym]:
+            if self.in_position[sym] and self.position_size[sym] and self.position_size[sym] > 1e-7:
                 live_price = self.pipeline.latest_prices.get(sym, self.entry_price[sym])
                 if self.position_side[sym] == "LONG":
                     current_equity += self.position_size[sym] * live_price
@@ -646,7 +646,7 @@ class PrimeSignalBot:
         
         # Scale pos_size by the dynamic trade_risk_pct (default calculate_position_size uses Config.RISK_PCT)
         # So we adjust it relative to default RISK_PCT
-        pos_size = pos_size * (trade_risk_pct / getattr(Config, 'RISK_PCT', 0.02))
+        pos_size = pos_size * (trade_risk_pct / (getattr(Config, 'RISK_PCT', 0.8) / 100.0))
         if pos_size <= 0.0:
             return
             
@@ -667,13 +667,14 @@ class PrimeSignalBot:
                 self.entry_price[symbol] = entry_price
                 self.stop_loss[symbol] = sl
                 
-                # Initialize TP levels for LONG
+                # Initialize TP levels for LONG (3-Stage: TP1 50%, TP2 30%, Runner 20%)
                 self.partial_tp_taken[symbol] = False
                 self.tp2_taken[symbol] = False
                 r_amount = abs(sl - entry_price)
-                self.take_profit_1r[symbol] = metadata.get('tp1', entry_price + (1.5 * r_amount))
-                self.take_profit_2r[symbol] = metadata.get('tp2', entry_price + (2.5 * r_amount))
-                self.take_profit[symbol] = self.take_profit_2r[symbol]
+                self.take_profit_1r[symbol] = metadata.get('tp1', entry_price + (1.2 * r_amount))
+                self.take_profit_2r[symbol] = metadata.get('tp2', entry_price + (2.2 * r_amount))
+                # Extended Runner Target at 3.5R (so runner target stays above SL & TP2)
+                self.take_profit[symbol] = metadata.get('tp3', entry_price + (3.5 * r_amount))
                 
                 self.highest_price_reached[symbol] = entry_price
                 self.position_size[symbol] = pos_size
@@ -691,7 +692,7 @@ class PrimeSignalBot:
                     DashboardState.position_side = "LONG"
                     DashboardState.entry_price = entry_price
                     DashboardState.stop_loss = sl
-                    DashboardState.take_profit = tp
+                    DashboardState.take_profit = self.take_profit[symbol]
 
                 self.save_state()
                 # FIX #1: Define msg_str in BUY branch before sending notification
@@ -743,13 +744,14 @@ class PrimeSignalBot:
                 self.entry_price[symbol] = entry_price
                 self.stop_loss[symbol] = sl
                 
-                # Initialize TP levels for SHORT
+                # Initialize TP levels for SHORT (3-Stage: TP1 50%, TP2 30%, Runner 20%)
                 self.partial_tp_taken[symbol] = False
                 self.tp2_taken[symbol] = False
                 r_amount = abs(sl - entry_price)
-                self.take_profit_1r[symbol] = metadata.get('tp1', entry_price - (1.5 * r_amount))
-                self.take_profit_2r[symbol] = metadata.get('tp2', entry_price - (2.5 * r_amount))
-                self.take_profit[symbol] = self.take_profit_2r[symbol]
+                self.take_profit_1r[symbol] = metadata.get('tp1', entry_price - (1.2 * r_amount))
+                self.take_profit_2r[symbol] = metadata.get('tp2', entry_price - (2.2 * r_amount))
+                # Extended Runner Target at 3.5R (so runner target stays below SL & TP2)
+                self.take_profit[symbol] = metadata.get('tp3', entry_price - (3.5 * r_amount))
                 
                 self.lowest_price_reached[symbol] = entry_price
                 self.position_size[symbol] = pos_size
@@ -767,7 +769,7 @@ class PrimeSignalBot:
                     DashboardState.position_side = "SHORT"
                     DashboardState.entry_price = entry_price
                     DashboardState.stop_loss = sl
-                    DashboardState.take_profit = tp
+                    DashboardState.take_profit = self.take_profit[symbol]
 
                 self.save_state()
                 await self.notifier.send_message(msg_str)
@@ -809,10 +811,10 @@ class PrimeSignalBot:
                                     if symbol == Config.SYMBOL: DashboardState.stop_loss = be_sl
                                     add_log_message(f"[{symbol}] 🛡️ ZERO-RISK FREE-TRADE ACTIVATED: SL moved to Breakeven ({be_sl:.4f})")
                             
-                            # TP1 (65% Scale-Out at 1.2R)
+                            # TP1 (50% Scale-Out at 1.2R)
                             if not self.partial_tp_taken[symbol] and curr_price >= self.take_profit_1r[symbol]:
-                                add_log_message(f"[{symbol}] 🎯 Target 1 hit! Booking 65% profit.")
-                                tp1_size = self.position_size[symbol] * 0.65
+                                add_log_message(f"[{symbol}] 🎯 Target 1 hit! Booking 50% profit.")
+                                tp1_size = self.position_size[symbol] * 0.50
                                 tp1_success = False
                                 if self.has_keys:
                                     tp1_order = await self.execution.place_order('sell', 'market', tp1_size, symbol=symbol, is_exit_order=True)
@@ -824,22 +826,21 @@ class PrimeSignalBot:
                                     self.position_size[symbol] -= tp1_size
                                     self.partial_tp_taken[symbol] = True
                                     
-                                    # PROFIT LOCK: Guarantee profit by setting Stop Loss above Entry
-                                    r_dist = abs(self.entry_price[symbol] - self.stop_loss[symbol])
-                                    profit_lock_sl = self.entry_price[symbol] + (0.2 * r_dist) if r_dist > 0 else self.entry_price[symbol] * 1.001
+                                    # PROFIT LOCK: Guarantee profit by setting Stop Loss to Breakeven (+0.15%)
+                                    profit_lock_sl = self.entry_price[symbol] * 1.0015
                                     if profit_lock_sl > self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = profit_lock_sl
                                         if symbol == Config.SYMBOL: DashboardState.stop_loss = profit_lock_sl
                                         add_log_message(f"[{symbol}] 🔒 PROFIT LOCKED at Stop Loss: {profit_lock_sl:.4f}")
-                                        await self.notifier.send_message(f"🔒 *PROFIT LOCKED ({symbol})*\\nTarget 1 Hit! 60% profit booked & SL moved to locked profit level: {profit_lock_sl:.4f}")
+                                        await self.notifier.send_message(f"🔒 *PROFIT LOCKED ({symbol})*\nTarget 1 Hit! 50% profit booked & SL moved to locked profit level: {profit_lock_sl:.4f}")
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP1 order REJECTED by exchange. State NOT updated.")
                                     
-                            # TP2 (Remaining 40%)
+                            # TP2 (30% Scale-Out at 2.2R -> Leaves 20% Runner)
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price >= self.take_profit_2r[symbol]:
-                                add_log_message(f"[{symbol}] 🎯 Target 2 (2.5R) hit! Booking remaining 40% profit.")
-                                tp2_size = self.position_size[symbol]
+                                add_log_message(f"[{symbol}] 🎯 Target 2 (2.2R) hit! Booking 30% profit. 20% Runner active.")
+                                tp2_size = self.position_size[symbol] * 0.60  # 60% of remaining 50% = 30% of original
                                 tp2_success = False
                                 if self.has_keys:
                                     tp2_order = await self.execution.place_order('sell', 'market', tp2_size, symbol=symbol, is_exit_order=True)
@@ -850,6 +851,11 @@ class PrimeSignalBot:
                                 if tp2_success:
                                     self.position_size[symbol] -= tp2_size
                                     self.tp2_taken[symbol] = True
+                                    # Lock SL at TP1 level (Guaranteed deep profit lock)
+                                    if self.take_profit_1r[symbol] > self.stop_loss[symbol]:
+                                        self.stop_loss[symbol] = self.take_profit_1r[symbol]
+                                        if symbol == Config.SYMBOL: DashboardState.stop_loss = self.take_profit_1r[symbol]
+                                    add_log_message(f"[{symbol}] 🚀 TP2 Hit! SL locked at TP1 level ({self.stop_loss[symbol]:.4f}). Trailing Runner active.")
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP2 order REJECTED by exchange. State NOT updated.")
@@ -861,7 +867,7 @@ class PrimeSignalBot:
                                     if symbol == Config.SYMBOL: DashboardState.stop_loss = new_sl
                                 
                             if curr_price >= self.take_profit[symbol]:
-                                await self.exit_position(symbol, "TAKE_PROFIT")
+                                await self.exit_position(symbol, "TAKE_PROFIT_RUNNER")
                             elif curr_price <= self.stop_loss[symbol]:
                                 await self.exit_position(symbol, "TRAILING_STOP")
                                 
@@ -877,10 +883,10 @@ class PrimeSignalBot:
                                     if symbol == Config.SYMBOL: DashboardState.stop_loss = be_sl
                                     add_log_message(f"[{symbol}] 🛡️ ZERO-RISK FREE-TRADE ACTIVATED: SL moved to Breakeven ({be_sl:.4f})")
                             
-                            # TP1 (65% Scale-Out at 1.2R)
+                            # TP1 (50% Scale-Out at 1.2R)
                             if not self.partial_tp_taken[symbol] and curr_price <= self.take_profit_1r[symbol]:
-                                add_log_message(f"[{symbol}] 🎯 Target 1 hit! Booking 65% profit.")
-                                tp1_size = self.position_size[symbol] * 0.65
+                                add_log_message(f"[{symbol}] 🎯 Target 1 hit! Booking 50% profit.")
+                                tp1_size = self.position_size[symbol] * 0.50
                                 tp1_success = False
                                 if self.has_keys:
                                     tp1_order = await self.execution.place_order('buy', 'market', tp1_size, symbol=symbol, is_exit_order=True)
@@ -892,22 +898,21 @@ class PrimeSignalBot:
                                     self.position_size[symbol] -= tp1_size
                                     self.partial_tp_taken[symbol] = True
                                     
-                                    # PROFIT LOCK: Guarantee profit by setting Stop Loss below Entry
-                                    r_dist = abs(self.entry_price[symbol] - self.stop_loss[symbol])
-                                    profit_lock_sl = self.entry_price[symbol] - (0.2 * r_dist) if r_dist > 0 else self.entry_price[symbol] * 0.999
+                                    # PROFIT LOCK: Guarantee profit by setting Stop Loss to Breakeven (-0.15%)
+                                    profit_lock_sl = self.entry_price[symbol] * 0.9985
                                     if profit_lock_sl < self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = profit_lock_sl
                                         if symbol == Config.SYMBOL: DashboardState.stop_loss = profit_lock_sl
                                         add_log_message(f"[{symbol}] 🔒 PROFIT LOCKED at Stop Loss: {profit_lock_sl:.4f}")
-                                        await self.notifier.send_message(f"🔒 *PROFIT LOCKED ({symbol})*\\nTarget 1 Hit! 60% profit booked & SL moved to locked profit level: {profit_lock_sl:.4f}")
+                                        await self.notifier.send_message(f"🔒 *PROFIT LOCKED ({symbol})*\nTarget 1 Hit! 50% profit booked & SL moved to locked profit level: {profit_lock_sl:.4f}")
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP1 order REJECTED by exchange. State NOT updated.")
                                     
-                            # TP2 (Remaining 40%)
+                            # TP2 (30% Scale-Out at 2.2R -> Leaves 20% Runner)
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price <= self.take_profit_2r[symbol]:
-                                add_log_message(f"[{symbol}] 🎯 Target 2 (2.5R) hit! Booking remaining 40% profit.")
-                                tp2_size = self.position_size[symbol]
+                                add_log_message(f"[{symbol}] 🎯 Target 2 (2.2R) hit! Booking 30% profit. 20% Runner active.")
+                                tp2_size = self.position_size[symbol] * 0.60  # 60% of remaining 50% = 30% of original
                                 tp2_success = False
                                 if self.has_keys:
                                     tp2_order = await self.execution.place_order('buy', 'market', tp2_size, symbol=symbol, is_exit_order=True)
@@ -918,6 +923,11 @@ class PrimeSignalBot:
                                 if tp2_success:
                                     self.position_size[symbol] -= tp2_size
                                     self.tp2_taken[symbol] = True
+                                    # Lock SL at TP1 level (Guaranteed deep profit lock)
+                                    if self.take_profit_1r[symbol] < self.stop_loss[symbol]:
+                                        self.stop_loss[symbol] = self.take_profit_1r[symbol]
+                                        if symbol == Config.SYMBOL: DashboardState.stop_loss = self.take_profit_1r[symbol]
+                                    add_log_message(f"[{symbol}] 🚀 TP2 Hit! SL locked at TP1 level ({self.stop_loss[symbol]:.4f}). Trailing Runner active.")
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP2 order REJECTED by exchange. State NOT updated.")
@@ -929,7 +939,7 @@ class PrimeSignalBot:
                                     if symbol == Config.SYMBOL: DashboardState.stop_loss = new_sl
                                 
                             if curr_price <= self.take_profit[symbol]:
-                                await self.exit_position(symbol, "TAKE_PROFIT")
+                                await self.exit_position(symbol, "TAKE_PROFIT_RUNNER")
                             elif curr_price >= self.stop_loss[symbol]:
                                 await self.exit_position(symbol, "TRAILING_STOP")
 
@@ -946,9 +956,16 @@ class PrimeSignalBot:
                 active_pos_map = {}
                 for s in Config.SUPPORTED_SYMBOLS:
                     if self.in_position[s]:
+                        # Clean up ghost positions where size is zero or depleted
+                        if self.position_size[s] is None or self.position_size[s] <= 1e-7:
+                            self.in_position[s] = False
+                            self.position_side[s] = "HOLD"
+                            self.position_size[s] = 0.0
+                            continue
+
                         live_p = self.pipeline.latest_prices.get(s, self.entry_price[s])
                         entry_val = self.entry_price[s]
-                        pos_sz = self.position_size[s] if (self.position_size[s] and self.position_size[s] > 0) else 1.0
+                        pos_sz = self.position_size[s]
                         if live_p > 0 and entry_val > 0:
                             if self.position_side[s] == "LONG":
                                 p_pct = (live_p - entry_val) / entry_val * 100.0
@@ -965,24 +982,35 @@ class PrimeSignalBot:
                         entry_val = self.entry_price[s]
                         is_profit_locked = (is_long and sl_val >= entry_val) or (not is_long and sl_val <= entry_val and sl_val > 0)
                         
-                        target_1r = self.take_profit_1r[s] if self.take_profit_1r[s] > 0 else (entry_val + abs(entry_val - sl_val) if is_long else entry_val - abs(entry_val - sl_val))
-                        target_2r = self.take_profit_2r[s] if self.take_profit_2r[s] > 0 else (entry_val + 2 * abs(entry_val - sl_val) if is_long else entry_val - 2 * abs(entry_val - sl_val))
-                        final_tp = self.take_profit[s] if self.take_profit[s] > 0 else (entry_val + 3 * abs(entry_val - sl_val) if is_long else entry_val - 3 * abs(entry_val - sl_val))
+                        r_dist = abs(entry_val - sl_val) if abs(entry_val - sl_val) > 0 else (entry_val * 0.01)
+                        target_1r = self.take_profit_1r[s] if self.take_profit_1r[s] > 0 else (entry_val + 1.2 * r_dist if is_long else entry_val - 1.2 * r_dist)
+                        target_2r = self.take_profit_2r[s] if self.take_profit_2r[s] > 0 else (entry_val + 2.2 * r_dist if is_long else entry_val - 2.2 * r_dist)
+                        final_tp = self.take_profit[s] if self.take_profit[s] > 0 else (entry_val + 3.5 * r_dist if is_long else entry_val - 3.5 * r_dist)
                         
+                        # Guarantee final_tp is beyond target_2r
+                        if is_long and final_tp <= target_2r:
+                            final_tp = entry_val + 3.5 * r_dist
+                        elif not is_long and final_tp >= target_2r:
+                            final_tp = entry_val - 3.5 * r_dist
+
                         tp1_hit = self.partial_tp_taken[s]
                         tp2_hit = self.tp2_taken[s]
                         
                         # Dynamic target escalation upon hitting targets
                         if not tp1_hit:
                             active_target = target_1r
-                            active_target_name = "TP1 (1R)"
+                            active_target_name = "TP1 (1.2R)"
                             target_stage = 1
                         elif not tp2_hit:
                             active_target = target_2r
-                            active_target_name = "TP2 (2R)"
+                            active_target_name = "TP2 (2.2R)"
                             target_stage = 2
                         else:
-                            active_target = final_tp
+                            # Runner stage: Ensure target is strictly ahead of trailing SL
+                            if is_long:
+                                active_target = max(final_tp, sl_val + r_dist)
+                            else:
+                                active_target = min(final_tp, sl_val - r_dist)
                             active_target_name = "Runner Target"
                             target_stage = 3
 

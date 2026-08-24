@@ -101,7 +101,9 @@ class BacktestEngine:
                     # Total equity = remaining cash + current value of open position
                     current_equity = self.balance + (position_size * current_close)
                 else:
-                    current_equity = self.balance + (position_size * (entry_price - current_close))
+                    # Total equity = remaining cash + collateral + unrealized PnL
+                    unrealized_pnl = position_size * (entry_price - current_close)
+                    current_equity = self.balance + (position_size * entry_price) + unrealized_pnl
             self.equity_curve.append({'timestamp': ltf_time, 'equity': current_equity})
             
             # --- MANAGE OPEN POSITION ---
@@ -214,9 +216,12 @@ class BacktestEngine:
                     # PRIORITY EXIT CHECK: Take Profit checked FIRST
                     if current_low <= take_profit:
                         exit_price = min(take_profit, curr_candle['open'])
-                        pnl_usdt = position_size * (entry_price - exit_price)
-                        self.balance = self.balance + pnl_usdt - (position_size * exit_price * fee_rate)
+                        collateral_return = position_size * entry_price
+                        gross_pnl = position_size * (entry_price - exit_price)
+                        exit_fee = position_size * exit_price * fee_rate
+                        self.balance += collateral_return + gross_pnl - exit_fee
                         
+                        pnl_usdt = gross_pnl - exit_fee
                         pnl_pct = (entry_price - exit_price) / entry_price * 100
                         
                         self.trades.append({
@@ -250,10 +255,13 @@ class BacktestEngine:
                     # Check Stop Loss
                     elif current_high >= stop_loss:
                         exit_price = max(stop_loss, curr_candle['open'])
-                        # PnL for short = size * (entry - exit)
-                        pnl_usdt = position_size * (entry_price - exit_price)
-                        self.balance = self.balance + pnl_usdt - (position_size * exit_price * fee_rate)
+                        # PnL for short = collateral + gross_pnl - exit_fee
+                        collateral_return = position_size * entry_price
+                        gross_pnl = position_size * (entry_price - exit_price)
+                        exit_fee = position_size * exit_price * fee_rate
+                        self.balance += collateral_return + gross_pnl - exit_fee
                         
+                        pnl_usdt = gross_pnl - exit_fee
                         pnl_pct = (entry_price - exit_price) / entry_price * 100
                         
                         self.trades.append({
@@ -347,7 +355,7 @@ class BacktestEngine:
                     
                     # Calculate dynamic position size based on risk percent
                     position_size = self.risk.calculate_position_size(self.balance, entry_price, stop_loss)
-                    position_size = position_size * (trade_risk_pct / getattr(Config, 'RISK_PCT', 0.02))
+                    position_size = position_size * (trade_risk_pct / (getattr(Config, 'RISK_PCT', 0.8) / 100.0))
                     
                     if position_size <= 0.0:
                         continue
@@ -364,9 +372,10 @@ class BacktestEngine:
                         in_position = True
                     elif signal == "SELL":
                         position_side = "SHORT"
-                        # For short spot simulation, we assume margin-trading/contracts or simply track quote balance
-                        fee = position_size * entry_price * fee_rate
-                        self.balance -= fee
+                        # Deduct full collateral + entry fee (matching live bot behavior)
+                        collateral = position_size * entry_price
+                        fee = collateral * fee_rate
+                        self.balance -= collateral + fee
                         partial_tp_taken = False
                         take_profit_1r = entry_price - (stop_loss - entry_price)
                         in_position = True
@@ -382,8 +391,11 @@ class BacktestEngine:
                 pnl_usdt = (position_size * exit_price) - (position_size * entry_price) - fee
                 pnl_pct = (exit_price - entry_price) / entry_price * 100
             else:
-                pnl_usdt = position_size * (entry_price - exit_price)
-                self.balance = self.balance + pnl_usdt - (position_size * exit_price * fee_rate)
+                collateral_return = position_size * entry_price
+                gross_pnl = position_size * (entry_price - exit_price)
+                exit_fee = position_size * exit_price * fee_rate
+                self.balance += collateral_return + gross_pnl - exit_fee
+                pnl_usdt = gross_pnl - exit_fee
                 pnl_pct = (entry_price - exit_price) / entry_price * 100
                 
             self.trades.append({

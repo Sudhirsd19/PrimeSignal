@@ -57,7 +57,7 @@ def sniper_structure_simulate(symbol, htf_ohlcv, ltf_ohlcv, initial_balance=1000
     obs = detect_order_blocks(test_ltf)
     fvgs = detect_fvgs(test_ltf)
 
-    htf_timestamps = htf_df.index
+    htf_timestamps = htf_df.index.values
     htf_closes = htf_df['close'].values
     htf_ema50 = calculate_ema(htf_df, 50).values
     htf_ema200 = calculate_ema(htf_df, 200).values
@@ -72,6 +72,7 @@ def sniper_structure_simulate(symbol, htf_ohlcv, ltf_ohlcv, initial_balance=1000
     tp2 = 0.0
     p_size = 0.0
     partial_taken = False
+    pnl_part = 0.0
     high_p = 0.0
     low_p = 999999.0
     trades = []
@@ -223,6 +224,7 @@ def sniper_structure_simulate(symbol, htf_ohlcv, ltf_ohlcv, initial_balance=1000
                         in_pos = True
                         p_side = "LONG"
                         partial_taken = False
+                        pnl_part = 0.0
                         high_p = entry_p
                         low_p = entry_p
 
@@ -264,6 +266,7 @@ def sniper_structure_simulate(symbol, htf_ohlcv, ltf_ohlcv, initial_balance=1000
                         in_pos = True
                         p_side = "SHORT"
                         partial_taken = False
+                        pnl_part = 0.0
                         high_p = entry_p
                         low_p = entry_p
 

@@ -933,6 +933,7 @@
                                 // Draw active position lines
                                 const activePos = (state.active_positions && state.symbol) ? state.active_positions[state.symbol] : null;
                                 if (activePos) {
+                                    const isLocked = activePos.profit_locked || (activePos.side === 'LONG' ? activePos.stop_loss >= activePos.entry_price : (activePos.stop_loss <= activePos.entry_price && activePos.stop_loss > 0));
                                     entryPriceLine = candleSeries.createPriceLine({
                                         price: activePos.entry_price,
                                         color: '#3b82f6', // blue
@@ -943,11 +944,11 @@
                                     });
                                     slPriceLine = candleSeries.createPriceLine({
                                         price: activePos.stop_loss,
-                                        color: '#f87171', // soft red
+                                        color: isLocked ? '#f59e0b' : '#f87171', // gold/amber if profit is locked, soft red if normal SL
                                         lineWidth: 2,
                                         lineStyle: LightweightCharts.LineStyle.Dotted,
                                         axisLabelVisible: true,
-                                        title: 'Stop Loss (SL)',
+                                        title: isLocked ? '🔒 Locked SL' : 'Stop Loss (SL)',
                                     });
                                     tpPriceLine = candleSeries.createPriceLine({
                                         price: activePos.take_profit,
@@ -955,7 +956,7 @@
                                         lineWidth: 2,
                                         lineStyle: LightweightCharts.LineStyle.Dotted,
                                         axisLabelVisible: true,
-                                        title: 'Take Profit (TP)',
+                                        title: activePos.active_target_name || 'Take Profit (TP)',
                                     });
                                 }
                                 }
@@ -1244,13 +1245,13 @@
                                     statusBadgeHTML = `<span class="text-[9px] px-1.5 py-0.5 font-bold rounded uppercase tracking-wider bg-slate-500/20 text-slate-300 border border-slate-500/30">⚪ EVEN (0.00%)</span>`;
                                 }
                                 
-                                const target1P = pos.target_1r || (isLong ? entryP * 1.01 : entryP * 0.99);
-                                const target2P = pos.target_2r || (isLong ? entryP * 1.02 : entryP * 0.98);
-                                const finalTargetP = pos.final_target || (isLong ? entryP * 1.05 : entryP * 0.95);
+                                const target1P = pos.target_1r || (isLong ? entryP * 1.012 : entryP * 0.988);
+                                const target2P = pos.target_2r || (isLong ? entryP * 1.022 : entryP * 0.978);
+                                const finalTargetP = pos.final_target || (isLong ? entryP * 1.035 : entryP * 0.965);
                                 
                                 const stage = pos.target_stage || (pos.tp2_hit ? 3 : (pos.tp1_hit ? 2 : 1));
                                 const activeTargetP = pos.active_target || (stage === 1 ? target1P : (stage === 2 ? target2P : finalTargetP));
-                                const activeTargetName = pos.active_target_name || (stage === 1 ? "TP1 (1R)" : (stage === 2 ? "TP2 (2R)" : "Runner"));
+                                const activeTargetName = pos.active_target_name || (stage === 1 ? "TP1 (1.2R)" : (stage === 2 ? "TP2 (2.2R)" : "Runner Target"));
                                 
                                 // Check if profit is locked
                                 const isProfitLocked = pos.profit_locked || (isLong ? slP >= entryP : (slP <= entryP && slP > 0));
@@ -1273,10 +1274,14 @@
                                 if (isLong) {
                                     if (stageEndP > stageStartP) {
                                         targetProgress = Math.min(Math.max(((liveP - stageStartP) / (stageEndP - stageStartP)) * 100, 0), 100);
+                                    } else {
+                                        targetProgress = 100;
                                     }
                                 } else {
                                     if (stageStartP > stageEndP) {
                                         targetProgress = Math.min(Math.max(((stageStartP - liveP) / (stageStartP - stageEndP)) * 100, 0), 100);
+                                    } else {
+                                        targetProgress = 100;
                                     }
                                 }
                                 
@@ -1287,7 +1292,7 @@
                                 } else if (stage === 2) {
                                     stageBadgeHTML = `<span class="text-[9px] px-1.5 py-0.5 font-extrabold rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse">🎯 TP1 HIT ➔ Target 2 Active</span>`;
                                 } else {
-                                    stageBadgeHTML = `<span class="text-[9px] px-1.5 py-0.5 font-extrabold rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 animate-pulse">🚀 TP2 HIT ➔ Runner Target Active</span>`;
+                                    stageBadgeHTML = `<span class="text-[9px] px-1.5 py-0.5 font-extrabold rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 animate-pulse">🚀 TP2 HIT ➔ Runner Active</span>`;
                                 }
                                 
                                 // Lock profit button or locked indicator HTML
