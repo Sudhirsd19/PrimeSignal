@@ -114,6 +114,39 @@ class ExecutionEngine:
             timeframe = Config.LTF_TIMEFRAME
         return await self.execute_with_retry(self.public_client.fetch_ohlcv, symbol, timeframe, None, limit)
 
+    async def fetch_funding_rate(self, symbol=None):
+        """
+        Fetch real-time 8h funding rate for a symbol (e.g. 0.0001 = 0.01%).
+        Uses 60-second cache to minimize network calls.
+        """
+        if symbol is None:
+            symbol = Config.SYMBOL
+        
+        if not hasattr(self, '_funding_rates_cache'):
+            self._funding_rates_cache = {}
+            self._funding_rates_cache_time = {}
+
+        now = time.time()
+        if symbol in self._funding_rates_cache and (now - self._funding_rates_cache_time.get(symbol, 0)) < 60:
+            return self._funding_rates_cache[symbol]
+
+        try:
+            import aiohttp
+            raw_symbol = symbol.replace('/', '').upper()
+            url = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={raw_symbol}"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=4.0)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        last_funding_rate = float(data.get('lastFundingRate', 0.0))
+                        self._funding_rates_cache[symbol] = last_funding_rate
+                        self._funding_rates_cache_time[symbol] = now
+                        return last_funding_rate
+        except Exception:
+            pass
+            
+        return 0.0
+
     # ── Feature 1: Order fill confirmation ───────────────────────────────
     async def wait_for_fill(self, order_id: str, symbol: str, timeout: float = 30.0) -> dict | None:
         """

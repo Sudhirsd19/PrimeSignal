@@ -27,6 +27,28 @@ class Config:
     RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.5")) # TP2 40% runner at 2.5R
     ML_CONFIDENCE_THRESHOLD = float(os.getenv("ML_CONFIDENCE_THRESHOLD", "0.60"))
     
+    # ─── ULTIMATE SHIELD: 5 Advanced Institutional Protection Parameters ───
+    # 1. Stagnation Killer (Time-based exit)
+    ENABLE_TIME_STOP = os.getenv("ENABLE_TIME_STOP", "True").lower() in ("true", "1", "yes")
+    MAX_STAGNANT_CANDLES = int(os.getenv("MAX_STAGNANT_CANDLES", "16")) # 4 hours on 15m
+    STAGNANT_MAX_R_DISTANCE = float(os.getenv("STAGNANT_MAX_R_DISTANCE", "0.25")) # exit if within ±0.25R
+    
+    # 2. Early Structural Invalidation Exit
+    ENABLE_STRUCTURAL_EXIT = os.getenv("ENABLE_STRUCTURAL_EXIT", "True").lower() in ("true", "1", "yes")
+    EARLY_EXIT_MAX_LOSS_R = float(os.getenv("EARLY_EXIT_MAX_LOSS_R", "0.45")) # Cut trade at max -0.45R instead of full -1.0R
+    
+    # 3. Funding Rate & Crowded Sentiment Filter
+    ENABLE_FUNDING_RATE_FILTER = os.getenv("ENABLE_FUNDING_RATE_FILTER", "True").lower() in ("true", "1", "yes")
+    MAX_FUNDING_RATE_PCT = float(os.getenv("MAX_FUNDING_RATE_PCT", "0.035")) # 0.035% per 8h
+    
+    # 4. Volatility Compression / Bollinger Band Squeeze Filter
+    ENABLE_BB_SQUEEZE_FILTER = os.getenv("ENABLE_BB_SQUEEZE_FILTER", "True").lower() in ("true", "1", "yes")
+    BB_SQUEEZE_PERCENTILE = float(os.getenv("BB_SQUEEZE_PERCENTILE", "12.0")) # lowest 12% bandwidth
+    
+    # 5. Macro Economic News Blackout Window Filter (CPI/FOMC auto-pause)
+    ENABLE_MACRO_NEWS_FILTER = os.getenv("ENABLE_MACRO_NEWS_FILTER", "True").lower() in ("true", "1", "yes")
+    MACRO_PAUSE_MINUTES = int(os.getenv("MACRO_PAUSE_MINUTES", "15"))
+    
     # Session & Timing Filters
     ENABLE_SESSION_FILTER = os.getenv("ENABLE_SESSION_FILTER", "True").lower() in ("true", "1", "yes")
     ENABLE_WEEKEND_FILTER = os.getenv("ENABLE_WEEKEND_FILTER", "True").lower() in ("true", "1", "yes")

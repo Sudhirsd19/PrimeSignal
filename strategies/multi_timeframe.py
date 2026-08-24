@@ -1,5 +1,5 @@
 from strategies.base import BaseStrategy
-from strategies.indicators import calculate_ema, calculate_rsi, calculate_atr, calculate_vwap, calculate_adx, detect_rsi_divergence
+from strategies.indicators import calculate_ema, calculate_rsi, calculate_atr, calculate_vwap, calculate_adx, calculate_bollinger_bands, detect_rsi_divergence
 from strategies.smc import detect_fvgs, detect_order_blocks, detect_structure
 from config import Config
 
@@ -154,6 +154,20 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         if getattr(Config, 'ENABLE_WEEKEND_FILTER', False) and current_weekday in (5, 6) and not strong_trend:
             metadata['reason'] = "Weekend Low-Liquidity Filter (Sat/Sun)"
             return "HOLD", metadata
+            
+        # Volatility Compression / Bollinger Squeeze Filter (Pre-Breakout Fakeout Protection)
+        if getattr(Config, 'ENABLE_BB_SQUEEZE_FILTER', True):
+            bb_df = calculate_bollinger_bands(ltf_df, period=20, std_dev=2.0)
+            if len(bb_df) >= 30:
+                bw_series = bb_df['bandwidth'].dropna()
+                if len(bw_series) >= 30:
+                    curr_bw = bw_series.iloc[-2]
+                    lookback_bw = bw_series.iloc[-min(len(bw_series), 100):]
+                    bw_percentile = (lookback_bw < curr_bw).mean() * 100.0
+                    bb_thresh = getattr(Config, 'BB_SQUEEZE_PERCENTILE', 12.0)
+                    if bw_percentile <= bb_thresh and not strong_trend:
+                        metadata['reason'] = f"BB Volatility Squeeze (BW Percentile {bw_percentile:.1f}% <= {bb_thresh}%)"
+                        return "HOLD", metadata
         
         curr_price = ltf_closes.iloc[-2]
         curr_rsi   = ltf_rsi.iloc[-2]

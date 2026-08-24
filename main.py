@@ -320,10 +320,47 @@ class PrimeSignalBot:
                     current_equity += (self.position_size[sym] * self.entry_price[sym]) + unrealized_pnl
         return current_equity
 
+    def is_macro_news_blackout(self):
+        """
+        Checks if current UTC time falls in high-impact economic news windows
+        (US CPI / PPI / NFP / FOMC release times e.g. 12:20-12:45 UTC, 13:20-13:45 UTC, 18:00-19:30 UTC).
+        """
+        if not getattr(Config, 'ENABLE_MACRO_NEWS_FILTER', True):
+            return False, ""
+            
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        hour = now_utc.hour
+        minute = now_utc.minute
+        weekday = now_utc.weekday() # 0=Mon, 4=Fri
+        
+        # Only weekdays have high-impact macro economic data releases
+        if weekday >= 5:
+            return False, ""
+            
+        # Window 1: 12:20 - 12:45 UTC (US 8:30 AM EDT daylight savings / 8:30 AM EST releases)
+        if hour == 12 and (20 <= minute <= 45):
+            return True, "US Morning Macro Data Window (12:20-12:45 UTC)"
+            
+        # Window 2: 13:20 - 13:45 UTC (US 8:30 AM EST standard winter releases)
+        if hour == 13 and (20 <= minute <= 45):
+            return True, "US Main Macro Data Window (13:20-13:45 UTC)"
+            
+        # Window 3: 18:00 - 19:30 UTC (Fed FOMC Rate Decision & Press Conf, typically Wednesdays)
+        if (weekday == 2) and (18 <= hour <= 19):
+            return True, "Fed FOMC Rate Decision Window (18:00-19:30 UTC)"
+            
+        return False, ""
+
     async def _on_candle_close_impl(self, symbol):
         if time.time() < self.global_pause_until:
             return
             
+        # Macro Economic News Blackout Window Filter (CPI/FOMC Volatility Protection)
+        is_news, news_reason = self.is_macro_news_blackout()
+        if is_news:
+            add_log_message(f"[{symbol}] Trade skipped: {news_reason}. Macro volatility blackout active.")
+            return
+
         # Update balance via API if live
         if self.has_keys:
             balance = await self.execution.fetch_balance()
@@ -474,6 +511,20 @@ class PrimeSignalBot:
                     if btc_drop > 0.014:
                         add_log_message(f"[{symbol}] Trade blocked: BTC dropped > 1.4% in last 5m. Blocking altcoin longs.")
                         return
+
+        # Funding Rate & Crowded Trade Sentiment Filter
+        if getattr(Config, 'ENABLE_FUNDING_RATE_FILTER', True):
+            try:
+                fr = await self.execution.fetch_funding_rate(symbol)
+                max_fr = getattr(Config, 'MAX_FUNDING_RATE_PCT', 0.035) / 100.0 # e.g. 0.035% = 0.00035
+                if signal == "BUY" and fr > max_fr:
+                    add_log_message(f"[{symbol}] Trade blocked: Extreme Bullish Funding Rate ({fr*100:+.4f}% > +{max_fr*100:.3f}%). Long liquidation trap protection.")
+                    return
+                elif signal == "SELL" and fr < -max_fr:
+                    add_log_message(f"[{symbol}] Trade blocked: Extreme Bearish Funding Rate ({fr*100:+.4f}% < -{max_fr*100:.3f}%). Short squeeze trap protection.")
+                    return
+            except Exception:
+                pass
         
         # Daily Trade Limit
         max_daily_trades = getattr(Config, 'MAX_DAILY_TRADES', 6)
@@ -810,6 +861,40 @@ class PrimeSignalBot:
                                     self.stop_loss[symbol] = be_sl
                                     if symbol == Config.SYMBOL: DashboardState.stop_loss = be_sl
                                     add_log_message(f"[{symbol}] 🛡️ ZERO-RISK FREE-TRADE ACTIVATED: SL moved to Breakeven ({be_sl:.4f})")
+
+                            # 1. ⏱️ STAGNATION KILLER: Time-based exit if trade loses momentum near entry
+                            if getattr(Config, 'ENABLE_TIME_STOP', True) and not self.partial_tp_taken[symbol]:
+                                entry_ts = self.entry_time.get(symbol, 0)
+                                if entry_ts > 0:
+                                    tf_mins = int(Config.LTF_TIMEFRAME.replace('m', '').replace('h', '')) * (60 if 'h' in Config.LTF_TIMEFRAME else 1)
+                                    time_elapsed_secs = time.time() - (entry_ts / 1000.0)
+                                    candles_open = time_elapsed_secs / (tf_mins * 60)
+                                    max_stagnant_candles = getattr(Config, 'MAX_STAGNANT_CANDLES', 16)
+                                    if candles_open >= max_stagnant_candles:
+                                        stagnant_max_dist = getattr(Config, 'STAGNANT_MAX_R_DISTANCE', 0.25) * r_dist
+                                        if abs(curr_price - self.entry_price[symbol]) <= stagnant_max_dist:
+                                            add_log_message(f"[{symbol}] ⏱️ STAGNATION KILLER: Position open for {candles_open:.1f} candles ({time_elapsed_secs/3600:.1f}h) with no momentum. Auto-exiting at scratch.")
+                                            await self.notifier.send_message(f"⏱️ *STAGNATION AUTO-EXIT ({symbol})*\nTrade open for {candles_open:.1f} candles without momentum. Scratch-closed to reclaim capital.")
+                                            await self.exit_position(symbol, "STAGNANT_TIME_EXIT")
+                                            continue
+
+                            # 2. ⚡ EARLY STRUCTURAL EXIT: Cut loss early if 15m structure breaks against LONG
+                            if getattr(Config, 'ENABLE_STRUCTURAL_EXIT', True) and not self.partial_tp_taken[symbol] and len(ltf_df) >= 3:
+                                last_c = ltf_df.iloc[-1]
+                                prev_c = ltf_df.iloc[-2]
+                                ema_20 = calculate_ema(ltf_df, 20).iloc[-1] if len(ltf_df) >= 20 else 0.0
+                                avg_vol = ltf_df['volume'].rolling(14).mean().iloc[-1] if len(ltf_df) >= 14 else 1.0
+                                unrealized_loss_r = (self.entry_price[symbol] - curr_price) / r_dist if r_dist > 0 else 0.0
+                                early_max_r = getattr(Config, 'EARLY_EXIT_MAX_LOSS_R', 0.45)
+                                if 0.15 <= unrealized_loss_r <= early_max_r and ema_20 > 0:
+                                    is_bearish_engulf = (last_c['close'] < last_c['open']) and (prev_c['close'] > prev_c['open']) and (last_c['close'] < prev_c['open'])
+                                    is_heavy_vol = last_c['volume'] > 1.8 * avg_vol
+                                    is_below_ema = last_c['close'] < ema_20
+                                    if (is_bearish_engulf or is_below_ema) and is_heavy_vol:
+                                        add_log_message(f"[{symbol}] ⚡ EARLY STRUCTURAL EXIT: Heavy bearish breakdown below EMA20. Cutting loss early at -{unrealized_loss_r:.2f}R.")
+                                        await self.notifier.send_message(f"⚡ *EARLY STRUCTURAL EXIT ({symbol})*\nMarket structure broke against LONG before full SL. Loss cut early at -{unrealized_loss_r:.2f}R (Saved ~{(1.0-unrealized_loss_r)*100:.0f}% loss).")
+                                        await self.exit_position(symbol, "EARLY_STRUCTURAL_INVALIDATION")
+                                        continue
                             
                             # TP1 (50% Scale-Out at 1.2R)
                             if not self.partial_tp_taken[symbol] and curr_price >= self.take_profit_1r[symbol]:
@@ -882,6 +967,40 @@ class PrimeSignalBot:
                                     self.stop_loss[symbol] = be_sl
                                     if symbol == Config.SYMBOL: DashboardState.stop_loss = be_sl
                                     add_log_message(f"[{symbol}] 🛡️ ZERO-RISK FREE-TRADE ACTIVATED: SL moved to Breakeven ({be_sl:.4f})")
+
+                            # 1. ⏱️ STAGNATION KILLER: Time-based exit if trade loses momentum near entry
+                            if getattr(Config, 'ENABLE_TIME_STOP', True) and not self.partial_tp_taken[symbol]:
+                                entry_ts = self.entry_time.get(symbol, 0)
+                                if entry_ts > 0:
+                                    tf_mins = int(Config.LTF_TIMEFRAME.replace('m', '').replace('h', '')) * (60 if 'h' in Config.LTF_TIMEFRAME else 1)
+                                    time_elapsed_secs = time.time() - (entry_ts / 1000.0)
+                                    candles_open = time_elapsed_secs / (tf_mins * 60)
+                                    max_stagnant_candles = getattr(Config, 'MAX_STAGNANT_CANDLES', 16)
+                                    if candles_open >= max_stagnant_candles:
+                                        stagnant_max_dist = getattr(Config, 'STAGNANT_MAX_R_DISTANCE', 0.25) * r_dist
+                                        if abs(curr_price - self.entry_price[symbol]) <= stagnant_max_dist:
+                                            add_log_message(f"[{symbol}] ⏱️ STAGNATION KILLER: Position open for {candles_open:.1f} candles ({time_elapsed_secs/3600:.1f}h) with no momentum. Auto-exiting at scratch.")
+                                            await self.notifier.send_message(f"⏱️ *STAGNATION AUTO-EXIT ({symbol})*\nTrade open for {candles_open:.1f} candles without momentum. Scratch-closed to reclaim capital.")
+                                            await self.exit_position(symbol, "STAGNANT_TIME_EXIT")
+                                            continue
+
+                            # 2. ⚡ EARLY STRUCTURAL EXIT: Cut loss early if 15m structure breaks against SHORT
+                            if getattr(Config, 'ENABLE_STRUCTURAL_EXIT', True) and not self.partial_tp_taken[symbol] and len(ltf_df) >= 3:
+                                last_c = ltf_df.iloc[-1]
+                                prev_c = ltf_df.iloc[-2]
+                                ema_20 = calculate_ema(ltf_df, 20).iloc[-1] if len(ltf_df) >= 20 else 0.0
+                                avg_vol = ltf_df['volume'].rolling(14).mean().iloc[-1] if len(ltf_df) >= 14 else 1.0
+                                unrealized_loss_r = (curr_price - self.entry_price[symbol]) / r_dist if r_dist > 0 else 0.0
+                                early_max_r = getattr(Config, 'EARLY_EXIT_MAX_LOSS_R', 0.45)
+                                if 0.15 <= unrealized_loss_r <= early_max_r and ema_20 > 0:
+                                    is_bullish_engulf = (last_c['close'] > last_c['open']) and (prev_c['close'] < prev_c['open']) and (last_c['close'] > prev_c['open'])
+                                    is_heavy_vol = last_c['volume'] > 1.8 * avg_vol
+                                    is_above_ema = last_c['close'] > ema_20
+                                    if (is_bullish_engulf or is_above_ema) and is_heavy_vol:
+                                        add_log_message(f"[{symbol}] ⚡ EARLY STRUCTURAL EXIT: Heavy bullish breakout above EMA20. Cutting loss early at -{unrealized_loss_r:.2f}R.")
+                                        await self.notifier.send_message(f"⚡ *EARLY STRUCTURAL EXIT ({symbol})*\nMarket structure broke against SHORT before full SL. Loss cut early at -{unrealized_loss_r:.2f}R (Saved ~{(1.0-unrealized_loss_r)*100:.0f}% loss).")
+                                        await self.exit_position(symbol, "EARLY_STRUCTURAL_INVALIDATION")
+                                        continue
                             
                             # TP1 (50% Scale-Out at 1.2R)
                             if not self.partial_tp_taken[symbol] and curr_price <= self.take_profit_1r[symbol]:

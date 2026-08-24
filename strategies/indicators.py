@@ -161,6 +161,29 @@ def detect_rsi_divergence(df, rsi_series, lookback=20):
     return None
 
 
+def calculate_bollinger_bands(df, period=20, std_dev=2.0, column='close'):
+    """
+    Calculates Bollinger Bands and Bollinger Bandwidth (BBW).
+    Returns DataFrame with columns: ['upper', 'lower', 'middle', 'bandwidth']
+    """
+    if len(df) < period:
+        nan_s = pd.Series([np.nan] * len(df), index=df.index)
+        return pd.DataFrame({'upper': nan_s, 'lower': nan_s, 'middle': nan_s, 'bandwidth': nan_s}, index=df.index)
+    
+    mid = df[column].rolling(period).mean()
+    std = df[column].rolling(period).std(ddof=0)
+    upper = mid + (std * std_dev)
+    lower = mid - (std * std_dev)
+    bandwidth = (upper - lower) / mid.replace(0, 1e-9)
+    
+    return pd.DataFrame({
+        'upper': upper,
+        'lower': lower,
+        'middle': mid,
+        'bandwidth': bandwidth
+    }, index=df.index)
+
+
 def prepare_dataframe(ohlcv_data):
     """
     Converts list of list OHLCV candles to a pandas DataFrame.
