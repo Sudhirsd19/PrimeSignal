@@ -89,6 +89,9 @@
                     </div>
                     <span class="text-[10px] text-gray-500 font-normal border-l border-[#374151] pl-2 hidden sm:inline">Trend: <span class="text-blue-400 font-bold">1H</span></span>
                 </div>
+                <button id="btn-reset-balance" onclick="resetPaperAccount()" title="Reset Paper Balance to $10,000 & Clear Positions" class="flex items-center bg-[#1f2937] hover:bg-indigo-600/30 text-indigo-400 hover:text-indigo-200 text-xs px-2.5 py-1.5 rounded-md font-semibold tracking-wide border border-[#374151] hover:border-indigo-500 gap-1.5 transition-all cursor-pointer">
+                    <span>🔄 RESET $10K</span>
+                </button>
                 <span id="ws-status" class="bg-red-500/10 text-red-400 text-xs px-3 py-1.5 rounded-md font-bold tracking-wide border border-red-500/20">
                     STATUS: OFFLINE
                 </span>
@@ -1827,6 +1830,31 @@
                 }
             } catch (err) {
                 console.error("Error locking profit:", err);
+            }
+        }
+
+        async function resetPaperAccount() {
+            if (confirm("Reset paper trading balance to $10,000 USDT and close all active positions for fresh trading?")) {
+                try {
+                    const apiKey = localStorage.getItem('dashboard_api_key') || '';
+                    const response = await fetch('/api/reset_account', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-API-Key': apiKey
+                        },
+                        body: JSON.stringify({ target_balance: 10000.0 })
+                    });
+                    const data = await response.json();
+                    if (data.status === 'success') {
+                        alert("✅ SUCCESS: " + data.message);
+                    } else {
+                        alert("Error: " + data.message);
+                    }
+                } catch (err) {
+                    console.error(err);
+                    alert("Failed to reset account.");
+                }
             }
         }
 

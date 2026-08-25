@@ -207,6 +207,22 @@ async def lock_profit(req: LockProfitRequest):
     else:
         return {"status": "error", "message": msg}
 
+class ResetAccountRequest(BaseModel):
+    target_balance: float = 10000.0
+
+@app.post("/api/reset_account", dependencies=[Depends(verify_dashboard_key)])
+async def reset_account(req: ResetAccountRequest = None):
+    balance = req.target_balance if req else 10000.0
+    if bot_instance is not None:
+        bot_instance.reset_account_state(balance)
+        return {"status": "success", "message": f"Account reset to ${balance:,.2f} USDT. All positions cleared."}
+    else:
+        DashboardState.balance_usdt = float(balance)
+        DashboardState.balance_base = 0.0
+        DashboardState.active_positions.clear()
+        DashboardState.in_position = False
+        return {"status": "success", "message": f"Dashboard balance reset to ${balance:,.2f} USDT."}
+
 @app.get("/api/analytics", dependencies=[Depends(verify_dashboard_key)])
 async def get_analytics():
     """Fetch trade logs from local JSONL file and aggregate analytics for the UI."""

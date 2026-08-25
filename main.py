@@ -242,6 +242,38 @@ class PrimeSignalBot:
         except Exception as e:
             print(f"[STATE] Failed to read data/trade_logs.jsonl: {e}")
 
+    def reset_account_state(self, target_balance: float = 10000.0):
+        """Resets virtual paper balance to target amount and closes all simulated positions for fresh trading."""
+        self._dry_run_balance_usdt = float(target_balance)
+        for sym in Config.SUPPORTED_SYMBOLS:
+            self.in_position[sym] = False
+            self.position_side[sym] = "HOLD"
+            self.entry_price[sym] = 0.0
+            self.stop_loss[sym] = 0.0
+            self.take_profit[sym] = 0.0
+            self.take_profit_1r[sym] = 0.0
+            self.take_profit_2r[sym] = 0.0
+            self.position_size[sym] = 0.0
+            self.entry_time[sym] = 0
+            self.highest_price_reached[sym] = 0.0
+            self.lowest_price_reached[sym] = 999999.0
+            self.partial_tp_taken[sym] = False
+            self.tp2_taken[sym] = False
+
+        self.traded_zones_cache.clear()
+        DashboardState.balance_usdt = float(target_balance)
+        DashboardState.balance_base = 0.0
+        DashboardState.active_positions.clear()
+        DashboardState.in_position = False
+        DashboardState.position_side = "HOLD"
+        DashboardState.entry_price = 0.0
+        DashboardState.stop_loss = 0.0
+        DashboardState.take_profit = 0.0
+        DashboardState.current_pnl_pct = 0.0
+        DashboardState.current_pnl_usdt = 0.0
+        self.save_state()
+        add_log_message(f"🔄 [ACCOUNT RESET] Virtual paper balance reset to ${target_balance:,.2f} USDT. All positions cleared for fresh trading.")
+
     async def initialize(self):
         add_log_message("Starting system initialization for all supported symbols...")
 
