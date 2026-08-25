@@ -214,29 +214,32 @@ def detect_structure(df, period=5):
     swing_lows = []
     current_trend = 1
 
-    for i in range(period, n - period):
-        window_highs = highs[i-period:i+period+1]
-        window_lows = lows[i-period:i+period+1]
+    for i in range(period, n):
+        # Swing detection requires a look-ahead window of 'period' bars
+        if i <= n - period - 1:
+            window_highs = highs[i-period:i+period+1]
+            window_lows = lows[i-period:i+period+1]
 
-        val_h = highs[i]
-        val_l = lows[i]
+            val_h = highs[i]
+            val_l = lows[i]
 
-        is_swing_high = (window_highs.max() == val_h)
-        is_swing_low = (window_lows.min() == val_l)
+            is_swing_high = (window_highs.max() == val_h)
+            is_swing_low = (window_lows.min() == val_l)
 
-        if is_swing_high:
-            swing_highs.append((timestamps[i], val_h))
-        if is_swing_low:
-            swing_lows.append((timestamps[i], val_l))
+            if is_swing_high:
+                swing_highs.append((timestamps[i], val_h))
+            if is_swing_low:
+                swing_lows.append((timestamps[i], val_l))
 
+        # BOS/CHoCH detection only needs previously confirmed swings — runs to live edge
         close_price = closes[i]
 
         if current_trend == 1 and swing_highs:
-            prev_high = swing_highs[-2][1] if len(swing_highs) > 1 else swing_highs[-1][1]
+            prev_high = swing_highs[-1][1]
             if close_price > prev_high:
                 bos_list[i] = {'type': 'BULLISH', 'level': prev_high}
         elif current_trend == -1 and swing_lows:
-            prev_low = swing_lows[-2][1] if len(swing_lows) > 1 else swing_lows[-1][1]
+            prev_low = swing_lows[-1][1]
             if close_price < prev_low:
                 bos_list[i] = {'type': 'BEARISH', 'level': prev_low}
 

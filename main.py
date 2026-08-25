@@ -296,7 +296,7 @@ class PrimeSignalBot:
         total_risk_pct = 0.0
         longs_count = 0
         shorts_count = 0
-        current_eq = self._dry_run_balance_usdt if not self.has_keys else DashboardState.balance_usdt
+        current_eq = self.calculate_total_equity() if not self.has_keys else DashboardState.balance_usdt
 
         for sym in Config.SUPPORTED_SYMBOLS:
             if self.in_position[sym]:
@@ -392,7 +392,7 @@ class PrimeSignalBot:
         # Check high volatility kill switch
         if not ltf_df.empty:
             last_candle = ltf_df.iloc[-1]
-            move_pct = abs(last_candle['close'] - last_candle['open']) / last_candle['open']
+            move_pct = abs(last_candle['close'] - last_candle['open']) / max(last_candle['open'], 1e-8)
             if move_pct > getattr(Config, 'MAX_CANDLE_MOVE_PCT', 0.015):
                 avg_vol = ltf_df['volume'].rolling(14).mean().iloc[-1] if len(ltf_df) > 14 else 0.0
                 if last_candle['volume'] < 1.5 * avg_vol:
@@ -941,6 +941,15 @@ class PrimeSignalBot:
                                     self.position_size[symbol] -= tp1_size
                                     self.partial_tp_taken[symbol] = True
                                     
+                                    # Log partial TP1 trade record for accurate PnL tracking
+                                    tp1_pnl = tp1_size * (curr_price - self.entry_price[symbol])
+                                    DashboardState.trades.append({
+                                        'symbol': symbol, 'side': 'LONG', 'type': 'TP1_PARTIAL',
+                                        'entry': self.entry_price[symbol], 'exit': curr_price,
+                                        'size': tp1_size, 'pnl': round(tp1_pnl, 4),
+                                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+                                    })
+                                    
                                     # PROFIT LOCK: Guarantee profit by setting Stop Loss to Breakeven (+0.15%)
                                     profit_lock_sl = self.entry_price[symbol] * 1.0015
                                     if profit_lock_sl > self.stop_loss[symbol]:
@@ -973,6 +982,15 @@ class PrimeSignalBot:
                                 if tp2_success:
                                     self.position_size[symbol] -= tp2_size
                                     self.tp2_taken[symbol] = True
+                                    
+                                    # Log partial TP2 trade record for accurate PnL tracking
+                                    tp2_pnl = tp2_size * (curr_price - self.entry_price[symbol])
+                                    DashboardState.trades.append({
+                                        'symbol': symbol, 'side': 'LONG', 'type': 'TP2_PARTIAL',
+                                        'entry': self.entry_price[symbol], 'exit': curr_price,
+                                        'size': tp2_size, 'pnl': round(tp2_pnl, 4),
+                                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+                                    })
                                     # Lock SL at TP1 level (Guaranteed deep profit lock)
                                     if self.take_profit_1r[symbol] > self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = self.take_profit_1r[symbol]
@@ -1062,6 +1080,15 @@ class PrimeSignalBot:
                                     self.position_size[symbol] -= tp1_size
                                     self.partial_tp_taken[symbol] = True
                                     
+                                    # Log partial TP1 trade record for accurate PnL tracking
+                                    tp1_pnl = tp1_size * (self.entry_price[symbol] - curr_price)
+                                    DashboardState.trades.append({
+                                        'symbol': symbol, 'side': 'SHORT', 'type': 'TP1_PARTIAL',
+                                        'entry': self.entry_price[symbol], 'exit': curr_price,
+                                        'size': tp1_size, 'pnl': round(tp1_pnl, 4),
+                                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+                                    })
+                                    
                                     # PROFIT LOCK: Guarantee profit by setting Stop Loss to Breakeven (-0.15%)
                                     profit_lock_sl = self.entry_price[symbol] * 0.9985
                                     if profit_lock_sl < self.stop_loss[symbol]:
@@ -1094,6 +1121,15 @@ class PrimeSignalBot:
                                 if tp2_success:
                                     self.position_size[symbol] -= tp2_size
                                     self.tp2_taken[symbol] = True
+                                    
+                                    # Log partial TP2 trade record for accurate PnL tracking
+                                    tp2_pnl = tp2_size * (self.entry_price[symbol] - curr_price)
+                                    DashboardState.trades.append({
+                                        'symbol': symbol, 'side': 'SHORT', 'type': 'TP2_PARTIAL',
+                                        'entry': self.entry_price[symbol], 'exit': curr_price,
+                                        'size': tp2_size, 'pnl': round(tp2_pnl, 4),
+                                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+                                    })
                                     # Lock SL at TP1 level (Guaranteed deep profit lock)
                                     if self.take_profit_1r[symbol] < self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = self.take_profit_1r[symbol]

@@ -138,13 +138,13 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                         directional_closes += 1
                         if (c_close - c_open) > 1.2 * avg_body: mom_count += 1
                     else:
-                        directional_closes = 0
+                        break
                 else:
                     if c_open > c_close:
                         directional_closes += 1
                         if (c_open - c_close) > 1.2 * avg_body: mom_count += 1
                     else:
-                        directional_closes = 0
+                        break
             if mom_count >= 1 or directional_closes >= 2:
                 strong_trend = True
         metadata['strong_trend'] = strong_trend

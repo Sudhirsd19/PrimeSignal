@@ -116,7 +116,7 @@ async def set_mode(req: ModeRequest):
                                 DashboardState.balance_usdt = inr_balance
                         else:
                             usdt_balance = balance.get('total', {}).get('USDT', None)
-                            if usdt_balance and usdt_balance > 0:
+                            if usdt_balance is not None:
                                 DashboardState.balance_usdt = usdt_balance
                         DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
             else:

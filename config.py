@@ -101,7 +101,6 @@ class Config:
     
     # Machine Learning configurations
     ML_CONFIRMATION_THRESHOLD = float(os.getenv("ML_CONFIRMATION_THRESHOLD", "0.60"))
-    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.5"))
     ML_TRAIN_BARS = int(os.getenv("ML_TRAIN_BARS", "2000"))
     
     # Test Mode config

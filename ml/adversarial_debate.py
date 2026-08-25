@@ -35,11 +35,14 @@ class AdversarialDebateCourtroom:
             advocate_score += 25
             advocate_points.append(f"Strong 1H HTF {metadata.get('htf_trend')} trend alignment (+25pts)")
 
-        # SMC Zone
+        # SMC Zone & Dynamic Trend Setups
         setup_type = metadata.get('setup_type', 'NONE')
         if setup_type in ['OB', 'FVG', 'SWEEP']:
             advocate_score += 20
             advocate_points.append(f"Institutional SMC {setup_type} zone confluence (+20pts)")
+        elif setup_type in ['EMA', 'VWAP']:
+            advocate_score += 20
+            advocate_points.append(f"Dynamic Pullback ({setup_type}) confluence (+20pts)")
 
         # CVD Absorption
         cvd_info = market_context.get('cvd', {})
@@ -60,6 +63,15 @@ class AdversarialDebateCourtroom:
         if (is_buy and ml_conf >= 0.60) or (not is_buy and (1.0 - ml_conf) >= 0.60):
             advocate_score += 15
             advocate_points.append(f"Machine Learning bias confirms direction with {ml_conf*100:.1f}% confidence (+15pts)")
+
+        # Strategy Multi-Factor Technical Score
+        strat_score = metadata.get('score', 0)
+        if strat_score >= 3.5:
+            advocate_score += 15
+            advocate_points.append(f"High multi-factor technical confluence ({strat_score:.1f} score) (+15pts)")
+        elif strat_score >= 2.0:
+            advocate_score += 10
+            advocate_points.append(f"Solid technical confluence ({strat_score:.1f} score) (+10pts)")
 
 
         # ── 2. Prosecutor Evaluation (Why this trade is a TRAP) ───────────────
@@ -99,8 +111,15 @@ class AdversarialDebateCourtroom:
         conviction_pct = round(net_conviction * 100.0, 1)
 
         min_conviction_req = getattr(Config, 'MIN_AI_CONVICTION_PCT', 0.70) * 100.0
-        approved = (conviction_pct >= min_conviction_req) and (advocate_score >= 45) and (prosecutor_score <= 40)
+        min_advocate_req = 35 if prosecutor_score == 0 else 45
+        approved = (conviction_pct >= min_conviction_req) and (advocate_score >= min_advocate_req) and (prosecutor_score <= 40)
         verdict = "APPROVED" if approved else "REJECTED_BY_AI_COURTROOM"
+
+        if not approved and not prosecutor_objections:
+            if advocate_score < min_advocate_req:
+                prosecutor_objections.append(f"Insufficient advocate evidence ({advocate_score}/{min_advocate_req} pts)")
+            elif conviction_pct < min_conviction_req:
+                prosecutor_objections.append(f"Low net conviction score ({conviction_pct}% < {min_conviction_req}%)")
 
         transcript = (
             f"⚖️ [AI COURTROOM VERDICT: {verdict}]\n"

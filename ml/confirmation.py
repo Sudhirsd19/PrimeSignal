@@ -91,8 +91,9 @@ class MLSignalConfirmator:
         # Binary target: 1 if positive return, 0 if flat/negative return
         data['target'] = (data['future_return'] > 0.001).astype(int)
 
-        # Drop rows where target is NaN (the last future_lookahead rows)
-        clean_data = data.dropna(subset=['target'])
+        # Drop rows where future_return is NaN (the last future_lookahead rows)
+        # NOTE: Cannot dropna on 'target' because NaN > 0.001 → False → 0 (never NaN)
+        clean_data = data.dropna(subset=['future_return'])
 
         X = clean_data[feature_cols]
         y = clean_data['target']

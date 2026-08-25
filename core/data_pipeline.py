@@ -210,6 +210,9 @@ class RealTimeDataPipeline:
                 elif cache_list[i][0] < new_candle[0]:
                     cache_list.insert(i + 1, new_candle)
                     break
+            else:
+                # Candle is older than all entries — prepend it
+                cache_list.insert(0, new_candle)
             
         # Keep cache length bounded to prevent memory issues
         if len(cache_list) > 1000:
