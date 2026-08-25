@@ -141,7 +141,7 @@ class MLSignalConfirmator:
 
         row = {}
         for col in feature_cols:
-            val = data[col].iloc[-2]
+            val = data[col].iloc[-1]
             row[col] = val if not (isinstance(val, float) and np.isnan(val)) else 0.0
 
         return pd.DataFrame([row])

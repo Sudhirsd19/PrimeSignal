@@ -253,7 +253,7 @@ def simulate_1month_coin(symbol, htf_ohlcv, ltf_ohlcv, initial_balance=1000.0, t
             if i - last_trade_bar < 8:
                 continue
 
-            htf_sub = htf_df[htf_df.index <= t_now]
+            htf_sub = htf_df[htf_df.index <= (t_now - pd.Timedelta(hours=1))]
             if len(htf_sub) < 50 or htf_sub.index[-1] not in htf_ema50.index or htf_sub.index[-1] not in htf_ema200.index:
                 continue
             htf_c = htf_sub['close'].iloc[-1]

@@ -236,7 +236,7 @@ def simulate_2weeks_coin(symbol, htf_ohlcv, ltf_ohlcv, initial_balance=1000.0, t
                 continue
 
             # Check HTF Trend Alignment
-            htf_sub = htf_df[htf_df.index <= t_now]
+            htf_sub = htf_df[htf_df.index <= (t_now - pd.Timedelta(hours=1))]
             if len(htf_sub) < 50:
                 continue
             htf_c = htf_sub['close'].iloc[-1]

@@ -752,7 +752,10 @@ class PrimeSignalBot:
                 self.entry_time[symbol] = int(time.time() * 1000)
                 self.last_trade_time[symbol] = time.time()
                 self.position_mode[symbol] = metadata.get('mode', 'STRICT')
-                self.last_zone_traded[symbol] = metadata.get('zone_id')
+                zone_id = metadata.get('zone_id')
+                self.last_zone_traded[symbol] = zone_id
+                if zone_id:
+                    self.traded_zones_cache[f"{symbol}_{zone_id}"] = True
                 self.trades_today += 1
                 self.global_last_trade_time = time.time()
                 if metadata.get('mode') == 'RELAXED':
@@ -817,7 +820,10 @@ class PrimeSignalBot:
                 self.entry_time[symbol] = int(time.time() * 1000)
                 self.last_trade_time[symbol] = time.time()
                 self.position_mode[symbol] = metadata.get('mode', 'STRICT')
-                self.last_zone_traded[symbol] = metadata.get('zone_id')
+                zone_id = metadata.get('zone_id')
+                self.last_zone_traded[symbol] = zone_id
+                if zone_id:
+                    self.traded_zones_cache[f"{symbol}_{zone_id}"] = True
                 self.trades_today += 1
                 self.global_last_trade_time = time.time()
                 if metadata.get('mode') == 'RELAXED':
@@ -849,6 +855,19 @@ class PrimeSignalBot:
             else:
                 add_log_message(f"[{symbol}] ❌ SELL order REJECTED (check execution logs)")
                 await self.notifier.send_message(f"⚠️ SELL REJECTED {symbol}: Order failed to execute. Check logs.")
+
+    async def change_bot_symbol(self, new_symbol: str):
+        """Switches the primary active symbol in the dashboard dynamically."""
+        if new_symbol and new_symbol in Config.SUPPORTED_SYMBOLS:
+            Config.SYMBOL = new_symbol
+            DashboardState.symbol = new_symbol
+            DashboardState.in_position = self.in_position.get(new_symbol, False)
+            DashboardState.position_side = self.position_side.get(new_symbol, "HOLD")
+            DashboardState.entry_price = self.entry_price.get(new_symbol, 0.0)
+            DashboardState.stop_loss = self.stop_loss.get(new_symbol, 0.0)
+            DashboardState.take_profit = self.take_profit.get(new_symbol, 0.0)
+            add_log_message(f"🔄 Active dashboard symbol switched to: {new_symbol}")
+            print(f"[BOT] Switched active symbol to {new_symbol}")
 
     async def run_live_risk_monitor(self):
         while True:
@@ -884,9 +903,10 @@ class PrimeSignalBot:
                             self.highest_price_reached[symbol] = max(self.highest_price_reached[symbol], curr_price)
                             r_dist = abs(self.entry_price[symbol] - self.stop_loss[symbol])
                             
-                            # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven (+0.15%) at +0.50R Profit
+                            # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven at +0.50R Profit
                             if self.highest_price_reached[symbol] >= self.entry_price[symbol] + (0.50 * r_dist):
-                                be_sl = self.entry_price[symbol] * 1.0015
+                                fee_offset = min(self.entry_price[symbol] * 0.0015, 0.15 * r_dist)
+                                be_sl = min(curr_price * 0.9995, self.entry_price[symbol] + fee_offset)
                                 if be_sl > self.stop_loss[symbol]:
                                     self.stop_loss[symbol] = be_sl
                                     if symbol == Config.SYMBOL: DashboardState.stop_loss = be_sl
@@ -1023,9 +1043,10 @@ class PrimeSignalBot:
                             self.lowest_price_reached[symbol] = min(self.lowest_price_reached[symbol], curr_price)
                             r_dist = abs(self.entry_price[symbol] - self.stop_loss[symbol])
                             
-                            # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven (-0.15%) at +0.50R Profit
+                            # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven at +0.50R Profit
                             if self.lowest_price_reached[symbol] <= self.entry_price[symbol] - (0.50 * r_dist):
-                                be_sl = self.entry_price[symbol] * 0.9985
+                                fee_offset = min(self.entry_price[symbol] * 0.0015, 0.15 * r_dist)
+                                be_sl = max(curr_price * 1.0005, self.entry_price[symbol] - fee_offset)
                                 if be_sl < self.stop_loss[symbol]:
                                     self.stop_loss[symbol] = be_sl
                                     if symbol == Config.SYMBOL: DashboardState.stop_loss = be_sl

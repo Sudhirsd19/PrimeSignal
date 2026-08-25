@@ -32,13 +32,16 @@ class RiskManager:
         # 3. Calculate position size
         position_size = usdt_risk / stop_distance
         
-        # 4. Limit check: Position cost in USDT must be <= total equity
+        # 4. Limit check: Position cost in USDT must be <= total equity * leverage
+        is_futures = getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures'
+        leverage = getattr(Config, 'FUTURES_LEVERAGE', 1.0) if is_futures else 1.0
+        max_position_value = account_equity * leverage
         position_value_usdt = position_size * entry_price
         
-        if position_value_usdt > account_equity:
+        if position_value_usdt > max_position_value:
             if entry_price <= 0: return 0.0
-            position_size = (account_equity * 0.999) / entry_price
-            print(f"[RISK] Position size capped at maximum cash balance: {position_size:.6f}")
+            position_size = (max_position_value * 0.999) / entry_price
+            print(f"[RISK] Position size capped at maximum account capacity ({leverage}x): {position_size:.6f}")
             
         return round(position_size, 6)
 

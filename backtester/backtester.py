@@ -79,8 +79,8 @@ class BacktestEngine:
             # For LTF, we use index up to i (meaning candle i is the current live candle, i-1 is the last completed)
             sub_ltf = ltf_df.iloc[max(0, i-250):i+1]
             
-            # For HTF, we can only see candles that closed BEFORE the current LTF timestamp
-            sub_htf = htf_df[htf_df.index < ltf_time].iloc[-250:]
+            # For HTF, we can only see candles that closed BEFORE the current LTF timestamp (subtract 1h so unclosed bar is excluded)
+            sub_htf = htf_df[htf_df.index <= (ltf_time - pd.Timedelta(hours=1))].iloc[-250:]
             
             current_close = curr_candle['close']
             current_high = curr_candle['high']
