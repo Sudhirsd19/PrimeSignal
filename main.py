@@ -998,13 +998,14 @@ class PrimeSignalBot:
                     self._last_reset_date = now_utc.date()
                     add_log_message(f"[RISK] Daily equity checkpoint reset at UTC midnight.")
 
-                # --- 🚀 ROCKET-FAST MULTI-SYMBOL REAL-TIME SCANNER ---
+                # --- 🚀 INSTITUTIONAL MULTI-SYMBOL REAL-TIME SCANNER ---
                 self._fast_scan_counter = getattr(self, '_fast_scan_counter', 0) + 1
-                if self._fast_scan_counter % 3 == 0:
+                if self._fast_scan_counter % 10 == 0: # Disciplined 10s evaluation cycle
                     open_count, _, _, _ = await self.get_open_positions_info()
                     max_open = getattr(Config, 'MAX_OPEN_TRADES', 3)
-                    if open_count < max_open and time.time() > self.global_pause_until:
-                        # Concurrently scan all 20 pairs on real-time ticks
+                    time_since_last_trade = time.time() - getattr(self, 'global_last_trade_time', 0)
+                    if open_count < max_open and time.time() > self.global_pause_until and time_since_last_trade >= 60:
+                        # Concurrently evaluate candidates across 20 pairs
                         for sym in Config.SUPPORTED_SYMBOLS:
                             if not self.in_position[sym] and self.pipeline.ltf_candles.get(sym):
                                 asyncio.create_task(self.on_candle_close(sym))
