@@ -235,6 +235,74 @@ async def reset_account(req: ResetAccountRequest = None):
         DashboardState.in_position = False
         return {"status": "success", "message": f"Dashboard balance reset to ${balance:,.2f} USDT."}
 
+class TestTradeRequest(BaseModel):
+    symbol: str | None = None
+    side: str | None = "BUY"
+
+@app.post("/api/trigger_test_trade", dependencies=[Depends(verify_dashboard_key)])
+async def trigger_test_trade(req: TestTradeRequest = None):
+    from config import Config
+    import datetime
+    symbol = (req.symbol if req and req.symbol else Config.SYMBOL) or "BTC/USDT"
+    side = (req.side if req and req.side else "BUY").upper()
+    is_long = (side == "BUY")
+    
+    if bot_instance is not None:
+        live_p = bot_instance.pipeline.latest_prices.get(symbol, 0.0) or (DashboardState.latest_price or 78800.0)
+        sl_p = live_p * 0.985 if is_long else live_p * 1.015
+        tp_p = live_p * 1.035 if is_long else live_p * 0.965
+        tp1_p = live_p * 1.015 if is_long else live_p * 0.985
+        tp2_p = live_p * 1.025 if is_long else live_p * 0.975
+        pos_size = 0.05 if "BTC" in symbol else (0.5 if "ETH" in symbol else 5.0)
+        
+        bot_instance.in_position[symbol] = True
+        bot_instance.position_side[symbol] = "LONG" if is_long else "SHORT"
+        bot_instance.entry_price[symbol] = live_p
+        bot_instance.stop_loss[symbol] = sl_p
+        bot_instance.take_profit[symbol] = tp_p
+        bot_instance.take_profit_1r[symbol] = tp1_p
+        bot_instance.take_profit_2r[symbol] = tp2_p
+        bot_instance.position_size[symbol] = pos_size
+        bot_instance.entry_time[symbol] = int(time.time() * 1000)
+        bot_instance.last_trade_time[symbol] = time.time()
+        bot_instance.highest_price_reached[symbol] = live_p
+        bot_instance.trades_today += 1
+        
+        entry_dt_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        DashboardState.active_positions[symbol] = {
+            'symbol': symbol,
+            'side': "LONG" if is_long else "SHORT",
+            'entry_price': live_p,
+            'stop_loss': sl_p,
+            'take_profit': tp_p,
+            'position_size': pos_size,
+            'current_pnl_usdt': 0.0,
+            'current_pnl_pct': 0.0,
+            'guaranteed_pnl_usdt': 0.0,
+            'guaranteed_pnl_pct': 0.0,
+            'tp1_hit': False,
+            'tp2_hit': False,
+            'profit_locked': False,
+            'live_price': live_p,
+            'entry_time': int(time.time() * 1000),
+            'entry_time_str': entry_dt_str
+        }
+        
+        if symbol == Config.SYMBOL:
+            DashboardState.in_position = True
+            DashboardState.position_side = "LONG" if is_long else "SHORT"
+            DashboardState.entry_price = live_p
+            DashboardState.stop_loss = sl_p
+            DashboardState.take_profit = tp_p
+            
+        bot_instance.save_state()
+        msg = f"🚀 [MANUAL TEST TRADE TRIGGERED] {symbol} {'LONG' if is_long else 'SHORT'} @ ${live_p:,.2f} | SL: ${sl_p:,.2f} | TP: ${tp_p:,.2f}"
+        add_log_message(msg)
+        return {"status": "success", "message": msg}
+    else:
+        return {"status": "error", "message": "Bot instance is not running."}
+
 @app.get("/api/analytics", dependencies=[Depends(verify_dashboard_key)])
 async def get_analytics():
     """Fetch trade logs from local JSONL file and aggregate analytics for the UI."""
