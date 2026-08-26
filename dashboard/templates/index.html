@@ -380,7 +380,7 @@
 
             <!-- Active Position & CoinDCX Account Panel -->
             <div class="col-span-1 lg:col-span-1 flex flex-col h-[500px]">
-                <div class="bg-[#111827] border border-[#1f2937] rounded-xl flex flex-col h-full overflow-hidden">
+                <div id="position-card" class="bg-[#111827] border border-[#1f2937] rounded-xl flex flex-col h-full overflow-hidden">
                     <!-- Tabs Header -->
                     <div class="flex border-b border-[#1f2937] p-2 space-x-2">
                         <button id="tab-active-position" class="flex-1 pb-2 text-[10px] font-bold uppercase tracking-wider text-blue-400 border-b-2 border-blue-500 focus:outline-none transition-colors duration-200 truncate px-1 flex items-center justify-center gap-1.5">
@@ -1367,10 +1367,6 @@
                             const sbMax = document.getElementById('sidebar-max-trades');
                             if (sbMax) sbMax.innerText = state.max_daily_trades;
                         }
-                        const maxTradesInputEl = document.getElementById('max-trades-input');
-                        if (maxTradesInputEl && document.activeElement !== maxTradesInputEl && state.max_daily_trades) {
-                            maxTradesInputEl.value = state.max_daily_trades;
-                        }
                         
                         // ML display
                         const mlVal = (state.ml_confidence || 0.5) * 100;
@@ -2133,15 +2129,12 @@
             }
         }
         
-        // Risk Controls & TSL Listeners
-        const tslToggle = document.getElementById('tsl-toggle');
-        const tslSlider = document.getElementById('tsl-slider');
-        const tslValDisplay = document.getElementById('tsl-val-display');
-        const maxTradesInput = document.getElementById('max-trades-input');
-
+        // System Risk Settings Handler
         async function updateRiskSettings() {
             try {
-                const maxTr = parseInt(maxTradesInput ? maxTradesInput.value : "6") || 6;
+                const maxTr = window.currentMaxTrades || 6;
+                const sidebarTsl = document.getElementById('sidebar-tsl-toggle');
+                const tslActive = sidebarTsl ? sidebarTsl.checked : true;
                 await fetch('/api/update_risk_settings', {
                     method: 'POST',
                     headers: {
@@ -2149,26 +2142,14 @@
                         'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
                     },
                     body: JSON.stringify({
-                        tsl_enabled: tslToggle ? tslToggle.checked : true,
-                        tsl_multiplier: parseFloat(tslSlider ? tslSlider.value : 2.0),
+                        tsl_enabled: tslActive,
+                        tsl_multiplier: 2.0,
                         max_daily_trades: maxTr
                     })
                 });
             } catch (err) {
                 console.error("Error updating risk settings:", err);
             }
-        }
-
-        if (tslToggle && tslSlider) {
-            tslToggle.addEventListener('change', updateRiskSettings);
-            tslSlider.addEventListener('input', (e) => {
-                tslValDisplay.textContent = parseFloat(e.target.value).toFixed(1) + 'x ATR';
-            });
-            tslSlider.addEventListener('change', updateRiskSettings);
-        }
-
-        if (maxTradesInput) {
-            maxTradesInput.addEventListener('change', updateRiskSettings);
         }
         
         const btnEmergency = document.getElementById('btn-emergency-close');
@@ -2304,9 +2285,6 @@
             const sbMax = document.getElementById('sidebar-max-trades');
             if (sbMax) sbMax.innerText = newMax;
 
-            const maxTradesInputEl = document.getElementById('max-trades-input');
-            if (maxTradesInputEl) maxTradesInputEl.value = newMax;
-
             try {
                 await fetch('/api/update_risk_settings', {
                     method: 'POST',
@@ -2324,11 +2302,7 @@
         }
 
         function syncTsl(checked) {
-            const tslToggle = document.getElementById('tsl-toggle');
-            if (tslToggle) {
-                tslToggle.checked = checked;
-                tslToggle.dispatchEvent(new Event('change'));
-            }
+            updateRiskSettings();
         }
 
         async function emergencyCloseAllPositions() {
