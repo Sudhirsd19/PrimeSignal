@@ -261,6 +261,9 @@ class PrimeSignalBot:
             self.tp2_taken[sym] = False
 
         self.traded_zones_cache.clear()
+        self.trade_history.clear()
+        self.global_pause_until = 0
+        self.cluster_loss_pause_until = 0
         DashboardState.trades.clear()
         DashboardState.balance_usdt = float(target_balance)
         DashboardState.balance_base = 0.0
@@ -273,7 +276,7 @@ class PrimeSignalBot:
         DashboardState.current_pnl_pct = 0.0
         DashboardState.current_pnl_usdt = 0.0
         self.save_state()
-        add_log_message(f"🔄 [ACCOUNT RESET] Virtual paper balance reset to ${target_balance:,.2f} USDT. All positions and trade history cleared for fresh trading.")
+        add_log_message(f"🔄 [ACCOUNT RESET] Virtual paper balance reset to ${target_balance:,.2f} USDT. Cooldown cleared, all 20 pairs actively scanning.")
 
     async def initialize(self):
         add_log_message("Starting system initialization for all supported symbols...")
@@ -1555,10 +1558,12 @@ class PrimeSignalBot:
                 self.trade_history.pop(0)
                 
             if len(self.trade_history) >= 2 and all(self.trade_history[-2:]):
-                cooldown_time = time.time() + (2 * 3600)
+                cooldown_secs = 900 if Config.PAPER_TRADING else 3600
+                cooldown_mins = cooldown_secs // 60
+                cooldown_time = time.time() + cooldown_secs
                 self.cluster_loss_pause_until = cooldown_time
                 self.global_pause_until = cooldown_time  # Update global pause
-                add_log_message("🚨 [SAFETY] 2 consecutive losses. Trading paused globally for 2 hours.")
+                add_log_message(f"🚨 [SAFETY] 2 consecutive losses. Trading paused globally for {cooldown_mins} minutes.")
                 self.trade_history.clear()
             elif len(self.trade_history) >= 6 and sum(self.trade_history) >= 3:
                 self.cluster_risk_penalty = True
