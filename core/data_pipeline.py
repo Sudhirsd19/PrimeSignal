@@ -161,11 +161,14 @@ class RealTimeDataPipeline:
                                 tf_mins = int(Config.LTF_TIMEFRAME.replace('m', '').replace('h', '60'))
                                 tf_ms = tf_mins * 60 * 1000
                                 if last_ts > 0 and (candle[0] - last_ts) > (tf_ms * 1.5):
-                                    print(f"[DATA] ⚠️ Timestamp gap detected on {symbol}! (Expected: {last_ts + tf_ms}, Got: {candle[0]}). Serializing backfill...")
+                                    print(f"[DATA] ⚠️ Sequence gap detected on {symbol}! (Expected: {last_ts + tf_ms}, Got: {candle[0]}). Serializing backfill...")
                                     try:
-                                        await self.fetch_historical_data(symbol, Config.LTF_TIMEFRAME, limit=100)
+                                        backfilled = await self.execution.fetch_ohlcv(symbol=symbol, timeframe=Config.LTF_TIMEFRAME, limit=100)
+                                        if backfilled:
+                                            self.ltf_candles[symbol] = backfilled
                                     except Exception as e:
-                                        print(f"[DATA] Backfill error: {e}")
+                                        print(f"[DATA] ⛔ Backfill failed on {symbol}: {e}. Freezing signal evaluation until continuity restored.")
+                                        return # Failsafe: abort execution to prevent trading on degraded data
                                 
                                 self._update_candle_cache(self.ltf_candles[symbol], candle, is_closed)
                                 if is_closed:
