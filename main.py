@@ -310,7 +310,68 @@ class PrimeSignalBot:
         DashboardState.chart_history = self.pipeline.ltf_candles[Config.SYMBOL][-100:] if self.pipeline.ltf_candles[Config.SYMBOL] else []
         DashboardState.signal_light = "BLUE"
         DashboardState.signal_light_reason = f"Monitoring {len(Config.SUPPORTED_SYMBOLS)} pairs for institutional SMC setups..."
+        
+        # Sync CoinDCX User Info and Live Balances
+        await self.sync_coindcx_data()
+        
         add_log_message(f"System ready. Multi-symbol watch active ({len(Config.SUPPORTED_SYMBOLS)} pairs). UI viewing {Config.SYMBOL}")
+
+    async def sync_coindcx_data(self):
+        """Fetches and updates CoinDCX profile and balances in DashboardState."""
+        has_real_coindcx = bool(
+            Config.COINDCX_API_KEY and 
+            Config.COINDCX_SECRET_KEY and 
+            Config.COINDCX_API_KEY != "your_coindcx_key_here" and 
+            Config.COINDCX_SECRET_KEY != "your_coindcx_secret_here"
+        )
+        
+        if has_real_coindcx and hasattr(self.execution, 'coindcx_client') and self.execution.coindcx_client:
+            try:
+                uinfo = await self.execution.coindcx_client.fetch_user_info()
+                if uinfo:
+                    f_name = uinfo.get('first_name') or ''
+                    l_name = uinfo.get('last_name') or ''
+                    full_name = f"{f_name} {l_name}".strip() or uinfo.get('name') or "CoinDCX Trader"
+                    DashboardState.coindcx_profile = {
+                        "status": "Connected",
+                        "name": full_name,
+                        "email": uinfo.get('email', 'N/A'),
+                        "id": str(uinfo.get('coindcx_id') or uinfo.get('id') or 'N/A')
+                    }
+                else:
+                    DashboardState.coindcx_profile = {
+                        "status": "Connected (Live)",
+                        "name": "Live Trader",
+                        "email": "Connected via API",
+                        "id": "DCX-AUTHENTICATED"
+                    }
+                
+                # Fetch live CoinDCX wallet balances
+                raw_bal = await self.execution.fetch_balance()
+                if raw_bal and 'total' in raw_bal:
+                    bal_list = []
+                    for curr, tot in raw_bal['total'].items():
+                        if tot > 0:
+                            free = raw_bal.get('free', {}).get(curr, tot)
+                            used = raw_bal.get('used', {}).get(curr, 0.0)
+                            bal_list.append({"currency": curr, "available": float(free), "locked": float(used)})
+                    if bal_list:
+                        DashboardState.coindcx_balances = bal_list
+            except Exception as e:
+                print(f"[CoinDCX Sync] Error: {e}")
+        else:
+            # Paper Trading / Simulation Mode: Provide clear virtual details
+            DashboardState.coindcx_profile = {
+                "status": "Paper Mode (Active)",
+                "name": "Virtual Paper Trader",
+                "email": "paper.trade@coindcx.local",
+                "id": "DCX-VIRTUAL-8849"
+            }
+            DashboardState.coindcx_balances = [
+                {"currency": "USDT", "available": float(DashboardState.balance_usdt), "locked": 0.0},
+                {"currency": "INR", "available": round(float(DashboardState.balance_usdt) * 85.0, 2), "locked": 0.0},
+                {"currency": "BTC", "available": float(DashboardState.balance_base), "locked": 0.0}
+            ]
 
     async def on_candle_close(self, symbol):
         if self._candle_locks[symbol].locked():

@@ -71,10 +71,18 @@ class DashboardState:
     active_ob_level = 0.0
     active_ob_type = "NONE"
     active_bullish_ob_level = 0.0
-    active_bearish_ob_level = 0.0
     chart_history = []
-    coindcx_profile = None
-    coindcx_balances = []
+    coindcx_profile = {
+        "status": "Paper Mode (Active)",
+        "name": "Virtual Paper Trader",
+        "email": "paper.trade@coindcx.local",
+        "id": "DCX-VIRTUAL-8849"
+    }
+    coindcx_balances = [
+        {"currency": "USDT", "available": 10000.0, "locked": 0.0},
+        {"currency": "INR", "available": 850000.0, "locked": 0.0},
+        {"currency": "BTC", "available": 0.0, "locked": 0.0}
+    ]
     
     signal_light = "BLUE"
     signal_light_reason = "Scanning market for institutional SMC setups..."
