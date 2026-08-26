@@ -920,6 +920,28 @@
             wsReconnectDelay = Math.min(wsReconnectDelay * 1.5, WS_MAX_RECONNECT_DELAY);
         }
 
+        function formatExecutionTime(entry_ts, fallbackStr) {
+            if (entry_ts) {
+                const ts = parseFloat(entry_ts) > 1e11 ? parseFloat(entry_ts) : (parseFloat(entry_ts) * 1000);
+                const d = new Date(ts);
+                if (!isNaN(d.getTime())) {
+                    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+                }
+            }
+            return fallbackStr ? (fallbackStr.split(' ')[1] || fallbackStr) : 'Recently';
+        }
+
+        function formatExecutionDate(entry_ts, fallbackStr) {
+            if (entry_ts) {
+                const ts = parseFloat(entry_ts) > 1e11 ? parseFloat(entry_ts) : (parseFloat(entry_ts) * 1000);
+                const d = new Date(ts);
+                if (!isNaN(d.getTime())) {
+                    return d.toLocaleDateString();
+                }
+            }
+            return fallbackStr ? (fallbackStr.split(' ')[0] || '') : '';
+        }
+
         function formatOpenDuration(entry_ts) {
             if (!entry_ts) return '< 1m';
             const now = Date.now();
@@ -1578,8 +1600,8 @@
                                         <div class="flex justify-between items-center text-[10px] text-gray-400 bg-[#090d16] px-2.5 py-1.5 rounded-lg border border-[#1f2937]/60">
                                             <div class="flex items-center gap-1.5">
                                                 <span>⏰ Executed:</span>
-                                                <strong class="text-white terminal-font">${pos.entry_time_str ? pos.entry_time_str.split(' ')[1] : 'Recently'}</strong>
-                                                <span class="text-gray-500 text-[9px]">(${pos.entry_time_str ? pos.entry_time_str.split(' ')[0] : ''})</span>
+                                                <strong class="text-white terminal-font">${formatExecutionTime(pos.entry_time, pos.entry_time_str)}</strong>
+                                                <span class="text-gray-500 text-[9px]">(${formatExecutionDate(pos.entry_time, pos.entry_time_str)})</span>
                                             </div>
                                             <div class="flex items-center gap-1 text-indigo-300 font-semibold">
                                                 <span>⏱️ Open:</span>
@@ -1642,7 +1664,7 @@
                                     // Time
                                     const timeTd = document.createElement('td');
                                     timeTd.className = "py-2 px-1 text-gray-400 terminal-font text-[10px]";
-                                    const exStr = trade.entry_time_str ? trade.entry_time_str.split(' ')[1] : (trade.exit_time_str ? trade.exit_time_str.split(' ')[1] : 'Recent');
+                                    const exStr = formatExecutionTime(trade.entry_time || trade.exit_time || trade.timestamp, trade.entry_time_str || trade.exit_time_str);
                                     timeTd.innerHTML = `<span class="text-gray-200 font-bold">${exStr}</span>`;
                                     
                                     // Symbol
