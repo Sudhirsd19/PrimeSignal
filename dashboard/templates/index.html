@@ -962,6 +962,9 @@
                 connectWS();
             }, wsReconnectDelay);
             // Increase delay for next attempt (exponential backoff, capped)
+            wsReconnectDelay = Math.min(wsReconnectDelay * 1.5, WS_MAX_RECONNECT_DELAY);
+        }
+
         function formatOpenDuration(entry_ts) {
             if (!entry_ts) return '< 1m';
             const now = Date.now();
@@ -1773,38 +1776,42 @@
         }
         
         // --- 3. HANDLE SYMBOL SELECTION CHANGES ---
-        document.getElementById('symbol-select').addEventListener('change', async (e) => {
-            const newSymbol = e.target.value;
-            console.log("Requesting symbol change to: " + newSymbol);
-            const chartLoadingEl = document.getElementById('chart-loading');
-            if (chartLoadingEl) chartLoadingEl.classList.remove('hidden');
-            try {
-                const response = await fetch('/api/change_symbol', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
-                    },
-                    body: JSON.stringify({ symbol: newSymbol })
-                });
-                if (!response.ok) {
+        const symbolSelectEl = document.getElementById('symbol-select');
+        if (symbolSelectEl) {
+            symbolSelectEl.addEventListener('change', async (e) => {
+                const newSymbol = e.target.value;
+                console.log("Requesting symbol change to: " + newSymbol);
+                startDirectBinanceTick(newSymbol);
+                const chartLoadingEl = document.getElementById('chart-loading');
+                if (chartLoadingEl) chartLoadingEl.classList.remove('hidden');
+                try {
+                    const response = await fetch('/api/change_symbol', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
+                        },
+                        body: JSON.stringify({ symbol: newSymbol })
+                    });
+                    if (!response.ok) {
+                        if (chartLoadingEl) chartLoadingEl.classList.add('hidden');
+                        alert(`Failed to request symbol change: Server returned status ${response.status} (${response.statusText}).\n\nPlease make sure you closed and restarted the bot in your terminal window.`);
+                        return;
+                    }
+                    const res = await response.json();
+                    if (res.status === 'success') {
+                        console.log("Symbol change successfully requested.");
+                        historyLoaded = false; // Reset to allow full chart reloading
+                    } else {
+                        if (chartLoadingEl) chartLoadingEl.classList.add('hidden');
+                        alert("Failed to request symbol change: " + (res.message || "Unknown error"));
+                    }
+                } catch (err) {
                     if (chartLoadingEl) chartLoadingEl.classList.add('hidden');
-                    alert(`Failed to request symbol change: Server returned status ${response.status} (${response.statusText}).\n\nPlease make sure you closed and restarted the bot in your terminal window.`);
-                    return;
+                    console.error("Error sending symbol change request:", err);
                 }
-                const res = await response.json();
-                if (res.status === 'success') {
-                    console.log("Symbol change successfully requested.");
-                    historyLoaded = false; // Reset to allow full chart reloading
-                } else {
-                    if (chartLoadingEl) chartLoadingEl.classList.add('hidden');
-                    alert("Failed to request symbol change: " + (res.message || "Unknown error"));
-                }
-            } catch (err) {
-                if (chartLoadingEl) chartLoadingEl.classList.add('hidden');
-                console.error("Error sending symbol change request:", err);
-            }
-        });
+            });
+        }
 
         // --- 3.5. PAPER TRADING / REAL MONEY TOGGLE ---
         let isPaperTrading = true;
