@@ -246,10 +246,12 @@ class ExecutionEngine:
                         print(f"[EXECUTION] Order aborted: Slippage ({slippage*100:.2f}%) exceeds max ({max_slippage_pct*100:.2f}%).")
                         return None
 
-        # 2. Place order with retries and deterministic Client Order ID (SHA256 Idempotency)
+        # 2. Place order with retries and deterministic Signal-based Client Order ID (SHA256 Idempotency)
         import hashlib
-        deterministic_hash = hashlib.sha256(f"{symbol}_{side}_{int(time.time()*10)}".encode()).hexdigest()[:8].upper()
-        client_order_id = f"PS_{symbol.replace('/', '')}_{side.upper()}_{int(time.time()*1000)}_{deterministic_hash}"
+        signal_ts = int(candle_ts) if candle_ts else int(time.time() * 1000)
+        order_intent = f"PS_v23_{symbol.replace('/', '')}_{side.upper()}_{signal_ts}"
+        deterministic_hash = hashlib.sha256(order_intent.encode()).hexdigest()[:8].upper()
+        client_order_id = f"PS_{symbol.replace('/', '')}_{side.upper()}_{signal_ts}_{deterministic_hash}"
         params = {'clientOrderId': client_order_id}
         
         fn = None

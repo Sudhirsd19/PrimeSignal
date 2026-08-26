@@ -409,11 +409,44 @@ async def websocket_endpoint(websocket: WebSocket):
 def _build_state_payload():
     """Build the state dict to broadcast to WebSocket clients."""
     live_p = bot_instance.pipeline.latest_prices.get(Config.SYMBOL, DashboardState.latest_price) if (bot_instance and hasattr(bot_instance, 'pipeline')) else DashboardState.latest_price
+    
+    # Calculate Authoritative Active Trade Metrics (Side-aware)
+    entry_p = DashboardState.entry_price or 0.0
+    sl_p = DashboardState.stop_loss or 0.0
+    tp_p = DashboardState.take_profit or 0.0
+    side = DashboardState.position_side or "HOLD"
+    in_pos = DashboardState.in_position
+    
+    live_pnl_usdt = 0.0
+    live_pnl_pct = 0.0
+    target_progress = 0.0
+    
+    if in_pos and entry_p > 0 and live_p > 0:
+        if side == "LONG":
+            live_pnl_pct = ((live_p - entry_p) / entry_p) * 100.0
+            live_pnl_usdt = (DashboardState.position_size or 1.0) * (live_p - entry_p)
+            if tp_p > entry_p:
+                target_progress = max(0.0, min(1.0, (live_p - entry_p) / (tp_p - entry_p)))
+        elif side == "SHORT":
+            live_pnl_pct = ((entry_p - live_p) / entry_p) * 100.0
+            live_pnl_usdt = (DashboardState.position_size or 1.0) * (entry_p - live_p)
+            if tp_p < entry_p:
+                target_progress = max(0.0, min(1.0, (entry_p - live_p) / (entry_p - tp_p)))
+
     return {
         "latest_price": live_p,
         "latest_prices": bot_instance.pipeline.latest_prices if (bot_instance and hasattr(bot_instance, 'pipeline')) else {},
         "balance_usdt": DashboardState.balance_usdt,
         "balance_base": DashboardState.balance_base,
+        "in_position": in_pos,
+        "position_side": side,
+        "entry_price": entry_p,
+        "stop_loss": sl_p,
+        "take_profit": tp_p,
+        "live_pnl_usdt": round(live_pnl_usdt, 2),
+        "live_pnl_pct": round(live_pnl_pct, 2),
+        "target_progress": round(target_progress, 4),
+        "server_timestamp": int(time.time() * 1000),
         "active_positions": DashboardState.active_positions,
         "daily_drawdown_pct": DashboardState.daily_drawdown_pct,
         "ml_confidence": DashboardState.ml_confidence,
