@@ -18,7 +18,7 @@ from config import Config
 from execution.execution_engine import ExecutionEngine
 from core.data_pipeline import RealTimeDataPipeline
 from strategies.multi_timeframe import MultiTimeframeSMCStrategy
-from strategies.indicators import prepare_dataframe, calculate_atr
+from strategies.indicators import prepare_dataframe, calculate_atr, calculate_ema, calculate_rsi, calculate_vwap
 from ml.confirmation import MLSignalConfirmator
 from ml.adversarial_debate import AdversarialDebateCourtroom
 from core.lead_lag_arbitrage import LeadLagArbitrageEngine
