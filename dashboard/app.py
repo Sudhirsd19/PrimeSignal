@@ -509,7 +509,7 @@ async def broadcast_state_loop():
                         pass
 
             await asyncio.gather(*[_safe_send(ws) for ws in sockets])
-        await asyncio.sleep(0.5) # Update twice per second (500ms live stream)
+        await asyncio.sleep(0.1) # Ultra-fast 100ms real-time broadcast stream
 
 @app.on_event("startup")
 async def startup_event():

@@ -755,6 +755,49 @@
             wsReconnectDelay = Math.min(wsReconnectDelay * 1.5, WS_MAX_RECONNECT_DELAY);
         }
         
+        // Direct Binance Micro-Tick WebSocket (Zero Latency Instant Price Movement)
+        let directBinanceWs = null;
+        let currentTrackingSymbol = '';
+
+        function startDirectBinanceTick(symbol) {
+            const rawSym = (symbol || 'BTC/USDT').replace('/', '').toLowerCase();
+            if (currentTrackingSymbol === rawSym && directBinanceWs && (directBinanceWs.readyState === WebSocket.OPEN || directBinanceWs.readyState === WebSocket.CONNECTING)) {
+                return;
+            }
+            currentTrackingSymbol = rawSym;
+            if (directBinanceWs) {
+                try { directBinanceWs.close(); } catch(e){}
+            }
+            try {
+                directBinanceWs = new WebSocket(`wss://stream.binance.com:9443/ws/${rawSym}@ticker`);
+                directBinanceWs.onmessage = (evt) => {
+                    try {
+                        const tick = JSON.parse(evt.data);
+                        const liveP = parseFloat(tick.c);
+                        const pctP = parseFloat(tick.P);
+                        if (!isNaN(liveP) && liveP > 0) {
+                            const priceEl = document.getElementById('price-display');
+                            if (priceEl) {
+                                const prevP = parseFloat(priceEl.dataset.prev || liveP);
+                                priceEl.innerText = liveP >= 10 ? liveP.toFixed(2) : liveP.toFixed(4);
+                                if (liveP > prevP) {
+                                    priceEl.style.color = '#22c55e'; // Green flash
+                                } else if (liveP < prevP) {
+                                    priceEl.style.color = '#ef4444'; // Red flash
+                                }
+                                priceEl.dataset.prev = liveP;
+                            }
+                            const changeEl = document.getElementById('price-change-pct');
+                            if (changeEl && !isNaN(pctP)) {
+                                changeEl.innerText = `${pctP >= 0 ? '+' : ''}${pctP.toFixed(2)}%`;
+                                changeEl.className = `text-xs font-bold mt-1 ${pctP >= 0 ? 'text-green-400' : 'text-red-400'}`;
+                            }
+                        }
+                    } catch(err){}
+                };
+            } catch(e){}
+        }
+
         function connectWS() {
             // Guard: don't create a new WS if one is already connecting or open
             if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
@@ -809,6 +852,9 @@
                             currentChartSymbol = state.symbol;
                             historyLoaded = false;
                             lastChartTime = 0;
+                            startDirectBinanceTick(state.symbol);
+                        } else if (!directBinanceWs || directBinanceWs.readyState !== WebSocket.OPEN) {
+                            startDirectBinanceTick(state.symbol || 'BTC/USDT');
                         }
                         
                         // Load or update chart data

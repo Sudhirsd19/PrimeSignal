@@ -80,6 +80,7 @@ class RealTimeDataPipeline:
         streams = []
         for symbol in Config.SUPPORTED_SYMBOLS:
             stream_symbol = symbol.replace('/', '').lower()
+            streams.append(f"{stream_symbol}@miniTicker")
             streams.append(f"{stream_symbol}@kline_{Config.LTF_TIMEFRAME}")
             streams.append(f"{stream_symbol}@kline_{Config.HTF_TIMEFRAME}")
             streams.append(f"{stream_symbol}@kline_4h")
@@ -104,7 +105,7 @@ class RealTimeDataPipeline:
 
     async def _websocket_loop(self, url):
         self.websocket_active = True
-        print(f"[DATA] Connecting to Binance WebSocket feed...")
+        print(f"[DATA] Connecting to Binance WebSocket feed (Klines + Real-time MiniTicker)...")
         
         retry_delay = 2.0
         while self.websocket_active:
@@ -129,6 +130,19 @@ class RealTimeDataPipeline:
                             kline_data = data
 
                         event_type = kline_data.get('e')
+                        
+                        # Handle ultra-fast real-time MiniTicker ticks
+                        if event_type in ('24hrMiniTicker', 'miniTicker'):
+                            symbol_raw = kline_data.get('s')
+                            symbol = next((s for s in Config.SUPPORTED_SYMBOLS if s.replace('/', '') == symbol_raw), None)
+                            if symbol:
+                                live_c = float(kline_data.get('c', 0.0))
+                                if live_c > 0:
+                                    self.latest_prices[symbol] = live_c
+                                    if symbol == Config.SYMBOL:
+                                        from dashboard.app import DashboardState
+                                        DashboardState.latest_price = live_c
+                            continue
                         
                         if event_type == 'kline':
                             kline = kline_data['k']
