@@ -16,6 +16,7 @@
             font-family: 'Outfit', sans-serif;
             background-color: #0b0f19;
             color: #e2e8f0;
+            transition: background-color 0.3s ease, color 0.3s ease;
         }
         .terminal-font {
             font-family: 'JetBrains Mono', monospace;
@@ -32,23 +33,178 @@
             box-shadow: 0 0 15px rgba(59, 130, 246, 0.2);
             border-color: rgba(59, 130, 246, 0.4);
         }
+
+        /* --- LIGHT THEME OVERRIDES --- */
+        body.light-theme {
+            background-color: #f1f5f9;
+            color: #0f172a;
+        }
+        body.light-theme .bg-\[\#111827\] {
+            background-color: #ffffff !important;
+            border-color: #e2e8f0 !important;
+            box-shadow: 0 4px 12px -1px rgba(0, 0, 0, 0.06), 0 2px 4px -1px rgba(0, 0, 0, 0.04) !important;
+        }
+        body.light-theme .bg-\[\#0b0f19\], body.light-theme .bg-\[\#0e1320\], body.light-theme .bg-\[\#070b13\], body.light-theme .bg-\[\#0c101c\]\/60, body.light-theme .bg-\[\#090d16\] {
+            background-color: #f8fafc !important;
+            border-color: #e2e8f0 !important;
+        }
+        body.light-theme .bg-\[\#171e2e\], body.light-theme .bg-\[\#1f2937\], body.light-theme .bg-\[\#161f30\]\/80 {
+            background-color: #f1f5f9 !important;
+            border-color: #cbd5e1 !important;
+        }
+        body.light-theme .text-white {
+            color: #0f172a !important;
+        }
+        body.light-theme .text-gray-300, body.light-theme .text-slate-200, body.light-theme .text-gray-200 {
+            color: #1e293b !important;
+        }
+        body.light-theme .text-gray-400, body.light-theme .text-slate-400 {
+            color: #475569 !important;
+        }
+        body.light-theme .text-gray-500, body.light-theme .text-slate-500 {
+            color: #64748b !important;
+        }
+        body.light-theme .border-\[\#1f2937\], body.light-theme .border-\[\#374151\] {
+            border-color: #e2e8f0 !important;
+        }
     </style>
 </head>
-<body class="p-6">
+<body class="p-4 sm:p-6 transition-colors duration-300">
+
+    <!-- BACKDROP OVERLAY FOR SIDEBAR -->
+    <div id="sidebar-overlay" onclick="toggleSidebar(false)" class="fixed inset-0 bg-black/60 z-40 backdrop-blur-sm hidden transition-opacity duration-300"></div>
+
+    <!-- LEFT CORNER SIDEBAR DRAWER (PROFILE, COINDCX & SETTINGS) -->
+    <aside id="sidebar-drawer" class="fixed top-0 left-0 bottom-0 w-80 sm:w-96 bg-[#111827] border-r border-[#1f2937] z-50 transform -translate-x-full transition-transform duration-300 flex flex-col justify-between p-5 shadow-2xl overflow-y-auto scrollbar-thin">
+        <div class="space-y-5">
+            <!-- Sidebar Header -->
+            <div class="flex justify-between items-center pb-4 border-b border-[#1f2937]">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white font-black text-lg shadow-lg">
+                        PS
+                    </div>
+                    <div>
+                        <h2 class="font-extrabold text-white text-base tracking-wide">PrimeSignal Hub</h2>
+                        <span class="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">v2.3 Production Core</span>
+                    </div>
+                </div>
+                <button onclick="toggleSidebar(false)" class="w-8 h-8 rounded-lg bg-[#1f2937] hover:bg-[#374151] text-gray-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer text-sm">
+                    ✕
+                </button>
+            </div>
+
+            <!-- Profile & Bot Status -->
+            <div class="bg-[#171e2e] border border-[#1f2937] p-4 rounded-xl space-y-2">
+                <div class="flex justify-between items-center text-xs">
+                    <span class="text-gray-400 font-semibold">User Role:</span>
+                    <span class="text-white font-bold">Quantitative Trader</span>
+                </div>
+                <div class="flex justify-between items-center text-xs">
+                    <span class="text-gray-400 font-semibold">Execution Engine:</span>
+                    <span class="text-indigo-400 font-bold">Institutional SMC + ML</span>
+                </div>
+                <div class="flex justify-between items-center text-xs">
+                    <span class="text-gray-400 font-semibold">Safety Shield:</span>
+                    <span class="text-emerald-400 font-bold">Zero Capital Loss Active</span>
+                </div>
+            </div>
+
+            <!-- CoinDCX Profile Card -->
+            <div class="bg-[#171e2e] border border-[#1f2937] p-4 rounded-xl space-y-3">
+                <div class="flex justify-between items-center">
+                    <span class="text-xs font-bold text-gray-300 uppercase tracking-wider">🇮🇳 CoinDCX Exchange Profile</span>
+                    <span id="sidebar-dcx-status" class="text-[10px] font-extrabold px-2 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30">Offline</span>
+                </div>
+                <div class="space-y-1.5 text-xs">
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Account Name:</span>
+                        <span id="sidebar-dcx-name" class="text-white font-bold">Unknown</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Email:</span>
+                        <span id="sidebar-dcx-email" class="text-gray-300 font-mono text-[11px] truncate max-w-[170px]">unknown</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Account ID:</span>
+                        <span id="sidebar-dcx-id" class="text-gray-300 terminal-font text-[11px]">unknown</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings & Configuration -->
+            <div class="space-y-2.5">
+                <h3 class="text-xs font-bold text-gray-400 uppercase tracking-wider">⚙️ System Settings</h3>
+                
+                <!-- 1. Theme Switcher (Dark / Light) -->
+                <div class="flex justify-between items-center bg-[#171e2e] border border-[#1f2937] p-3 rounded-xl">
+                    <div class="flex items-center gap-2">
+                        <span id="sidebar-theme-icon" class="text-base">🌙</span>
+                        <span class="text-xs font-bold text-gray-300">Theme Mode</span>
+                    </div>
+                    <button onclick="toggleTheme()" id="btn-theme-toggle" class="px-3 py-1.5 rounded-lg bg-[#1f2937] hover:bg-[#374151] text-xs font-bold text-white border border-[#374151] transition-all cursor-pointer flex items-center gap-1.5">
+                        <span id="sidebar-theme-text">Dark Mode</span>
+                    </button>
+                </div>
+
+                <!-- 2. Dynamic Daily Trade Limit Stepper -->
+                <div class="flex justify-between items-center bg-[#171e2e] border border-[#1f2937] p-3 rounded-xl">
+                    <div>
+                        <span class="text-xs font-bold text-gray-300">Daily Trade Limit</span>
+                        <p class="text-[10px] text-gray-500">Max trades allowed today</p>
+                    </div>
+                    <div class="flex items-center gap-1.5 bg-[#111827] px-2 py-1 rounded-lg border border-[#374151]">
+                        <button onclick="changeMaxTrades(-1)" class="w-6 h-6 rounded bg-[#1f2937] hover:bg-blue-600 text-blue-400 hover:text-white font-bold flex items-center justify-center transition-colors cursor-pointer text-xs">-</button>
+                        <span id="sidebar-max-trades" class="text-xs font-black text-white terminal-font px-2">6</span>
+                        <button onclick="changeMaxTrades(1)" class="w-6 h-6 rounded bg-[#1f2937] hover:bg-blue-600 text-blue-400 hover:text-white font-bold flex items-center justify-center transition-colors cursor-pointer text-xs">+</button>
+                    </div>
+                </div>
+
+                <!-- 3. Trailing Stop Loss Toggle -->
+                <div class="flex justify-between items-center bg-[#171e2e] border border-[#1f2937] p-3 rounded-xl">
+                    <div>
+                        <span class="text-xs font-bold text-gray-300">Trailing Stop Loss (TSL)</span>
+                        <p class="text-[10px] text-gray-500">Auto-lock trailing profits</p>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="sidebar-tsl-toggle" checked onchange="syncTsl(this.checked)" class="sr-only peer">
+                        <div class="w-9 h-5 bg-[#1f2937] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar Footer Action -->
+        <div class="pt-4 border-t border-[#1f2937] space-y-2 mt-4">
+            <button onclick="resetPaperAccount()" class="w-full py-2 px-3 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer">
+                <span>🔄</span> Reset Virtual Wallet ($10,000)
+            </button>
+            <button onclick="emergencyCloseAllPositions()" class="w-full py-2 px-3 rounded-lg bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-500/30 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer">
+                <span>🚨</span> Emergency Close All Positions
+            </button>
+        </div>
+    </aside>
+
     <div class="max-w-7xl mx-auto space-y-6">
         
         <!-- HEADER -->
         <header class="flex justify-between items-center bg-[#111827] border border-[#1f2937] p-4 rounded-xl shadow-lg">
             <div class="flex items-center space-x-3">
+                <!-- Left Corner Menu Button -->
+                <button id="btn-open-sidebar" onclick="toggleSidebar(true)" class="p-2 rounded-lg bg-[#1f2937] hover:bg-[#374151] border border-[#374151] text-gray-300 hover:text-white transition-all flex items-center gap-1.5 cursor-pointer shadow-sm group" title="Open Profile & Settings Menu">
+                    <svg class="w-5 h-5 text-blue-400 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+                    <span class="text-xs font-bold text-gray-200 hidden md:inline">MENU</span>
+                </button>
+
                 <div class="w-3 h-3 rounded-full bg-green-500 animate-pulse"></div>
                 <div>
                     <h1 class="text-xl font-bold tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">PRIME_SIGNAL</h1>
-                    <p class="text-xs text-gray-500 font-semibold uppercase tracking-wider">Institutional Trading System</p>
+                    <p class="text-xs text-gray-500 font-semibold uppercase tracking-wider hidden sm:block">Institutional Trading System</p>
                 </div>
             </div>
-            <div class="flex space-x-4 items-center">
-                <div class="flex items-center bg-[#1f2937] text-gray-400 text-xs px-3 py-1.5 rounded-md font-semibold tracking-wide border border-[#374151] gap-2">
-                    <span>TARGET:</span>
+            <div class="flex space-x-2 sm:space-x-3 items-center">
+                <!-- Target Selector -->
+                <div class="flex items-center bg-[#1f2937] text-gray-400 text-xs px-2.5 py-1.5 rounded-md font-semibold tracking-wide border border-[#374151] gap-1.5">
+                    <span class="hidden sm:inline">TARGET:</span>
                     <select id="symbol-select" class="bg-[#111827] text-blue-400 font-bold border border-[#374151] rounded px-1.5 py-0.5 focus:outline-none cursor-pointer">
                         <option value="BTC/USDT" selected>BTC/USDT</option>
                         <option value="ETH/USDT">ETH/USDT</option>
@@ -72,28 +228,33 @@
                         <option value="POL/USDT">POL/USDT</option>
                     </select>
                 </div>
+
                 <!-- Mode Toggle -->
-                <div class="flex items-center bg-[#1f2937] px-3 py-1.5 rounded-md border border-[#374151] gap-2 text-xs font-semibold text-gray-400">
-                    <span>MODE:</span>
-                    <button id="mode-toggle-btn" class="relative inline-flex items-center h-6 rounded-full w-28 bg-[#111827] border border-[#374151] focus:outline-none transition-colors duration-300 cursor-pointer">
-                        <span class="absolute left-2.5 text-[9px] font-bold text-green-400/30 pointer-events-none z-10 transition-colors duration-200" id="label-real">REAL</span>
+                <div class="flex items-center bg-[#1f2937] px-2.5 py-1.5 rounded-md border border-[#374151] gap-1.5 text-xs font-semibold text-gray-400">
+                    <span class="hidden sm:inline">MODE:</span>
+                    <button id="mode-toggle-btn" class="relative inline-flex items-center h-6 rounded-full w-24 sm:w-28 bg-[#111827] border border-[#374151] focus:outline-none transition-colors duration-300 cursor-pointer">
+                        <span class="absolute left-2 text-[9px] font-bold text-green-400/30 pointer-events-none z-10 transition-colors duration-200" id="label-real">REAL</span>
                         <span class="absolute right-2 text-[9px] font-bold text-indigo-400 pointer-events-none z-10 transition-colors duration-200" id="label-paper">PAPER</span>
-                        <span id="mode-slider" class="inline-block w-12 h-5 rounded-full bg-indigo-500/20 border border-indigo-400/30 transform transition-all duration-300 translate-x-[60px]"></span>
+                        <span id="mode-slider" class="inline-block w-10 sm:w-12 h-5 rounded-full bg-indigo-500/20 border border-indigo-400/30 transform transition-all duration-300 translate-x-[50px] sm:translate-x-[60px]"></span>
                     </button>
                 </div>
-                <div class="flex items-center bg-[#1f2937] px-3 py-1.5 rounded-md border border-[#374151] gap-2 text-xs font-semibold text-gray-400">
-                    <span>TIMEFRAME:</span>
+
+                <!-- Timeframe Toggle -->
+                <div class="flex items-center bg-[#1f2937] px-2 py-1.5 rounded-md border border-[#374151] gap-1 text-xs font-semibold text-gray-400">
                     <div class="flex bg-[#111827] p-0.5 rounded-md border border-[#374151] gap-1">
-                        <button id="tf-btn-1m" class="px-2 py-0.5 rounded text-[10px] font-extrabold text-gray-400 hover:text-white transition-all cursor-pointer">1M</button>
-                        <button id="tf-btn-5m" class="px-2 py-0.5 rounded text-[10px] font-extrabold bg-blue-500 text-white shadow-sm transition-all cursor-pointer">5M</button>
+                        <button id="tf-btn-1m" class="px-1.5 py-0.5 rounded text-[10px] font-extrabold text-gray-400 hover:text-white transition-all cursor-pointer">1M</button>
+                        <button id="tf-btn-5m" class="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-blue-500 text-white shadow-sm transition-all cursor-pointer">5M</button>
                     </div>
-                    <span class="text-[10px] text-gray-500 font-normal border-l border-[#374151] pl-2 hidden sm:inline">Trend: <span class="text-blue-400 font-bold">1H</span></span>
                 </div>
-                <button id="btn-reset-balance" onclick="resetPaperAccount()" title="Reset Paper Balance to $10,000 & Clear Positions" class="flex items-center bg-[#1f2937] hover:bg-indigo-600/30 text-indigo-400 hover:text-indigo-200 text-xs px-2.5 py-1.5 rounded-md font-semibold tracking-wide border border-[#374151] hover:border-indigo-500 gap-1.5 transition-all cursor-pointer">
-                    <span>🔄 RESET $10K</span>
+
+                <!-- Header Theme Toggle Button -->
+                <button onclick="toggleTheme()" id="header-theme-btn" title="Toggle Dark / Light Theme" class="p-2 rounded-md bg-[#1f2937] hover:bg-[#374151] text-gray-300 hover:text-white border border-[#374151] transition-all cursor-pointer">
+                    <span id="header-theme-icon" class="text-xs">🌙</span>
                 </button>
-                <span id="ws-status" class="bg-red-500/10 text-red-400 text-xs px-3 py-1.5 rounded-md font-bold tracking-wide border border-red-500/20">
-                    STATUS: OFFLINE
+
+                <!-- WS Status -->
+                <span id="ws-status" class="bg-red-500/10 text-red-400 text-xs px-2.5 py-1.5 rounded-md font-bold tracking-wide border border-red-500/20">
+                    OFFLINE
                 </span>
             </div>
         </header>
@@ -157,7 +318,11 @@
             <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-2xl flex flex-col justify-between h-36 relative overflow-hidden shadow-lg hover:border-cyan-500/40 transition-all">
                 <div class="flex justify-between items-center">
                     <span class="text-xs font-bold uppercase tracking-wider text-slate-400">🛡️ Daily Drawdown</span>
-                    <span id="daily-trades-badge" class="text-[10px] bg-blue-500/20 text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded-full font-bold">0/6 TRADES</span>
+                    <div class="flex items-center gap-1 bg-blue-500/15 border border-blue-500/30 px-1.5 py-0.5 rounded-full shadow-sm">
+                        <button onclick="changeMaxTrades(-1)" class="w-4 h-4 rounded-full bg-[#111827] hover:bg-blue-600 text-blue-400 hover:text-white flex items-center justify-center text-[10px] font-black transition-colors cursor-pointer" title="Decrease Max Trades">-</button>
+                        <span id="daily-trades-badge" class="text-[10px] text-blue-400 font-extrabold px-1">0/6 TRADES</span>
+                        <button onclick="changeMaxTrades(1)" class="w-4 h-4 rounded-full bg-[#111827] hover:bg-blue-600 text-blue-400 hover:text-white flex items-center justify-center text-[10px] font-black transition-colors cursor-pointer" title="Increase Max Trades">+</button>
+                    </div>
                 </div>
                 <div class="flex items-baseline space-x-1.5 my-1">
                     <span id="drawdown-display" class="text-2xl font-black text-cyan-400 terminal-font">0.00%</span>
@@ -1193,6 +1358,15 @@
                                 dailyTradesBadge.className = "text-[10px] bg-blue-500/20 text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded-full font-bold";
                             }
                         }
+                        // Dynamic trades today & max trades sync
+                        if (state.trades_today !== undefined) {
+                            window.currentTradesToday = state.trades_today;
+                        }
+                        if (state.max_daily_trades !== undefined) {
+                            window.currentMaxTrades = state.max_daily_trades;
+                            const sbMax = document.getElementById('sidebar-max-trades');
+                            if (sbMax) sbMax.innerText = state.max_daily_trades;
+                        }
                         const maxTradesInputEl = document.getElementById('max-trades-input');
                         if (maxTradesInputEl && document.activeElement !== maxTradesInputEl && state.max_daily_trades) {
                             maxTradesInputEl.value = state.max_daily_trades;
@@ -1256,6 +1430,21 @@
                             if (emailEl) emailEl.innerText = p.email || "unknown";
                             const idEl = document.getElementById('dcx-id');
                             if (idEl) idEl.innerText = p.id || "unknown";
+
+                            // Sync to Sidebar CoinDCX Card
+                            const sbStatus = document.getElementById('sidebar-dcx-status');
+                            if (sbStatus) {
+                                sbStatus.innerText = p.status || "Offline";
+                                sbStatus.className = p.status === "Connected" 
+                                    ? "text-[10px] font-extrabold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                                    : (p.status && p.status.includes("Demo") ? "text-[10px] font-extrabold px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400 border border-indigo-500/30" : "text-[10px] font-extrabold px-2 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30");
+                            }
+                            const sbName = document.getElementById('sidebar-dcx-name');
+                            if (sbName) sbName.innerText = p.name || "Unknown";
+                            const sbEmail = document.getElementById('sidebar-dcx-email');
+                            if (sbEmail) sbEmail.innerText = p.email || "unknown";
+                            const sbId = document.getElementById('sidebar-dcx-id');
+                            if (sbId) sbId.innerText = p.id || "unknown";
                         }
 
                         // CoinDCX Balances updates
@@ -2053,6 +2242,99 @@
                     console.error(err);
                     alert("Failed to reset account.");
                 }
+            }
+        }
+
+        // --- 5. SIDEBAR DRAWER CONTROLS ---
+        function toggleSidebar(open) {
+            const drawer = document.getElementById('sidebar-drawer');
+            const overlay = document.getElementById('sidebar-overlay');
+            if (open) {
+                if (drawer) drawer.classList.remove('-translate-x-full');
+                if (overlay) overlay.classList.remove('hidden');
+            } else {
+                if (drawer) drawer.classList.add('-translate-x-full');
+                if (overlay) overlay.classList.add('hidden');
+            }
+        }
+
+        // --- 6. DARK / LIGHT THEME TOGGLE ---
+        let currentTheme = localStorage.getItem('primesignal_theme') || 'dark';
+
+        function applyTheme(theme) {
+            currentTheme = theme;
+            localStorage.setItem('primesignal_theme', theme);
+            const isLight = theme === 'light';
+            
+            if (isLight) {
+                document.body.classList.add('light-theme');
+            } else {
+                document.body.classList.remove('light-theme');
+            }
+
+            const headerIcon = document.getElementById('header-theme-icon');
+            if (headerIcon) headerIcon.innerText = isLight ? '☀️' : '🌙';
+
+            const sbIcon = document.getElementById('sidebar-theme-icon');
+            if (sbIcon) sbIcon.innerText = isLight ? '☀️' : '🌙';
+
+            const sbText = document.getElementById('sidebar-theme-text');
+            if (sbText) sbText.innerText = isLight ? 'Light Mode' : 'Dark Mode';
+        }
+
+        function toggleTheme() {
+            const nextTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            applyTheme(nextTheme);
+        }
+
+        // Apply saved theme immediately on init
+        applyTheme(currentTheme);
+
+        // --- 7. DYNAMIC MAX DAILY TRADES STEPPER ---
+        window.currentTradesToday = 0;
+        window.currentMaxTrades = 6;
+
+        async function changeMaxTrades(delta) {
+            const newMax = Math.max(1, Math.min(20, (window.currentMaxTrades || 6) + delta));
+            window.currentMaxTrades = newMax;
+            
+            const badge = document.getElementById('daily-trades-badge');
+            if (badge) badge.innerText = `${window.currentTradesToday}/${newMax} TRADES`;
+            
+            const sbMax = document.getElementById('sidebar-max-trades');
+            if (sbMax) sbMax.innerText = newMax;
+
+            const maxTradesInputEl = document.getElementById('max-trades-input');
+            if (maxTradesInputEl) maxTradesInputEl.value = newMax;
+
+            try {
+                await fetch('/api/update_risk_settings', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
+                    },
+                    body: JSON.stringify({
+                        max_daily_trades: newMax
+                    })
+                });
+            } catch (err) {
+                console.error("Error updating max daily trades:", err);
+            }
+        }
+
+        function syncTsl(checked) {
+            const tslToggle = document.getElementById('tsl-toggle');
+            if (tslToggle) {
+                tslToggle.checked = checked;
+                tslToggle.dispatchEvent(new Event('change'));
+            }
+        }
+
+        async function emergencyCloseAllPositions() {
+            if (confirm("🚨 EMERGENCY: Immediately close ALL active positions?")) {
+                const btn = document.getElementById('btn-emergency-close');
+                if (btn) btn.click();
             }
         }
 
