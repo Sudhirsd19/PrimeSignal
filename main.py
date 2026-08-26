@@ -507,13 +507,13 @@ class PrimeSignalBot:
         current_hour = datetime.datetime.now(datetime.timezone.utc).hour
         is_low_volume_session = not (12 <= current_hour <= 21)
         
-        if self.has_keys:
+        if self.has_keys and not Config.PAPER_TRADING:
             open_time = ltf_df.iloc[-1]['time'] / 1000.0 if 'time' in ltf_df.columns else ltf_df.index[-1].timestamp()
             tf_mins = int(Config.LTF_TIMEFRAME.replace('m', '').replace('h', '')) * (60 if 'h' in Config.LTF_TIMEFRAME else 1)
             close_time = open_time + (tf_mins * 60)
             delay = time.time() - close_time
-            if delay > 10:
-                add_log_message(f"[{symbol}] Trade skipped: Execution delay ({delay:.1f}s) > 10s. Stale signal protection.")
+            if delay > 120:
+                add_log_message(f"[{symbol}] Trade skipped: Execution delay ({delay:.1f}s) > 120s. Stale signal protection.")
                 return
             
         signal, metadata = self.strategy.generate_signal(
@@ -996,6 +996,17 @@ class PrimeSignalBot:
                     self.risk.reset_daily_equity(current_eq)
                     self._last_reset_date = now_utc.date()
                     add_log_message(f"[RISK] Daily equity checkpoint reset at UTC midnight.")
+
+                # --- 🚀 ROCKET-FAST MULTI-SYMBOL REAL-TIME SCANNER ---
+                self._fast_scan_counter = getattr(self, '_fast_scan_counter', 0) + 1
+                if self._fast_scan_counter % 3 == 0:
+                    open_count, _, _, _ = await self.get_open_positions_info()
+                    max_open = getattr(Config, 'MAX_OPEN_TRADES', 3)
+                    if open_count < max_open and time.time() > self.global_pause_until:
+                        # Concurrently scan all 20 pairs on real-time ticks
+                        for sym in Config.SUPPORTED_SYMBOLS:
+                            if not self.in_position[sym] and self.pipeline.ltf_candles.get(sym):
+                                asyncio.create_task(self.on_candle_close(sym))
 
                 for symbol in Config.SUPPORTED_SYMBOLS:
                     sym_price = self.pipeline.latest_prices.get(symbol, 0.0)
