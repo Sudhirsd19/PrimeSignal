@@ -196,9 +196,6 @@
 
         <!-- Sidebar Footer Action -->
         <div class="pt-4 border-t border-[#1f2937] space-y-2 mt-4">
-            <button onclick="triggerTestTrade()" class="w-full py-2 px-3 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm">
-                <span>⚡</span> Trigger Test Trade
-            </button>
             <button onclick="resetPaperAccount()" class="w-full py-2 px-3 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer">
                 <span>🔄</span> Reset Virtual Wallet ($10,000)
             </button>
@@ -419,12 +416,9 @@
                     <!-- Tab Content: Active Position -->
                     <div id="content-active-position" class="flex flex-col justify-between flex-grow p-3.5 overflow-hidden">
                         <div class="flex-grow overflow-y-auto pr-0.5 scrollbar-thin">
-                            <div id="no-position-view" class="flex flex-col items-center justify-center h-52 border border-dashed border-[#1f2937] rounded-xl text-gray-500 p-4 text-center">
-                                <p class="text-sm font-bold text-gray-300">NO ACTIVE POSITIONS</p>
-                                <p class="text-[11px] text-gray-500 mt-1">Bot is actively scanning 20 pairs for setups</p>
-                                <button onclick="triggerTestTrade()" class="mt-3.5 px-3.5 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm">
-                                    <span>⚡</span> Trigger Test Trade
-                                </button>
+                            <div id="no-position-view" class="flex flex-col items-center justify-center h-52 border border-dashed border-[#1f2937] rounded-xl text-gray-500">
+                                <p class="text-sm font-semibold text-gray-400">NO ACTIVE POSITIONS</p>
+                                <p class="text-xs text-gray-600 mt-1">Bot is actively scanning 20 pairs for setups...</p>
                             </div>
                             
                             <div id="active-position-view" class="hidden flex-col gap-2.5">
@@ -2217,29 +2211,6 @@
 
         function syncTsl(checked) {
             updateRiskSettings();
-        }
-
-        async function triggerTestTrade() {
-            const sym = document.getElementById('symbol-select')?.value || 'BTC/USDT';
-            try {
-                const response = await fetch('/api/trigger_test_trade', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
-                    },
-                    body: JSON.stringify({ symbol: sym, side: 'BUY' })
-                });
-                const res = await response.json();
-                if (res.status === 'success') {
-                    console.log("Test trade triggered:", res.message);
-                    switchTab('tabActivePosition');
-                } else {
-                    alert(res.message || "Failed to trigger test trade.");
-                }
-            } catch (err) {
-                console.error("Error triggering test trade:", err);
-            }
         }
 
         async function emergencyCloseAllPositions() {
