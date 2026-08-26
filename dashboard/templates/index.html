@@ -253,32 +253,72 @@
 
                     <!-- Tab Content: Analytics -->
                     <div id="content-analytics" class="hidden flex-col flex-grow overflow-hidden p-4">
-                        <div class="flex-grow overflow-y-auto space-y-4 pr-1" style="max-height: 430px;">
-                            <!-- Summary Row -->
+                        <div class="flex-grow overflow-y-auto space-y-4 pr-1 scrollbar-thin" style="max-height: 430px;">
+                            <!-- 4-Stat Metrics Row -->
+                            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                <div class="bg-[#171e2e] border border-[#1f2937] p-2.5 rounded-lg flex flex-col justify-between">
+                                    <span class="text-[9px] font-bold text-gray-400 uppercase">Win Rate</span>
+                                    <span id="analytics-winrate-text" class="text-base font-black text-blue-400 terminal-font">0%</span>
+                                </div>
+                                <div class="bg-[#171e2e] border border-[#1f2937] p-2.5 rounded-lg flex flex-col justify-between">
+                                    <span class="text-[9px] font-bold text-gray-400 uppercase">Total PnL</span>
+                                    <span id="analytics-pnl-text" class="text-base font-black text-white terminal-font">0.00 USDT</span>
+                                </div>
+                                <div class="bg-[#171e2e] border border-[#1f2937] p-2.5 rounded-lg flex flex-col justify-between">
+                                    <span class="text-[9px] font-bold text-gray-400 uppercase">Avg Duration</span>
+                                    <span id="analytics-avg-duration" class="text-base font-black text-indigo-300 terminal-font">N/A</span>
+                                </div>
+                                <div class="bg-[#171e2e] border border-[#1f2937] p-2.5 rounded-lg flex flex-col justify-between">
+                                    <span class="text-[9px] font-bold text-gray-400 uppercase">Total Trades</span>
+                                    <span id="analytics-total-trades" class="text-base font-black text-cyan-400 terminal-font">0</span>
+                                </div>
+                            </div>
+
+                            <!-- Visual Charts Row -->
                             <div class="grid grid-cols-2 gap-3">
-                                <div class="bg-[#171e2e] border border-[#1f2937] p-3 rounded-lg">
-                                    <span class="text-[10px] font-semibold text-gray-500 uppercase">Win Rate</span>
-                                    <div class="flex items-center gap-2 mt-1">
-                                        <span id="analytics-winrate-text" class="text-lg font-bold text-blue-400">0%</span>
-                                        <div class="flex-1" style="height: 50px;">
-                                            <canvas id="winRateChart"></canvas>
-                                        </div>
+                                <div class="bg-[#171e2e] border border-[#1f2937] p-2.5 rounded-lg">
+                                    <span class="text-[9px] font-bold text-gray-500 uppercase">Win / Loss Ratio</span>
+                                    <div class="w-full mt-1" style="height: 50px;">
+                                        <canvas id="winRateChart"></canvas>
                                     </div>
                                 </div>
-                                <div class="bg-[#171e2e] border border-[#1f2937] p-3 rounded-lg">
-                                    <span class="text-[10px] font-semibold text-gray-500 uppercase">Total PnL</span>
-                                    <div class="mt-1">
-                                        <span id="analytics-pnl-text" class="text-lg font-bold text-white">0.00 USDT</span>
-                                    </div>
-                                    <div class="w-full mt-1" style="height: 40px;">
+                                <div class="bg-[#171e2e] border border-[#1f2937] p-2.5 rounded-lg">
+                                    <span class="text-[9px] font-bold text-gray-500 uppercase">Cumulative Equity</span>
+                                    <div class="w-full mt-1" style="height: 50px;">
                                         <canvas id="equityChart"></canvas>
                                     </div>
                                 </div>
                             </div>
                             
+                            <!-- Detailed Trade Execution Timeline & History -->
+                            <div>
+                                <div class="flex justify-between items-center mb-1.5">
+                                    <h4 class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">⏱️ Trade Execution Timeline (Date & Time)</h4>
+                                    <span class="text-[9px] text-indigo-400 font-semibold">Live Logs</span>
+                                </div>
+                                <div class="bg-[#171e2e] border border-[#1f2937] rounded-lg overflow-x-auto max-h-[160px] scrollbar-thin">
+                                    <table class="w-full text-[10px] text-left">
+                                        <thead class="sticky top-0 bg-[#111827] text-gray-400 uppercase border-b border-[#1f2937] text-[8px] font-bold z-10">
+                                            <tr>
+                                                <th class="py-1.5 px-2">Executed / Closed</th>
+                                                <th class="py-1.5 px-1.5">Symbol</th>
+                                                <th class="py-1.5 px-1.5 text-center">Side</th>
+                                                <th class="py-1.5 px-1.5 text-center">Duration</th>
+                                                <th class="py-1.5 px-2 text-right">PnL</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="analytics-timeline-tbody" class="divide-y divide-[#1f2937]/50">
+                                            <tr>
+                                                <td class="py-2.5 px-2 text-gray-500 text-center" colspan="5">No trade executions recorded yet</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
                             <!-- Per-Coin P&L Breakdown -->
                             <div>
-                                <h4 class="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">Profit / Loss by Coin</h4>
+                                <h4 class="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Profit / Loss by Coin</h4>
                                 <div class="bg-[#171e2e] border border-[#1f2937] rounded-lg overflow-hidden">
                                     <table class="w-full text-[11px] text-left">
                                         <thead>
@@ -363,19 +403,24 @@
             <!-- Recent Trades List -->
             <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between">
                 <div>
-                    <h3 class="text-sm font-bold uppercase tracking-wider text-gray-400 mb-3">Recent Trades</h3>
-                    <div class="overflow-x-auto">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="text-sm font-bold uppercase tracking-wider text-gray-400">Recent Trades (Execution Time)</h3>
+                        <span class="text-[10px] text-blue-400 font-bold bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">Last 5</span>
+                    </div>
+                    <div class="overflow-x-auto max-h-[160px] scrollbar-thin">
                         <table class="w-full text-xs text-left">
-                            <thead>
-                                <tr class="text-gray-500 uppercase border-b border-[#1f2937] pb-2">
-                                    <th class="py-2">Side</th>
-                                    <th class="py-2">Exit Price</th>
-                                    <th class="py-2 text-right">Result</th>
+                            <thead class="sticky top-0 bg-[#111827] text-gray-400 uppercase border-b border-[#1f2937] pb-2 text-[10px]">
+                                <tr>
+                                    <th class="py-1.5 px-1">Time (Executed)</th>
+                                    <th class="py-1.5 px-1">Symbol</th>
+                                    <th class="py-1.5 px-1">Side</th>
+                                    <th class="py-1.5 px-1">Duration</th>
+                                    <th class="py-1.5 px-1 text-right">PnL</th>
                                 </tr>
                             </thead>
                             <tbody id="trades-tbody" class="divide-y divide-[#1f2937] text-gray-300">
                                 <tr>
-                                    <td class="py-2.5 text-gray-500" colspan="3">No trades executed yet.</td>
+                                    <td class="py-2.5 text-gray-500 text-center" colspan="5">No trades executed yet.</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -752,9 +797,20 @@
                 connectWS();
             }, wsReconnectDelay);
             // Increase delay for next attempt (exponential backoff, capped)
-            wsReconnectDelay = Math.min(wsReconnectDelay * 1.5, WS_MAX_RECONNECT_DELAY);
+        function formatOpenDuration(entry_ts) {
+            if (!entry_ts) return '< 1m';
+            const now = Date.now();
+            const eTime = parseFloat(entry_ts) > 1e11 ? parseFloat(entry_ts) : (parseFloat(entry_ts) * 1000);
+            const diffSec = Math.max(0, Math.floor((now - eTime) / 1000));
+            const m = Math.floor(diffSec / 60);
+            const s = diffSec % 60;
+            if (m >= 60) {
+                const h = Math.floor(m / 60);
+                return `${h}h ${m % 60}m`;
+            }
+            return m > 0 ? `${m}m ${s}s` : `${s}s`;
         }
-        
+
         // Direct Binance Micro-Tick WebSocket (Zero Latency Instant Price Movement)
         let directBinanceWs = null;
         let currentTrackingSymbol = '';
@@ -1395,6 +1451,19 @@
                                             </div>
                                         </div>
 
+                                        <!-- Execution Time & Open Duration Badge -->
+                                        <div class="flex justify-between items-center text-[10px] text-gray-400 bg-[#090d16] px-2.5 py-1.5 rounded-lg border border-[#1f2937]/60">
+                                            <div class="flex items-center gap-1.5">
+                                                <span>⏰ Executed:</span>
+                                                <strong class="text-white terminal-font">${pos.entry_time_str ? pos.entry_time_str.split(' ')[1] : 'Recently'}</strong>
+                                                <span class="text-gray-500 text-[9px]">(${pos.entry_time_str ? pos.entry_time_str.split(' ')[0] : ''})</span>
+                                            </div>
+                                            <div class="flex items-center gap-1 text-indigo-300 font-semibold">
+                                                <span>⏱️ Open:</span>
+                                                <span class="text-white terminal-font font-bold">${formatOpenDuration(pos.entry_time)}</span>
+                                            </div>
+                                        </div>
+
                                         <!-- Price & Target Metrics Grid -->
                                         <div class="grid grid-cols-2 gap-1.5 text-[11px] font-semibold bg-[#0c101c]/60 p-2 rounded-lg border border-[#1f2937]/60">
                                             <div><span class="text-gray-400">Entry:</span> <span class="text-white terminal-font font-bold">${entryP.toFixed(4)}</span></div>
@@ -1442,28 +1511,47 @@
                         if (tbody) {
                             if (state.trades && state.trades.length > 0) {
                                 tbody.innerHTML = '';
-                                state.trades.forEach(trade => {
+                                const recentTrades = [...state.trades].reverse().slice(0, 5);
+                                recentTrades.forEach(trade => {
                                     const tr = document.createElement('tr');
+                                    tr.className = "hover:bg-[#1f2937]/30 transition-colors text-[11px]";
                                     
+                                    // Time
+                                    const timeTd = document.createElement('td');
+                                    timeTd.className = "py-2 px-1 text-gray-400 terminal-font text-[10px]";
+                                    const exStr = trade.entry_time_str ? trade.entry_time_str.split(' ')[1] : (trade.exit_time_str ? trade.exit_time_str.split(' ')[1] : 'Recent');
+                                    timeTd.innerHTML = `<span class="text-gray-200 font-bold">${exStr}</span>`;
+                                    
+                                    // Symbol
+                                    const symTd = document.createElement('td');
+                                    symTd.className = "py-2 px-1 font-bold text-white text-[10px]";
+                                    symTd.innerText = (trade.symbol || '').replace('/USDT', '');
+                                    
+                                    // Side
                                     const sideTd = document.createElement('td');
-                                    sideTd.className = `py-2.5 font-bold ${trade.side === 'LONG' ? 'text-green-400' : 'text-red-400'}`;
-                                    sideTd.innerText = trade.side;
+                                    sideTd.className = `py-2 px-1 font-bold text-[10px] ${trade.side === 'LONG' ? 'text-emerald-400' : 'text-rose-400'}`;
+                                    sideTd.innerText = trade.side || 'LONG';
                                     
-                                    const priceTd = document.createElement('td');
-                                    priceTd.className = "py-2.5 terminal-font";
-                                    priceTd.innerText = trade.exit_price ? trade.exit_price.toFixed(2) : "0.00";
+                                    // Duration
+                                    const durTd = document.createElement('td');
+                                    durTd.className = "py-2 px-1 text-center text-gray-400 terminal-font text-[10px]";
+                                    durTd.innerText = trade.duration || '< 1m';
                                     
+                                    // PnL Result
                                     const pnlTd = document.createElement('td');
-                                    pnlTd.className = `py-2.5 text-right font-bold terminal-font ${trade.pnl_usdt >= 0 ? 'text-green-400' : 'text-red-400'}`;
-                                    pnlTd.innerText = `${trade.pnl_pct >= 0 ? '+' : ''}${trade.pnl_pct.toFixed(2)}%`;
+                                    const isWin = (trade.pnl_usdt || 0) >= 0;
+                                    pnlTd.className = `py-2 px-1 text-right font-bold terminal-font text-[10px] ${isWin ? 'text-emerald-400' : 'text-rose-400'}`;
+                                    pnlTd.innerText = `${isWin ? '+' : ''}${trade.pnl_pct !== undefined ? trade.pnl_pct.toFixed(2) : (trade.pnl_usdt || 0).toFixed(2)}%`;
                                     
+                                    tr.appendChild(timeTd);
+                                    tr.appendChild(symTd);
                                     tr.appendChild(sideTd);
-                                    tr.appendChild(priceTd);
+                                    tr.appendChild(durTd);
                                     tr.appendChild(pnlTd);
                                     tbody.appendChild(tr);
                                 });
                             } else {
-                                tbody.innerHTML = '<tr><td class="py-2.5 text-gray-500" colspan="3">No trades executed yet.</td></tr>';
+                                tbody.innerHTML = '<tr><td class="py-2.5 text-gray-500 text-center" colspan="5">No trades executed yet.</td></tr>';
                             }
                         }
                     } catch (e) {
@@ -1748,6 +1836,59 @@
                         }
                     });
                     
+                    // Summary metrics update
+                    const avgDurEl = document.getElementById('analytics-avg-duration');
+                    if (avgDurEl) avgDurEl.innerText = data.avg_duration || 'N/A';
+                    
+                    const totalTrEl = document.getElementById('analytics-total-trades');
+                    if (totalTrEl) totalTrEl.innerText = data.total_trades || 0;
+                    
+                    // === Detailed Trade Execution Timeline Table ===
+                    const timelineTbody = document.getElementById('analytics-timeline-tbody');
+                    if (timelineTbody && data.history && data.history.length > 0) {
+                        timelineTbody.innerHTML = '';
+                        data.history.forEach(t => {
+                            const tr = document.createElement('tr');
+                            tr.className = 'hover:bg-[#1f2937]/40 transition-colors text-[10px]';
+                            
+                            const isWin = (t.pnl_usdt || 0) >= 0;
+                            const pnlColor = isWin ? 'text-emerald-400' : 'text-rose-400';
+                            const pnlSign = isWin ? '+' : '';
+                            
+                            const timeTd = document.createElement('td');
+                            timeTd.className = 'py-2 px-2 text-gray-400 terminal-font';
+                            const eTime = t.entry_time_str ? t.entry_time_str.split(' ')[1] : 'N/A';
+                            const xTime = t.exit_time_str ? t.exit_time_str.split(' ')[1] : 'N/A';
+                            const dateStr = t.entry_time_str ? t.entry_time_str.split(' ')[0] : '';
+                            timeTd.innerHTML = `<div><span class="text-white font-bold">${eTime}</span> ➔ <span class="text-gray-300">${xTime}</span></div><div class="text-[8px] text-gray-500">${dateStr}</div>`;
+                            
+                            const symTd = document.createElement('td');
+                            symTd.className = 'py-2 px-1.5 font-bold text-white';
+                            symTd.textContent = (t.symbol || '').replace('/USDT', '');
+                            
+                            const sideTd = document.createElement('td');
+                            sideTd.className = `py-2 px-1.5 text-center font-bold ${t.side === 'LONG' ? 'text-emerald-400' : 'text-rose-400'}`;
+                            sideTd.textContent = t.side || 'LONG';
+                            
+                            const durTd = document.createElement('td');
+                            durTd.className = 'py-2 px-1.5 text-center text-gray-300 terminal-font';
+                            durTd.textContent = t.duration || 'N/A';
+                            
+                            const pnlTd = document.createElement('td');
+                            pnlTd.className = `py-2 px-2 text-right font-bold terminal-font ${pnlColor}`;
+                            pnlTd.innerHTML = `<div>${pnlSign}${(t.pnl_usdt || 0).toFixed(2)} USDT</div><div class="text-[9px]">${pnlSign}${(t.pnl_pct || 0).toFixed(2)}%</div>`;
+                            
+                            tr.appendChild(timeTd);
+                            tr.appendChild(symTd);
+                            tr.appendChild(sideTd);
+                            tr.appendChild(durTd);
+                            tr.appendChild(pnlTd);
+                            timelineTbody.appendChild(tr);
+                        });
+                    } else if (timelineTbody) {
+                        timelineTbody.innerHTML = '<tr><td class="py-2.5 px-2 text-gray-500 text-center" colspan="5">No trade executions recorded yet</td></tr>';
+                    }
+
                     // === Per-Coin P&L Table ===
                     const coinTbody = document.getElementById('coin-pnl-tbody');
                     if (coinTbody && data.coin_pnl && data.coin_pnl.length > 0) {

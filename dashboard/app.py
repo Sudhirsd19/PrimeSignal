@@ -288,6 +288,11 @@ async def get_analytics():
         # Per-coin P&L aggregation
         coin_stats = {}  # symbol -> {wins, losses, total_pnl, trades_count}
         
+        total_duration_secs = 0
+        duration_count = 0
+        formatted_history = []
+        import datetime
+
         for t in trades:
             pnl = float(t.get("pnl_usdt", 0) or 0)
             symbol = t.get("symbol", "UNKNOWN")
@@ -314,23 +319,76 @@ async def get_analytics():
             if pnl < coin_stats[symbol]["worst_trade"]:
                 coin_stats[symbol]["worst_trade"] = pnl
             
-            # Format time for chart
-            time_val = t.get("time") or t.get("exit_time") or t.get("ts")
-            if time_val:
-                import datetime
+            # Parse Entry & Exit Timestamps
+            e_ts = t.get("entry_time") or t.get("ts") or 0
+            x_ts = t.get("exit_time") or t.get("time") or e_ts
+            
+            e_time_str = t.get("entry_time_str")
+            if not e_time_str and e_ts:
                 try:
-                    if isinstance(time_val, str):
+                    e_time_str = datetime.datetime.fromtimestamp(float(e_ts) / (1000.0 if float(e_ts) > 1e11 else 1.0)).strftime('%Y-%m-%d %H:%M:%S')
+                except Exception:
+                    e_time_str = str(e_ts)
+            
+            x_time_str = t.get("exit_time_str")
+            if not x_time_str and x_ts:
+                try:
+                    x_time_str = datetime.datetime.fromtimestamp(float(x_ts) / (1000.0 if float(x_ts) > 1e11 else 1.0)).strftime('%Y-%m-%d %H:%M:%S')
+                except Exception:
+                    x_time_str = str(x_ts)
+                    
+            dur_str = t.get("duration")
+            if not dur_str and e_ts and x_ts:
+                e_sec = float(e_ts) / (1000.0 if float(e_ts) > 1e11 else 1.0)
+                x_sec = float(x_ts) / (1000.0 if float(x_ts) > 1e11 else 1.0)
+                d_sec = max(0, int(x_sec - e_sec))
+                if d_sec > 0:
+                    total_duration_secs += d_sec
+                    duration_count += 1
+                    m = d_sec // 60
+                    s = d_sec % 60
+                    dur_str = f"{m}m {s}s" if m > 0 else f"{s}s"
+                else:
+                    dur_str = "< 1m"
+            elif not dur_str:
+                dur_str = "N/A"
+
+            # Format time for equity chart
+            time_val = t.get("exit_time") or t.get("time") or t.get("ts")
+            if time_val:
+                try:
+                    if isinstance(time_val, str) and not time_val.isdigit():
                         dt = datetime.datetime.fromisoformat(time_val.replace('Z', '+00:00'))
                     else:
-                        dt = datetime.datetime.fromtimestamp(float(time_val) / 1000.0)
+                        dt = datetime.datetime.fromtimestamp(float(time_val) / (1000.0 if float(time_val) > 1e11 else 1.0))
                     time_str = dt.strftime("%m-%d %H:%M")
-                    equity_curve.append({"time": time_str, "value": cumulative_pnl})
+                    equity_curve.append({"time": time_str, "value": round(cumulative_pnl, 2)})
                 except Exception:
                     pass
+            
+            formatted_history.append({
+                "symbol": symbol,
+                "side": t.get("side", "LONG"),
+                "entry_price": float(t.get("entry_price") or t.get("entry") or 0.0),
+                "exit_price": float(t.get("exit_price") or t.get("exit") or 0.0),
+                "pnl_usdt": round(pnl, 4),
+                "pnl_pct": round(float(t.get("pnl_pct", 0) or 0.0), 2),
+                "entry_time_str": e_time_str or "N/A",
+                "exit_time_str": x_time_str or "N/A",
+                "duration": dur_str,
+                "reason": t.get("reason") or t.get("type") or "TP/SL Exit"
+            })
                     
         total = wins + losses
         win_rate = (wins / total * 100) if total > 0 else 0.0
         
+        avg_dur_str = "N/A"
+        if duration_count > 0:
+            avg_sec = int(total_duration_secs / duration_count)
+            avg_m = avg_sec // 60
+            avg_s = avg_sec % 60
+            avg_dur_str = f"{avg_m}m {avg_s}s" if avg_m > 0 else f"{avg_s}s"
+
         # Build per-coin response list sorted by total PnL descending
         coin_pnl_list = []
         for sym, stats in coin_stats.items():
@@ -351,11 +409,13 @@ async def get_analytics():
             "status": "success",
             "wins": wins,
             "losses": losses,
+            "total_trades": total,
             "win_rate": win_rate,
-            "total_pnl": cumulative_pnl,
+            "total_pnl": round(cumulative_pnl, 2),
+            "avg_duration": avg_dur_str,
             "equity_curve": equity_curve,
             "coin_pnl": coin_pnl_list,
-            "history": list(reversed(trades))[:50]
+            "history": list(reversed(formatted_history))[:100]
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}

@@ -1319,6 +1319,9 @@ class PrimeSignalBot:
                                 guaranteed_pnl_pct = max(0.0, (entry_val - sl_val) / entry_val * 100.0)
                                 guaranteed_pnl_usdt = max(0.0, pos_sz * (entry_val - sl_val))
 
+                        e_time = self.entry_time.get(s, int(time.time() * 1000))
+                        e_time_str = datetime.datetime.fromtimestamp(e_time / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
+
                         active_pos_map[s] = {
                             'side': self.position_side[s],
                             'entry_price': entry_val,
@@ -1338,7 +1341,9 @@ class PrimeSignalBot:
                             'tp1_hit': tp1_hit,
                             'tp2_hit': tp2_hit,
                             'profit_locked': is_profit_locked,
-                            'live_price': live_p
+                            'live_price': live_p,
+                            'entry_time': e_time,
+                            'entry_time_str': e_time_str
                         }
                 DashboardState.active_positions = active_pos_map
 
@@ -1430,15 +1435,29 @@ class PrimeSignalBot:
                 if not self.has_keys or Config.PAPER_TRADING:
                     self._dry_run_balance_usdt += (self.position_size[symbol] * self.entry_price[symbol]) + pnl_usdt
                 
+            entry_ts = self.entry_time.get(symbol, int(time.time() * 1000))
+            exit_ts = int(time.time() * 1000)
+            duration_secs = max(0, int((exit_ts - entry_ts) / 1000))
+            mins = duration_secs // 60
+            secs = duration_secs % 60
+            duration_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
+            
+            entry_dt_str = datetime.datetime.fromtimestamp(entry_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
+            exit_dt_str = datetime.datetime.fromtimestamp(exit_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
+
             trade_record = {
                 'symbol': symbol,
                 'side': self.position_side[symbol],
                 'entry_price': self.entry_price[symbol],
                 'exit_price': exit_price,
-                'pnl_usdt': pnl_usdt,
-                'pnl_pct': pnl_pct,
-                'entry_time': self.entry_time[symbol],
-                'exit_time': int(time.time() * 1000)
+                'pnl_usdt': round(pnl_usdt, 4),
+                'pnl_pct': round(pnl_pct, 2),
+                'entry_time': entry_ts,
+                'exit_time': exit_ts,
+                'entry_time_str': entry_dt_str,
+                'exit_time_str': exit_dt_str,
+                'duration': duration_str,
+                'reason': reason
             }
             DashboardState.trades.append(trade_record)
             if len(DashboardState.trades) > 500:
