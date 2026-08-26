@@ -1304,11 +1304,9 @@
                             const executed = state.trades_today || 0;
                             const maxTr = state.max_daily_trades || 6;
                             dailyTradesBadge.innerText = `${executed}/${maxTr} TRADES`;
-                            if (executed >= maxTr) {
-                                dailyTradesBadge.className = "text-[10px] bg-red-500/20 text-red-400 border border-red-500/40 px-1.5 py-0.5 rounded font-extrabold animate-pulse";
-                            } else {
-                                dailyTradesBadge.className = "text-[10px] bg-blue-500/20 text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded-full font-bold";
-                            }
+                            dailyTradesBadge.className = executed >= maxTr 
+                                ? "text-[10px] text-red-400 font-black px-1 animate-pulse"
+                                : "text-[10px] text-blue-400 font-extrabold px-1";
                         }
                         // Dynamic trades today & max trades sync
                         if (state.trades_today !== undefined) {

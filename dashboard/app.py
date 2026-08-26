@@ -175,22 +175,25 @@ async def emergency_stop():
         return {"status": "error", "message": f"Failed to activate kill switch: {str(e)}"}
 
 class RiskSettingsUpdate(BaseModel):
-    tsl_enabled: bool
-    tsl_multiplier: float
+    tsl_enabled: bool | None = None
+    tsl_multiplier: float | None = None
     max_daily_trades: int | None = None
 
 @app.post("/api/update_risk_settings", dependencies=[Depends(verify_dashboard_key)])
 async def update_risk_settings(settings: RiskSettingsUpdate):
     from config import Config
-    # If the user disables TSL, we can just set the multiplier very high
-    Config.TRAILING_ATR_MULT = settings.tsl_multiplier
-    if not settings.tsl_enabled:
-        Config.TRAILING_ATR_MULT = 999.0 # Effectively disables it
+    if settings.tsl_multiplier is not None:
+        Config.TRAILING_ATR_MULT = settings.tsl_multiplier
+    if settings.tsl_enabled is not None:
+        if not settings.tsl_enabled:
+            Config.TRAILING_ATR_MULT = 999.0 # Effectively disables it
     
     if settings.max_daily_trades is not None and settings.max_daily_trades > 0:
         Config.MAX_DAILY_TRADES = settings.max_daily_trades
+        if bot_instance is not None:
+            bot_instance.max_daily_trades = settings.max_daily_trades
     
-    status_str = f"TSL {'Enabled' if settings.tsl_enabled else 'Disabled'} ({settings.tsl_multiplier}x) | Max Daily Trades: {Config.MAX_DAILY_TRADES}"
+    status_str = f"Max Daily Trades: {Config.MAX_DAILY_TRADES} | TSL ATR Mult: {Config.TRAILING_ATR_MULT}"
     add_log_message(f"⚙️ Risk Settings Updated: {status_str}")
     return {"status": "success", "message": status_str, "max_daily_trades": Config.MAX_DAILY_TRADES}
 
