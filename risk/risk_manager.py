@@ -67,8 +67,9 @@ class RiskManager:
         
         max_position_value = account_equity * max_alloc * leverage
         
-        # Ensure minimum notional threshold can still be met for small accounts (e.g. 1000 INR / $10)
-        min_notional = 100.0 if getattr(Config, 'COINDCX_TRADE_INR', False) else 10.0
+        # Ensure minimum notional threshold can still be met for small accounts (e.g. 1000 INR / $10 USDT)
+        is_inr = getattr(Config, 'COINDCX_TRADE_INR', False) and not Config.PAPER_TRADING
+        min_notional = 100.0 if is_inr else 10.0
         if account_equity >= min_notional and max_position_value < min_notional:
             max_position_value = min(account_equity * 0.95, min_notional * 1.1)
 
