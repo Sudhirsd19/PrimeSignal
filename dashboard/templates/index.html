@@ -400,10 +400,10 @@
             </div>
 
             <!-- Active Position & Analytics Panel -->
-            <div class="col-span-1 lg:col-span-1 flex flex-col h-[500px]">
-                <div id="position-card" class="bg-[#111827] border border-[#1f2937] rounded-xl flex flex-col h-full overflow-hidden shadow-lg">
+            <div class="col-span-1 lg:col-span-1 flex flex-col h-[500px] min-h-0">
+                <div id="position-card" class="bg-[#111827] border border-[#1f2937] rounded-xl flex flex-col h-full max-h-[500px] overflow-hidden shadow-lg">
                     <!-- Tabs Header (Clean 2-Tab Navigation) -->
-                    <div class="flex border-b border-[#1f2937] p-2 bg-[#0d121f]">
+                    <div class="flex border-b border-[#1f2937] p-2 bg-[#0d121f] shrink-0">
                         <button id="tab-active-position" class="flex-1 py-2 text-[11px] font-bold uppercase tracking-wider text-blue-400 border-b-2 border-blue-500 focus:outline-none transition-colors duration-200 flex items-center justify-center gap-1.5 cursor-pointer">
                             <span>Positions</span>
                             <span id="active-pos-count-badge" class="px-1.5 py-0.5 rounded-full text-[9px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hidden">0 ACTIVE</span>
@@ -414,19 +414,19 @@
                     </div>
 
                     <!-- Tab Content: Active Position -->
-                    <div id="content-active-position" class="flex flex-col justify-between flex-grow p-3.5 overflow-hidden">
-                        <div class="flex-grow overflow-y-auto pr-0.5 scrollbar-thin">
+                    <div id="content-active-position" class="flex flex-col justify-between flex-grow min-h-0 p-3 overflow-hidden">
+                        <div class="flex-grow overflow-y-auto min-h-0 pr-1 space-y-2 scrollbar-thin">
                             <div id="no-position-view" class="flex flex-col items-center justify-center h-52 border border-dashed border-[#1f2937] rounded-xl text-gray-500">
                                 <p class="text-sm font-semibold text-gray-400">NO ACTIVE POSITIONS</p>
                                 <p class="text-xs text-gray-600 mt-1">Bot is actively scanning 20 pairs for setups...</p>
                             </div>
                             
-                            <div id="active-position-view" class="hidden flex-col gap-2.5">
+                            <div id="active-position-view" class="hidden flex-col gap-2">
                                 <!-- Cards injected here via JS -->
                             </div>
                         </div>
                         
-                        <div id="pnl-box" class="hidden border-t border-[#1f2937] pt-2.5 mt-2 flex flex-col">
+                        <div id="pnl-box" class="hidden border-t border-[#1f2937] pt-2 mt-2 flex flex-col shrink-0">
                             <button id="btn-emergency-close" class="w-full bg-red-600/20 hover:bg-red-600/40 text-red-500 hover:text-red-400 border border-red-500/50 font-bold py-2 px-4 rounded-lg transition-colors text-xs uppercase tracking-wider flex justify-center items-center gap-2 cursor-pointer shadow-sm">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
                                 Emergency Close All
@@ -1578,24 +1578,24 @@
                                 }
 
                                 const cardHTML = `
-                                    <div class="border border-[#1f2937] hover:border-indigo-500/50 p-3.5 rounded-xl bg-[#161f30]/80 backdrop-blur-md hover:bg-[#1f2b45]/90 cursor-pointer transition-all duration-200 flex flex-col gap-2.5 shadow-md hover:shadow-indigo-500/10 group" onclick="selectSymbolFromPosition('${sym}')" title="Click to view ${sym} chart">
+                                    <div class="border border-[#1f2937] hover:border-indigo-500/50 p-2.5 rounded-xl bg-[#141b2a]/90 backdrop-blur-md hover:bg-[#1a2336] cursor-pointer transition-all duration-200 flex flex-col gap-2 shadow-md hover:shadow-indigo-500/10 group shrink-0" onclick="selectSymbolFromPosition('${sym}')" title="Click to view ${sym} chart">
                                         <div class="flex justify-between items-center">
                                             <div class="flex items-center gap-1.5">
-                                                <span class="font-bold text-white text-sm tracking-wide group-hover:text-indigo-400 transition-colors">${sym}</span>
-                                                <span class="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-300 font-medium border border-indigo-500/20">Chart ↗</span>
+                                                <span class="font-bold text-white text-xs tracking-wide group-hover:text-indigo-400 transition-colors">${sym}</span>
+                                                <span class="text-[8px] px-1 py-0.5 rounded bg-indigo-500/10 text-indigo-300 font-medium border border-indigo-500/20">Chart ↗</span>
                                             </div>
                                             <div class="flex items-center gap-1.5">
                                                 ${statusBadgeHTML}
-                                                <span class="text-[10px] px-2 py-0.5 font-extrabold rounded-md uppercase tracking-wider border ${sideClass}">${pos.side}</span>
+                                                <span class="text-[9px] px-1.5 py-0.5 font-extrabold rounded uppercase tracking-wider border ${sideClass}">${pos.side}</span>
                                             </div>
                                         </div>
 
                                         <!-- Execution Time & Open Duration Badge -->
-                                        <div class="flex justify-between items-center text-[10px] text-gray-400 bg-[#090d16] px-2.5 py-1.5 rounded-lg border border-[#1f2937]/60">
-                                            <div class="flex items-center gap-1.5">
+                                        <div class="flex justify-between items-center text-[9px] text-gray-400 bg-[#090d16] px-2 py-1 rounded-md border border-[#1f2937]/60">
+                                            <div class="flex items-center gap-1">
                                                 <span>⏰ Executed:</span>
                                                 <strong class="text-white terminal-font">${formatExecutionTime(pos.entry_time, pos.entry_time_str)}</strong>
-                                                <span class="text-gray-500 text-[9px]">(${formatExecutionDate(pos.entry_time, pos.entry_time_str)})</span>
+                                                <span class="text-gray-500 text-[8px]">(${formatExecutionDate(pos.entry_time, pos.entry_time_str)})</span>
                                             </div>
                                             <div class="flex items-center gap-1 text-indigo-300 font-semibold">
                                                 <span>⏱️ Open:</span>
@@ -1604,16 +1604,16 @@
                                         </div>
 
                                         <!-- Price & Target Metrics Grid -->
-                                        <div class="grid grid-cols-2 gap-1.5 text-[11px] font-semibold bg-[#0c101c]/60 p-2 rounded-lg border border-[#1f2937]/60">
+                                        <div class="grid grid-cols-2 gap-1 text-[10px] font-semibold bg-[#0c101c]/80 p-1.5 rounded-md border border-[#1f2937]/60">
                                             <div><span class="text-gray-400">Entry:</span> <span class="text-white terminal-font font-bold">${entryP.toFixed(4)}</span></div>
                                             <div><span class="text-gray-400">Live:</span> <span class="terminal-font font-bold ${pnlClass}">${liveP.toFixed(4)}</span></div>
                                             <div><span class="text-gray-400">SL:</span> <span class="text-red-400 terminal-font font-bold">${slP.toFixed(4)}</span> ${isProfitLocked ? '🔒' : ''}</div>
-                                            <div><span class="text-gray-400">Next Target:</span> <span class="text-emerald-400 terminal-font font-bold">${activeTargetP.toFixed(4)}</span> <span class="text-[9px] text-indigo-400">(${activeTargetName})</span></div>
+                                            <div><span class="text-gray-400">Next Target:</span> <span class="text-emerald-400 terminal-font font-bold">${activeTargetP.toFixed(4)}</span> <span class="text-[8px] text-indigo-400">(${activeTargetName})</span></div>
                                         </div>
 
                                         <!-- Target Progress Bar & Stage Indicator -->
-                                        <div class="space-y-1">
-                                            <div class="flex justify-between items-center text-[9px] font-bold uppercase tracking-wider">
+                                        <div class="space-y-0.5">
+                                            <div class="flex justify-between items-center text-[8px] font-bold uppercase tracking-wider">
                                                 ${stageBadgeHTML}
                                                 <span class="${targetProgress >= 100 ? 'text-emerald-400 font-extrabold' : 'text-indigo-400'}">${targetProgress.toFixed(0)}%</span>
                                             </div>
@@ -1626,11 +1626,11 @@
                                         ${lockControlHTML}
 
                                         <!-- Running PnL Footer -->
-                                        <div class="flex justify-between items-end border-t border-[#1f2937]/80 pt-2">
-                                            <span class="text-gray-400 text-[10px] font-bold uppercase tracking-wider">Running PnL</span>
+                                        <div class="flex justify-between items-end border-t border-[#1f2937]/80 pt-1.5">
+                                            <span class="text-gray-400 text-[9px] font-bold uppercase tracking-wider">Running PnL</span>
                                             <div class="flex flex-col items-end">
-                                                <span class="font-extrabold terminal-font text-sm ${pnlClass}">${sign}${pnlUsdt.toFixed(2)} ${pnlCurr}</span>
-                                                <span class="font-bold text-[10px] ${pnlClass}">${sign}${pnlPct.toFixed(2)}%</span>
+                                                <span class="font-extrabold terminal-font text-xs sm:text-sm ${pnlClass}">${sign}${pnlUsdt.toFixed(2)} ${pnlCurr}</span>
+                                                <span class="font-bold text-[9px] ${pnlClass}">${sign}${pnlPct.toFixed(2)}%</span>
                                             </div>
                                         </div>
                                     </div>
