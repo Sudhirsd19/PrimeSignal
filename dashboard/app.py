@@ -535,16 +535,15 @@ async def websocket_endpoint(websocket: WebSocket):
         await send_state_to_ws(websocket)
         
         while True:
-            # Keep connection alive, listen for any client messages
             data = await websocket.receive_text()
-            # Respond to ping
             if data == "ping":
                 await websocket.send_text("pong")
     except WebSocketDisconnect:
-        DashboardState.active_websockets.discard(websocket)
+        pass
     except Exception:
-        if websocket in DashboardState.active_websockets:
-            DashboardState.active_websockets.discard(websocket)
+        pass
+    finally:
+        DashboardState.active_websockets.discard(websocket)
 
 def _build_state_payload():
     """Build the state dict to broadcast to WebSocket clients."""
@@ -624,10 +623,7 @@ async def broadcast_state_loop():
     """Background task that broadcasts state updates to all connected WebSockets."""
     while True:
         if DashboardState.active_websockets:
-            # Create a copy of the set to avoid modification errors during iteration
             sockets = list(DashboardState.active_websockets)
-            
-            # Serialize payload ONCE for all clients
             try:
                 state_payload = _build_state_payload()
                 json_str = json.dumps(state_payload, default=str)
@@ -639,16 +635,11 @@ async def broadcast_state_loop():
             async def _safe_send(ws):
                 try:
                     await ws.send_text(json_str)
-                except Exception as e:
-                    print(f"[WS] Broadcast error, dropping client: {e}")
+                except Exception:
                     DashboardState.active_websockets.discard(ws)
-                    try:
-                        await ws.close()
-                    except Exception:
-                        pass
 
             await asyncio.gather(*[_safe_send(ws) for ws in sockets])
-        await asyncio.sleep(0.1) # Ultra-fast 100ms real-time broadcast stream
+        await asyncio.sleep(0.5) # Clean 500ms broadcast rate without buffer exhaustion
 
 @app.on_event("startup")
 async def startup_event():
