@@ -147,6 +147,7 @@ class RealTimeDataPipeline:
                         if event_type == 'kline':
                             kline = kline_data['k']
                             timeframe = kline['i']
+                            is_closed = bool(kline.get('x', False))
                             symbol_raw = kline['s'] # e.g. 'BTCUSDT'
                             
                             # Map back to SUPPORTED_SYMBOLS

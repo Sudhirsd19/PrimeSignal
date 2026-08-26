@@ -1086,10 +1086,13 @@
 
                         // Balance display — dynamic base coin name from symbol
                         const balCurr = state.balance_currency || "USDT";
-                        document.getElementById('balance-usdt').innerText = `${state.balance_usdt ? state.balance_usdt.toFixed(2) : "0.00"} ${balCurr}`;
+                        const balUsdtEl = document.getElementById('balance-usdt');
+                        if (balUsdtEl) balUsdtEl.innerText = `${state.balance_usdt ? state.balance_usdt.toFixed(2) : "0.00"} ${balCurr}`;
+                        
                         const baseCoin = state.symbol ? state.symbol.split('/')[0] : 'BTC';
                         const baseCoinLabel = document.getElementById('base-coin-label');
                         if (baseCoinLabel) baseCoinLabel.innerText = baseCoin;
+                        
                         const baseBalEl = document.getElementById('balance-base');
                         if (baseBalEl) {
                             const spans = baseBalEl.querySelectorAll('span');
@@ -1103,20 +1106,23 @@
                         // Drawdown display with danger color when > 50% of limit
                         const dd = state.daily_drawdown_pct || 0.0;
                         const ddEl = document.getElementById('drawdown-display');
-                        ddEl.innerText = `${dd.toFixed(2)}%`;
-                        const ddBarWidth = Math.min(Math.abs(dd) / 5.0 * 100, 100);
                         const ddBar = document.getElementById('drawdown-bar');
-                        ddBar.style.width = `${ddBarWidth}%`;
-                        // Color: safe=blue, warning=orange, danger=red
-                        if (ddBarWidth > 75) {
-                            ddBar.style.background = '#ef4444'; // red — danger
-                            ddEl.className = 'text-3xl font-extrabold text-red-400 terminal-font';
-                        } else if (ddBarWidth > 50) {
-                            ddBar.style.background = '#f97316'; // orange — warning
-                            ddEl.className = 'text-3xl font-extrabold text-orange-400 terminal-font';
-                        } else {
-                            ddBar.style.background = '#3b82f6'; // blue — safe
-                            ddEl.className = 'text-3xl font-extrabold text-blue-400 terminal-font';
+                        if (ddEl) {
+                            ddEl.innerText = `${dd.toFixed(2)}%`;
+                        }
+                        if (ddBar) {
+                            const ddBarWidth = Math.min(Math.abs(dd) / 5.0 * 100, 100);
+                            ddBar.style.width = `${ddBarWidth}%`;
+                            if (ddBarWidth > 75) {
+                                ddBar.style.background = '#ef4444'; // red — danger
+                                if (ddEl) ddEl.className = 'text-2xl font-black text-red-400 terminal-font';
+                            } else if (ddBarWidth > 50) {
+                                ddBar.style.background = '#f97316'; // orange — warning
+                                if (ddEl) ddEl.className = 'text-2xl font-black text-orange-400 terminal-font';
+                            } else {
+                                ddBar.style.background = '#06b6d4'; // cyan — safe
+                                if (ddEl) ddEl.className = 'text-2xl font-black text-cyan-400 terminal-font';
+                            }
                         }
 
                         // Daily Trades Badge update
@@ -1128,7 +1134,7 @@
                             if (executed >= maxTr) {
                                 dailyTradesBadge.className = "text-[10px] bg-red-500/20 text-red-400 border border-red-500/40 px-1.5 py-0.5 rounded font-extrabold animate-pulse";
                             } else {
-                                dailyTradesBadge.className = "text-[10px] bg-blue-500/20 text-blue-400 border border-blue-500/30 px-1.5 py-0.5 rounded font-bold";
+                                dailyTradesBadge.className = "text-[10px] bg-blue-500/20 text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded-full font-bold";
                             }
                         }
                         const maxTradesInputEl = document.getElementById('max-trades-input');
@@ -1138,17 +1144,21 @@
                         
                         // ML display
                         const mlVal = (state.ml_confidence || 0.5) * 100;
-                        document.getElementById('ml-prob').innerText = `${mlVal.toFixed(1)}%`;
+                        const mlProbEl = document.getElementById('ml-prob');
+                        if (mlProbEl) mlProbEl.innerText = `${mlVal.toFixed(0)}%`;
+                        
                         const mlStatus = document.getElementById('ml-status');
-                        if (mlVal > 60) {
-                            mlStatus.innerText = "Strong Bullish Bias";
-                            mlStatus.className = "text-xs text-green-400 mt-1 font-semibold";
-                        } else if (mlVal < 40) {
-                            mlStatus.innerText = "Strong Bearish Bias";
-                            mlStatus.className = "text-xs text-red-400 mt-1 font-semibold";
-                        } else {
-                            mlStatus.innerText = "Neutral market state";
-                            mlStatus.className = "text-xs text-gray-500 mt-1";
+                        if (mlStatus) {
+                            if (mlVal > 60) {
+                                mlStatus.innerText = "Strong Bullish Bias";
+                                mlStatus.className = "text-xs text-green-400 mt-1 font-semibold";
+                            } else if (mlVal < 40) {
+                                mlStatus.innerText = "Strong Bearish Bias";
+                                mlStatus.className = "text-xs text-red-400 mt-1 font-semibold";
+                            } else {
+                                mlStatus.innerText = "Neutral market state";
+                                mlStatus.className = "text-xs text-gray-500 mt-1";
+                            }
                         }
                         
                         // Next Candle Forecast update
@@ -1156,16 +1166,19 @@
                         const ncProbText = document.getElementById('next-candle-prob-text');
                         if (ncBadge && state.next_candle_color) {
                             const isGreen = state.next_candle_color === "GREEN";
-                            ncBadge.innerText = isGreen ? `🟢 NEXT: GREEN` : `🔴 NEXT: RED`;
-                            ncBadge.className = `px-2 py-0.5 rounded text-[10px] font-extrabold tracking-wide ${isGreen ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'}`;
+                            ncBadge.innerText = isGreen ? `🟢 GREEN (${mlVal.toFixed(0)}%)` : `🔴 RED (${mlVal.toFixed(0)}%)`;
+                            ncBadge.className = `font-bold ${isGreen ? 'text-emerald-400' : 'text-red-400'}`;
                             if (ncProbText) {
                                 ncProbText.innerText = `(${state.next_candle_prob ? state.next_candle_prob.toFixed(1) : "50.0"}% Forecast)`;
                             }
                         }
                         
                         // Structure indicators
-                        document.getElementById('active-ob-indicator').innerText = state.active_ob || "No OB detected";
-                        document.getElementById('active-fvg-indicator').innerText = state.active_fvg || "No FVG detected";
+                        const obInd = document.getElementById('active-ob-indicator');
+                        if (obInd) obInd.innerText = state.active_ob || "No OB detected";
+                        
+                        const fvgInd = document.getElementById('active-fvg-indicator');
+                        if (fvgInd) fvgInd.innerText = state.active_fvg || "No FVG detected";
 
                         // CoinDCX Profile updates
                         if (state.coindcx_profile) {
