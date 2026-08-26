@@ -5,6 +5,27 @@ class RiskManager:
     def __init__(self):
         self.daily_starting_equity = None
         self.current_drawdown_pct = 0.0
+        self.reserved_risk_pct = 0.0 # Atomic risk tracker for pending orders
+        self.max_correlated_risk_pct = getattr(Config, 'MAX_CORRELATED_RISK_PCT', 1.2)
+
+    def reserve_risk(self, risk_pct: float):
+        """Atomically reserves portfolio risk for a pending order."""
+        self.reserved_risk_pct += risk_pct
+
+    def release_risk(self, risk_pct: float):
+        """Releases reserved risk when order is confirmed filled or cancelled."""
+        self.reserved_risk_pct = max(0.0, self.reserved_risk_pct - risk_pct)
+
+    def can_open_trade_atomic(self, current_open_risk_pct: float, proposed_risk_pct: float) -> bool:
+        """
+        Enforces atomic portfolio risk invariant (ChatGPT v2.2 P0 requirement):
+        CurrentRisk + ReservedRisk + ProposedRisk <= 1.20%
+        """
+        total_projected_risk = current_open_risk_pct + self.reserved_risk_pct + proposed_risk_pct
+        if total_projected_risk > (self.max_correlated_risk_pct + 0.001):
+            print(f"[RISK] ⛔ Portfolio risk cap breach prevented! Projected: {total_projected_risk:.2f}%, Limit: {self.max_correlated_risk_pct:.2f}%")
+            return False
+        return True
 
     def calculate_position_size(self, account_equity, entry_price, stop_loss):
         """

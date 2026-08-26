@@ -247,8 +247,9 @@ class ExecutionEngine:
                         return None
 
         # 2. Place order with retries and deterministic Client Order ID (Idempotency)
-        import uuid
-        client_order_id = f"PS_{symbol.replace('/', '')}_{side.upper()}_{int(time.time()*1000)}_{str(uuid.uuid4())[:4]}"
+        import hashlib
+        deterministic_hash = hashlib.md5(f"{symbol}_{side}_{int(time.time()*10)}".encode()).hexdigest()[:6].upper()
+        client_order_id = f"PS_{symbol.replace('/', '')}_{side.upper()}_{int(time.time()*1000)}_{deterministic_hash}"
         params = {'clientOrderId': client_order_id}
         
         fn = None

@@ -160,19 +160,38 @@ def detect_order_blocks(df, lookback=50):
         ob_type = ob['type']
         end_k = min(n, i + 150)
 
+        ob_height = max(1e-6, ob_top - ob_bottom)
+
         for k in range(i + 1, end_k):
             k_low = lows[k]
             k_high = highs[k]
+            k_close = closes[k]
+            
+            # P1 Geometric Rule: 25% penetration from proximal boundary
+            if ob_type == 'BULLISH':
+                # Proximal = ob_top, Distal = ob_bottom
+                penetration = (ob_top - k_low) / ob_height
+                if penetration >= 0.25:
+                    ob['mitigated'] = True
+                if k_close < ob_bottom:
+                    ob['invalidated'] = True
+                    break
+            elif ob_type == 'BEARISH':
+                # Proximal = ob_bottom, Distal = ob_top
+                penetration = (k_high - ob_bottom) / ob_height
+                if penetration >= 0.25:
+                    ob['mitigated'] = True
+                if k_close > ob_top:
+                    ob['invalidated'] = True
+                    break
 
-            if k_low <= ob_top and k_high >= ob_bottom:
-                ob['mitigated'] = True
+            if ob.get('mitigated', False):
                 candle_range = k_high - k_low
                 is_partial = False
 
                 if candle_range > 0:
                     avg_v = avg_vols[k]
                     k_open = opens[k]
-                    k_close = closes[k]
                     k_vol = volumes[k]
 
                     if ob_type == 'BULLISH':
