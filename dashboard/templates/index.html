@@ -98,96 +98,82 @@
             </div>
         </header>
 
-        <!-- STATS GRID -->
-        <section class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-            <!-- Price Ticker -->
-            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between h-32 relative overflow-hidden">
-                <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Live Index Price</span>
-                <div class="flex items-baseline space-x-1 mt-2">
-                    <span id="price-display" class="text-3xl font-extrabold tracking-tight text-white terminal-font">0.00</span>
-                    <span class="text-xs text-gray-500 font-bold" id="price-currency-label">USDT</span>
-                </div>
-                <div class="text-xs text-green-400 font-bold mt-1" id="price-change-pct">+0.00%</div>
-            </div>
-
-            <!-- Equity Panel -->
-            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between h-32">
-                <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Account Balance</span>
-                <div class="flex flex-col mt-2">
-                    <span id="balance-usdt" class="text-2xl font-bold text-white terminal-font">0.00 USDT</span>
-                    <span id="balance-base" class="text-sm text-gray-400 mt-1 terminal-font">0.000000 <span id="base-coin-label">BTC</span></span>
-                </div>
-            </div>
-
-            <!-- Drawdown & Risk -->
-            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between h-32">
+        <!-- STATS GRID: 4 CLEAN HERO CARDS -->
+        <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            
+            <!-- 1. TOTAL PORTFOLIO BALANCE -->
+            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-2xl flex flex-col justify-between h-36 relative overflow-hidden shadow-lg hover:border-blue-500/40 transition-all">
                 <div class="flex justify-between items-center">
-                    <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Daily Drawdown</span>
-                    <span id="daily-trades-badge" class="text-[10px] bg-blue-500/20 text-blue-400 border border-blue-500/30 px-1.5 py-0.5 rounded font-bold">0/6 TRADES</span>
+                    <span class="text-xs font-bold uppercase tracking-wider text-slate-400">💰 Account Balance</span>
+                    <span class="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30">Net Equity</span>
                 </div>
-                <div class="flex items-baseline space-x-1 mt-2">
-                    <span id="drawdown-display" class="text-3xl font-extrabold text-blue-400 terminal-font">0.00%</span>
-                    <span class="text-xs text-gray-500 font-bold">/ 5.0%</span>
+                <div class="flex flex-col my-1">
+                    <span id="balance-usdt" class="text-2xl font-black text-white terminal-font">0.00 USDT</span>
+                    <div class="flex items-center justify-between text-xs text-slate-400 mt-1">
+                        <span>Free Cash: <span id="balance-base" class="text-slate-200 font-bold">0.000000 <span id="base-coin-label">BTC</span></span></span>
+                        <span class="text-emerald-400 font-bold">● Protected</span>
+                    </div>
                 </div>
-                <div class="w-full bg-[#1f2937] h-2 rounded-full mt-2">
-                    <div id="drawdown-bar" class="h-full rounded-full transition-all duration-500" style="width: 0%; background:#3b82f6"></div>
+                <div class="w-full bg-[#1f2937] h-1.5 rounded-full overflow-hidden">
+                    <div class="h-full bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full" style="width: 100%;"></div>
                 </div>
             </div>
 
-            <!-- ML confirmation layer -->
-            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between h-32">
+            <!-- 2. LIVE INDEX PRICE -->
+            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-2xl flex flex-col justify-between h-36 relative overflow-hidden shadow-lg hover:border-emerald-500/40 transition-all">
                 <div class="flex justify-between items-center">
-                    <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">ML Confirmation</span>
-                    <span id="next-candle-badge" class="px-2 py-0.5 rounded text-[10px] font-extrabold tracking-wide bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">🟢 NEXT: GREEN</span>
+                    <span class="text-xs font-bold uppercase tracking-wider text-slate-400">📈 Live Index Price</span>
+                    <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Real-Time Tick</span>
                 </div>
-                <div class="flex items-baseline space-x-2 mt-2">
-                    <span id="ml-prob" class="text-3xl font-extrabold text-indigo-400 terminal-font">50.0%</span>
-                    <span id="next-candle-prob-text" class="text-xs text-gray-400 font-bold">(50.0% Forecast)</span>
+                <div class="flex items-baseline space-x-1.5 my-1">
+                    <span id="price-display" class="text-3xl font-black tracking-tight text-white terminal-font">0.00</span>
+                    <span class="text-xs text-slate-400 font-bold" id="price-currency-label">USDT</span>
                 </div>
-                <div class="text-xs text-gray-400 mt-1" id="ml-status">Neutral market state</div>
+                <div class="flex items-center justify-between text-xs">
+                    <span class="text-emerald-400 font-bold" id="price-change-pct">+0.00%</span>
+                    <span class="text-slate-500 text-[11px]">Binance Direct Feed</span>
+                </div>
             </div>
 
-            <!-- Signal Readiness Light -->
-            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between h-32 relative">
+            <!-- 3. BOT SIGNAL STATUS -->
+            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-2xl flex flex-col justify-between h-36 relative overflow-hidden shadow-lg hover:border-blue-500/40 transition-all">
                 <div class="flex justify-between items-center">
-                    <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Signal Status</span>
+                    <span class="text-xs font-bold uppercase tracking-wider text-slate-400">🚦 Bot Status</span>
                     <span id="signal-progress-text" class="text-[10px] text-blue-400 font-bold hidden">0%</span>
                 </div>
-                <div class="flex items-center space-x-3 mt-2 z-10">
-                    <div id="signal-light-circle" class="w-8 h-8 rounded-full bg-red-500 border-2 border-red-400 shadow-[0_0_15px_rgba(239,68,68,0.4)]"></div>
-                    <span id="signal-light-text" class="text-xl font-extrabold text-white terminal-font">RED</span>
+                <div class="flex items-center space-x-3 my-1">
+                    <div id="signal-light-circle" class="w-7 h-7 rounded-full bg-blue-500 border-2 border-blue-400 shadow-[0_0_15px_rgba(59,130,246,0.4)] animate-pulse"></div>
+                    <span id="signal-light-text" class="text-xl font-black text-white terminal-font">READY / SCANNING</span>
                 </div>
-                <div class="text-xs text-gray-400 mt-1 truncate z-10" id="signal-light-reason" title="System starting up...">System starting up...</div>
+                <div class="text-xs text-slate-300 truncate" id="signal-light-reason" title="Monitoring 20 pairs for institutional SMC setups...">Monitoring 20 pairs for setups...</div>
                 
                 <!-- Progress Bar -->
-                <div class="absolute bottom-0 left-0 h-1 bg-[#1f2937] w-full rounded-b-xl overflow-hidden">
+                <div class="absolute bottom-0 left-0 h-1 bg-[#1f2937] w-full rounded-b-2xl overflow-hidden">
                     <div id="signal-progress-bar" class="h-full bg-blue-500 transition-all duration-300" style="width: 0%;"></div>
                 </div>
             </div>
 
-            <!-- Risk Controls & Daily Limit -->
-            <div class="bg-[#111827] border border-[#1f2937] p-4 rounded-xl flex flex-col justify-between h-32 relative">
+            <!-- 4. RISK & DAILY SAFETY -->
+            <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-2xl flex flex-col justify-between h-36 relative overflow-hidden shadow-lg hover:border-cyan-500/40 transition-all">
                 <div class="flex justify-between items-center">
-                    <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Risk Controls</span>
-                    <div class="flex items-center gap-1">
-                        <span class="text-[9px] text-gray-400 font-bold uppercase">Daily Max:</span>
-                        <input type="number" id="max-trades-input" min="1" max="50" value="6" class="w-11 bg-[#1f2937] border border-[#374151] rounded px-1 text-center text-xs font-bold text-blue-400 focus:outline-none focus:border-blue-500 cursor-pointer" title="Max trades allowed per day">
-                    </div>
+                    <span class="text-xs font-bold uppercase tracking-wider text-slate-400">🛡️ Daily Drawdown</span>
+                    <span id="daily-trades-badge" class="text-[10px] bg-blue-500/20 text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded-full font-bold">0/6 TRADES</span>
                 </div>
-                <div class="flex flex-col mt-1">
-                    <div class="flex justify-between items-center text-[10px] text-gray-400 font-bold mb-1">
-                        <div class="flex items-center gap-1.5">
-                            <span>Trailing Stop</span>
-                            <label class="relative inline-flex items-center cursor-pointer">
-                                <input type="checkbox" id="tsl-toggle" class="sr-only peer" checked>
-                                <div class="w-6 h-3.5 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[1px] after:left-[1px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-500"></div>
-                            </label>
-                        </div>
-                        <span id="tsl-val-display" class="text-blue-400 text-xs">2.0x ATR</span>
-                    </div>
-                    <input type="range" id="tsl-slider" min="0.5" max="5.0" step="0.1" value="2.0" class="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                <div class="flex items-baseline space-x-1.5 my-1">
+                    <span id="drawdown-display" class="text-2xl font-black text-cyan-400 terminal-font">0.00%</span>
+                    <span class="text-xs text-slate-400 font-bold">/ 2.0% Max Loss</span>
+                </div>
+                <div class="flex items-center justify-between text-xs text-slate-400">
+                    <span>AI Bias: <span id="next-candle-badge" class="text-emerald-400 font-bold">🟢 GREEN (<span id="ml-prob">50%</span>)</span></span>
+                    <span class="hidden" id="next-candle-prob-text"></span>
+                    <span class="hidden" id="ml-status"></span>
+                    <span class="text-slate-500 text-[10px]">35% Cap Active</span>
+                </div>
+                <div class="w-full bg-[#1f2937] h-1.5 rounded-full overflow-hidden">
+                    <div id="drawdown-bar" class="h-full rounded-full transition-all duration-500 bg-cyan-500" style="width: 0%;"></div>
                 </div>
             </div>
+
         </section>
 
         <!-- MIDDLE SECTION (CHART & ACTIVE POSITION) -->
@@ -971,11 +957,14 @@
                         // Update stats
                         // Price display with live change color
                         const priceEl = document.getElementById('price-display');
-                        const newPrice = state.latest_price || 0;
+                        const curSym = state.symbol || 'BTC/USDT';
+                        const newPrice = (state.latest_prices && state.latest_prices[curSym]) ? state.latest_prices[curSym] : (state.latest_price || 0);
                         const prevPrice = parseFloat(priceEl.dataset.prev || newPrice);
-                        priceEl.innerText = newPrice.toFixed(2);
-                        priceEl.style.color = newPrice > prevPrice ? '#22c55e' : newPrice < prevPrice ? '#ef4444' : '#ffffff';
-                        priceEl.dataset.prev = newPrice;
+                        if (newPrice > 0) {
+                            priceEl.innerText = newPrice >= 10 ? newPrice.toFixed(2) : newPrice.toFixed(4);
+                            priceEl.style.color = newPrice > prevPrice ? '#22c55e' : newPrice < prevPrice ? '#ef4444' : '#ffffff';
+                            priceEl.dataset.prev = newPrice;
+                        }
                         
                         // Signal Light DOM Update
                         const slCircle = document.getElementById('signal-light-circle');
@@ -1032,11 +1021,20 @@
                             priceLabel.innerText = state.balance_currency || "USDT";
                         }
  
-                        // Price change percentage vs prev tick
-                        const priceDiffPct = prevPrice > 0 ? ((newPrice - prevPrice) / prevPrice * 100) : 0;
+                        // Candle price change percentage
+                        let priceDiffPct = 0;
+                        if (state.chart_history && state.chart_history.length > 0) {
+                            const lastCandle = state.chart_history[state.chart_history.length - 1];
+                            const openP = parseFloat(lastCandle[1]) || newPrice;
+                            if (openP > 0 && newPrice > 0) {
+                                priceDiffPct = ((newPrice - openP) / openP) * 100.0;
+                            }
+                        } else if (prevPrice > 0 && newPrice > 0) {
+                            priceDiffPct = ((newPrice - prevPrice) / prevPrice) * 100.0;
+                        }
                         const priceChangEl = document.getElementById('price-change-pct');
                         if (priceChangEl) {
-                            priceChangEl.innerText = `${priceDiffPct >= 0 ? '+' : ''}${priceDiffPct.toFixed(3)}%`;
+                            priceChangEl.innerText = `${priceDiffPct >= 0 ? '+' : ''}${priceDiffPct.toFixed(2)}%`;
                             priceChangEl.className = `text-xs font-bold mt-1 ${priceDiffPct >= 0 ? 'text-green-400' : 'text-red-400'}`;
                         }
 

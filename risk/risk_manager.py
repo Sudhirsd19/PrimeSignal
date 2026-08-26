@@ -32,16 +32,24 @@ class RiskManager:
         # 3. Calculate position size
         position_size = usdt_risk / stop_distance
         
-        # 4. Limit check: Position cost in USDT must be <= total equity * leverage
+        # 4. Limit check: Position cost in USDT must be <= total equity * max_allocation * leverage
         is_futures = getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures'
         leverage = getattr(Config, 'FUTURES_LEVERAGE', 1.0) if is_futures else 1.0
-        max_position_value = account_equity * leverage
+        max_alloc = getattr(Config, 'MAX_TRADE_ALLOCATION_PCT', 0.35)
+        
+        max_position_value = account_equity * max_alloc * leverage
+        
+        # Ensure minimum notional threshold can still be met for small accounts (e.g. 1000 INR / $10)
+        min_notional = 100.0 if getattr(Config, 'COINDCX_TRADE_INR', False) else 10.0
+        if account_equity >= min_notional and max_position_value < min_notional:
+            max_position_value = min(account_equity * 0.95, min_notional * 1.1)
+
         position_value_usdt = position_size * entry_price
         
         if position_value_usdt > max_position_value:
             if entry_price <= 0: return 0.0
             position_size = (max_position_value * 0.999) / entry_price
-            print(f"[RISK] Position size capped at maximum account capacity ({leverage}x): {position_size:.6f}")
+            print(f"[RISK] Position size capped at {max_alloc*100:.0f}% max capital allocation: {position_size:.6f} (${position_size*entry_price:.2f})")
             
         return round(position_size, 6)
 

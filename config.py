@@ -9,13 +9,15 @@ class Config:
     SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "")
     USE_TESTNET = os.getenv("USE_TESTNET", "True").lower() in ("true", "1", "yes")
     
-    # Product Settings (Elite 5 High-Liquidity SMC Momentum Pairs)
+    # Product Settings (20 High-Liquidity SMC Momentum Pairs)
     SYMBOL = os.getenv("SYMBOL", "BTC/USDT")
-    SUPPORTED_SYMBOLS = os.getenv("SUPPORTED_SYMBOLS", "BTC/USDT,XRP/USDT,SOL/USDT,LTC/USDT,OP/USDT").split(",")
+    SUPPORTED_SYMBOLS = os.getenv("SUPPORTED_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,AVAX/USDT,DOT/USDT,LTC/USDT,TRX/USDT,LINK/USDT,ATOM/USDT,ETC/USDT,FIL/USDT,APT/USDT,NEAR/USDT,ARB/USDT,OP/USDT,POL/USDT").split(",")
     TRADE_AMOUNT = float(os.getenv("TRADE_AMOUNT", "0.001"))
     
     # Risk parameters (Zero Net Capital Loss Architecture)
     RISK_PCT = float(os.getenv("RISK_PCT", "0.8"))
+    MAX_TRADE_ALLOCATION_PCT = float(os.getenv("MAX_TRADE_ALLOCATION_PCT", "0.35")) # Max 35% of total wallet equity per trade
+    DYNAMIC_BE_BUFFER_PCT = float(os.getenv("DYNAMIC_BE_BUFFER_PCT", "0.0030")) # Dynamic Roundtrip Fee (0.20%) + Slippage Buffer (0.10%)
     MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "2.0"))
     CONSECUTIVE_LOSS_LIMIT = int(os.getenv("CONSECUTIVE_LOSS_LIMIT", "2"))
     MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "2"))

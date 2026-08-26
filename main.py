@@ -72,13 +72,13 @@ class PrimeSignalBot:
         self.global_last_trade_time = 0
         self.traded_zones_cache = {}
 
-        # Dry-run virtual balance (used when no API keys are set)
+        # Dry-run virtual balance (used for paper trading & dry-run simulation)
         self._dry_run_balance_usdt = 10000.0   # starting paper balance
         
-        if not self.has_keys:
+        if not self.has_keys or Config.PAPER_TRADING:
             DashboardState.balance_usdt = self._dry_run_balance_usdt
             DashboardState.balance_base = 0.0
-            print("[INIT] ✅ Dry-run mode: Virtual balance initialized to $10,000 USDT")
+            print("[INIT] ✅ Paper-trading mode: Virtual balance initialized to $10,000 USDT")
 
         # Per-symbol locks to prevent concurrent candle processing on the same symbol
         self._candle_locks = {sym: asyncio.Lock() for sym in Config.SUPPORTED_SYMBOLS}
@@ -192,7 +192,7 @@ class PrimeSignalBot:
             DashboardState.entry_price = self.entry_price[sym]
             DashboardState.stop_loss = self.stop_loss[sym]
             DashboardState.take_profit = self.take_profit[sym]
-            DashboardState.balance_usdt = self._dry_run_balance_usdt
+            DashboardState.balance_usdt = self.calculate_total_equity() if (not self.has_keys or Config.PAPER_TRADING) else self._dry_run_balance_usdt
             
             # Immediately populate active_positions map for UI refresh recovery
             active_pos_map = {}
@@ -282,7 +282,7 @@ class PrimeSignalBot:
         await asyncio.sleep(3)
         
         # Initial Balance load
-        if self.has_keys:
+        if self.has_keys and not Config.PAPER_TRADING:
             balance = await self.execution.fetch_balance()
             if balance:
                 usdt_balance = balance.get('total', {}).get('USDT', None)
@@ -292,7 +292,7 @@ class PrimeSignalBot:
                     add_log_message(f"[WARNING] Balance fetch returned {usdt_balance}. Check account type. Keeping last known value.")
                 DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
         else:
-            DashboardState.balance_usdt = self._dry_run_balance_usdt
+            DashboardState.balance_usdt = self.calculate_total_equity()
             DashboardState.balance_base = 0.0
         
         # Train ML Models on historical candles for each symbol
@@ -308,7 +308,9 @@ class PrimeSignalBot:
 
         DashboardState.latest_price = self.pipeline.latest_prices.get(Config.SYMBOL, 0.0)
         DashboardState.chart_history = self.pipeline.ltf_candles[Config.SYMBOL][-100:] if self.pipeline.ltf_candles[Config.SYMBOL] else []
-        add_log_message(f"System ready. Multi-symbol watch active. UI viewing {Config.SYMBOL}")
+        DashboardState.signal_light = "BLUE"
+        DashboardState.signal_light_reason = f"Monitoring {len(Config.SUPPORTED_SYMBOLS)} pairs for institutional SMC setups..."
+        add_log_message(f"System ready. Multi-symbol watch active ({len(Config.SUPPORTED_SYMBOLS)} pairs). UI viewing {Config.SYMBOL}")
 
     async def on_candle_close(self, symbol):
         if self._candle_locks[symbol].locked():
@@ -328,7 +330,7 @@ class PrimeSignalBot:
         total_risk_pct = 0.0
         longs_count = 0
         shorts_count = 0
-        current_eq = self.calculate_total_equity() if not self.has_keys else DashboardState.balance_usdt
+        current_eq = self.calculate_total_equity() if (not self.has_keys or Config.PAPER_TRADING) else DashboardState.balance_usdt
 
         for sym in Config.SUPPORTED_SYMBOLS:
             if self.in_position[sym]:
@@ -398,7 +400,7 @@ class PrimeSignalBot:
             return
 
         # Update balance via API if live
-        if self.has_keys:
+        if self.has_keys and not Config.PAPER_TRADING:
             balance = await self.execution.fetch_balance()
             if balance:
                 usdt_balance = balance.get('total', {}).get('USDT', None)
@@ -407,7 +409,7 @@ class PrimeSignalBot:
                 DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
                 
         # Check drawdown circuit breakers
-        current_equity = DashboardState.balance_usdt if self.has_keys else self.calculate_total_equity()
+        current_equity = DashboardState.balance_usdt if (self.has_keys and not Config.PAPER_TRADING) else self.calculate_total_equity()
             
         if not self.risk.check_circuit_breaker(current_equity):
             DashboardState.signal_light = "RED"
@@ -734,6 +736,16 @@ class PrimeSignalBot:
         # Scale pos_size by the dynamic trade_risk_pct (default calculate_position_size uses Config.RISK_PCT)
         # So we adjust it relative to default RISK_PCT
         pos_size = pos_size * (trade_risk_pct / (getattr(Config, 'RISK_PCT', 0.8) / 100.0))
+        
+        # Strict safeguard: never allocate more than MAX_TRADE_ALLOCATION_PCT of current equity into a single trade
+        max_trade_val = current_equity * getattr(Config, 'MAX_TRADE_ALLOCATION_PCT', 0.35)
+        min_trade_notional = 100.0 if getattr(Config, 'COINDCX_TRADE_INR', False) else 10.0
+        if current_equity >= min_trade_notional and max_trade_val < min_trade_notional:
+            max_trade_val = min(current_equity * 0.95, min_trade_notional * 1.1)
+            
+        if pos_size * entry_price > max_trade_val:
+            pos_size = (max_trade_val * 0.999) / entry_price
+            
         if pos_size <= 0.0:
             return
 
@@ -756,12 +768,16 @@ class PrimeSignalBot:
         if signal == "BUY":
             add_log_message(f"[{symbol}] Executing BUY (LONG). Size: {pos_size:.6f} | SL: {sl:.2f} | TP: {tp:.2f}")
             order = None
-            if self.has_keys:
+            if self.has_keys and not Config.PAPER_TRADING:
                 order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol)
             else:
                 position_cost = pos_size * entry_price
                 if position_cost <= self._dry_run_balance_usdt:
                     self._dry_run_balance_usdt -= position_cost
+                    order = {'id': 'MOCK_BUY_ORDER_ID', 'price': entry_price, 'status': 'filled'}
+                elif self._dry_run_balance_usdt > 0:
+                    pos_size = self._dry_run_balance_usdt / entry_price
+                    self._dry_run_balance_usdt = 0.0
                     order = {'id': 'MOCK_BUY_ORDER_ID', 'price': entry_price, 'status': 'filled'}
 
             if order:
@@ -824,12 +840,16 @@ class PrimeSignalBot:
                 
         elif signal == "SELL":
             order = None
-            if self.has_keys:
+            if self.has_keys and not Config.PAPER_TRADING:
                 order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol)
             else:
                 collateral = pos_size * entry_price
                 if collateral <= self._dry_run_balance_usdt:
                     self._dry_run_balance_usdt -= collateral
+                    order = {'id': 'MOCK_SELL_ORDER_ID', 'price': entry_price, 'status': 'filled'}
+                elif self._dry_run_balance_usdt > 0:
+                    pos_size = self._dry_run_balance_usdt / entry_price
+                    self._dry_run_balance_usdt = 0.0
                     order = {'id': 'MOCK_SELL_ORDER_ID', 'price': entry_price, 'status': 'filled'}
                 
             if order:
@@ -935,9 +955,12 @@ class PrimeSignalBot:
                             self.highest_price_reached[symbol] = max(self.highest_price_reached[symbol], curr_price)
                             r_dist = abs(self.entry_price[symbol] - self.stop_loss[symbol])
                             
-                            # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven at +0.50R Profit
-                            if self.highest_price_reached[symbol] >= self.entry_price[symbol] + (0.50 * r_dist):
-                                fee_offset = min(self.entry_price[symbol] * 0.0015, 0.15 * r_dist)
+                            # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven
+                            fee_buffer_pct = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
+                            fee_offset = self.entry_price[symbol] * fee_buffer_pct
+                            min_required_profit = max(0.50 * r_dist, fee_offset * 1.15)
+                            
+                            if self.highest_price_reached[symbol] >= self.entry_price[symbol] + min_required_profit:
                                 be_sl = min(curr_price * 0.9995, self.entry_price[symbol] + fee_offset)
                                 if be_sl > self.stop_loss[symbol]:
                                     self.stop_loss[symbol] = be_sl
@@ -983,7 +1006,7 @@ class PrimeSignalBot:
                                 add_log_message(f"[{symbol}] 🎯 Target 1 hit! Booking 50% profit.")
                                 tp1_size = self.position_size[symbol] * 0.50
                                 tp1_success = False
-                                if self.has_keys:
+                                if self.has_keys and not Config.PAPER_TRADING:
                                     tp1_order = await self.execution.place_order('sell', 'market', tp1_size, symbol=symbol, is_exit_order=True)
                                     tp1_success = bool(tp1_order)
                                 else:
@@ -1025,7 +1048,7 @@ class PrimeSignalBot:
                                 add_log_message(f"[{symbol}] 🎯 Target 2 (2.2R) hit! Booking 30% profit. 20% Runner active.")
                                 tp2_size = self.position_size[symbol] * 0.60  # 60% of remaining 50% = 30% of original
                                 tp2_success = False
-                                if self.has_keys:
+                                if self.has_keys and not Config.PAPER_TRADING:
                                     tp2_order = await self.execution.place_order('sell', 'market', tp2_size, symbol=symbol, is_exit_order=True)
                                     tp2_success = bool(tp2_order)
                                 else:
@@ -1075,9 +1098,12 @@ class PrimeSignalBot:
                             self.lowest_price_reached[symbol] = min(self.lowest_price_reached[symbol], curr_price)
                             r_dist = abs(self.entry_price[symbol] - self.stop_loss[symbol])
                             
-                            # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven at +0.50R Profit
-                            if self.lowest_price_reached[symbol] <= self.entry_price[symbol] - (0.50 * r_dist):
-                                fee_offset = min(self.entry_price[symbol] * 0.0015, 0.15 * r_dist)
+                            # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven
+                            fee_buffer_pct = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
+                            fee_offset = self.entry_price[symbol] * fee_buffer_pct
+                            min_required_profit = max(0.50 * r_dist, fee_offset * 1.15)
+                            
+                            if self.lowest_price_reached[symbol] <= self.entry_price[symbol] - min_required_profit:
                                 be_sl = max(curr_price * 1.0005, self.entry_price[symbol] - fee_offset)
                                 if be_sl < self.stop_loss[symbol]:
                                     self.stop_loss[symbol] = be_sl
@@ -1123,7 +1149,7 @@ class PrimeSignalBot:
                                 add_log_message(f"[{symbol}] 🎯 Target 1 hit! Booking 50% profit.")
                                 tp1_size = self.position_size[symbol] * 0.50
                                 tp1_success = False
-                                if self.has_keys:
+                                if self.has_keys and not Config.PAPER_TRADING:
                                     tp1_order = await self.execution.place_order('buy', 'market', tp1_size, symbol=symbol, is_exit_order=True)
                                     tp1_success = bool(tp1_order)
                                 else:
@@ -1165,7 +1191,7 @@ class PrimeSignalBot:
                                 add_log_message(f"[{symbol}] 🎯 Target 2 (2.2R) hit! Booking 30% profit. 20% Runner active.")
                                 tp2_size = self.position_size[symbol] * 0.60  # 60% of remaining 50% = 30% of original
                                 tp2_success = False
-                                if self.has_keys:
+                                if self.has_keys and not Config.PAPER_TRADING:
                                     tp2_order = await self.execution.place_order('buy', 'market', tp2_size, symbol=symbol, is_exit_order=True)
                                     tp2_success = bool(tp2_order)
                                 else:
@@ -1187,16 +1213,16 @@ class PrimeSignalBot:
                                     if self.take_profit_1r[symbol] < self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = self.take_profit_1r[symbol]
                                         if symbol == Config.SYMBOL: DashboardState.stop_loss = self.take_profit_1r[symbol]
-                                    guar_pnl_pct = max(0.0, (self.entry_price[symbol] - self.stop_loss[symbol]) / self.entry_price[symbol] * 100.0)
-                                    guar_pnl_usdt = max(0.0, self.position_size[symbol] * (self.entry_price[symbol] - self.stop_loss[symbol]))
-                                    add_log_message(f"[{symbol}] 🚀 TP2 Hit! SL locked at TP1 level ({self.stop_loss[symbol]:.4f}). Trailing Runner active.")
-                                    await self.notifier.send_message(
-                                        f"🚀 *DEEP PROFIT LOCKED ({symbol})*\n"
-                                        f"🎯 TP2 Hit! 30% profit booked.\n"
-                                        f"🔒 Guaranteed Deep Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
-                                        f"🎯 New Active Target: Runner Target (3.5R) @ {self.take_profit[symbol]:.4f}"
-                                    )
-                                    self.save_state()
+                                        guar_pnl_pct = max(0.0, (self.entry_price[symbol] - self.stop_loss[symbol]) / self.entry_price[symbol] * 100.0)
+                                        guar_pnl_usdt = max(0.0, self.position_size[symbol] * (self.entry_price[symbol] - self.stop_loss[symbol]))
+                                        add_log_message(f"[{symbol}] 🚀 TP2 Hit! SL locked at TP1 level ({self.stop_loss[symbol]:.4f}). Trailing Runner active.")
+                                        await self.notifier.send_message(
+                                            f"🚀 *DEEP PROFIT LOCKED ({symbol})*\n"
+                                            f"🎯 TP2 Hit! 30% profit booked.\n"
+                                            f"🔒 Guaranteed Deep Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
+                                            f"🎯 New Active Target: Runner Target (3.5R) @ {self.take_profit[symbol]:.4f}"
+                                        )
+                                        self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP2 order REJECTED by exchange. State NOT updated.")
 
@@ -1214,7 +1240,7 @@ class PrimeSignalBot:
                 # Update UI for selected Config.SYMBOL
                 sym = Config.SYMBOL
                 DashboardState.latest_price = self.pipeline.latest_prices.get(sym, 0.0)
-                if not self.has_keys:
+                if not self.has_keys or Config.PAPER_TRADING:
                     DashboardState.balance_usdt = self.calculate_total_equity()
                     
                 if self.pipeline.ltf_candles[sym]:
@@ -1386,7 +1412,7 @@ class PrimeSignalBot:
             exit_price = self.entry_price[symbol]
         add_log_message(f"[{symbol}] Exiting at price: {exit_price:.4f} (reason: {reason})")
         order = None
-        if self.has_keys:
+        if self.has_keys and not Config.PAPER_TRADING:
             side = 'buy' if self.position_side[symbol] == 'SHORT' else 'sell'
             order = await self.execution.place_order(side, 'market', self.position_size[symbol], price=exit_price, is_exit_order=True, symbol=symbol)
         else:
@@ -1396,12 +1422,12 @@ class PrimeSignalBot:
             if self.position_side[symbol] == "LONG":
                 pnl_pct = (exit_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
                 pnl_usdt = self.position_size[symbol] * (exit_price - self.entry_price[symbol])
-                if not self.has_keys:
+                if not self.has_keys or Config.PAPER_TRADING:
                     self._dry_run_balance_usdt += self.position_size[symbol] * exit_price
             else:
                 pnl_pct = (self.entry_price[symbol] - exit_price) / self.entry_price[symbol] * 100.0
                 pnl_usdt = self.position_size[symbol] * (self.entry_price[symbol] - exit_price)
-                if not self.has_keys:
+                if not self.has_keys or Config.PAPER_TRADING:
                     self._dry_run_balance_usdt += (self.position_size[symbol] * self.entry_price[symbol]) + pnl_usdt
                 
             trade_record = {

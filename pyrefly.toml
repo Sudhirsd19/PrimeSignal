@@ -1,0 +1,5 @@
+search_paths = [
+    ".venv/Lib/site-packages",
+    "."
+]
+venv = ".venv"

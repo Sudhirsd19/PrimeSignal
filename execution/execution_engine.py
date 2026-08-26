@@ -246,25 +246,29 @@ class ExecutionEngine:
                         print(f"[EXECUTION] Order aborted: Slippage ({slippage*100:.2f}%) exceeds max ({max_slippage_pct*100:.2f}%).")
                         return None
 
-        # 2. Place order with retries
+        # 2. Place order with retries and deterministic Client Order ID (Idempotency)
+        import uuid
+        client_order_id = f"PS_{symbol.replace('/', '')}_{side.upper()}_{int(time.time()*1000)}_{str(uuid.uuid4())[:4]}"
+        params = {'clientOrderId': client_order_id}
+        
         fn = None
         args = [symbol, amount]
 
         if order_type.upper() == "MARKET":
             fn = self.trade_client.create_market_order
-            args = [symbol, side.lower(), amount]
+            args = [symbol, side.lower(), amount, params]
         elif order_type.upper() == "LIMIT":
             if price is None:
                 print("[EXECUTION] Order error: Limit orders require a price.")
                 return None
             fn = self.trade_client.create_order
-            args = [symbol, 'limit', side.lower(), amount, price]
+            args = [symbol, 'limit', side.lower(), amount, price, params]
 
         if fn is None:
             fn = self.trade_client.create_order
-            args = [symbol, order_type.lower(), side.lower(), amount, price]
+            args = [symbol, order_type.lower(), side.lower(), amount, price, params]
 
-        print(f"[EXECUTION] Sending {order_type.upper()} {side.upper()} order for {amount} {symbol}...")
+        print(f"[EXECUTION] Sending {order_type.upper()} {side.upper()} order for {amount} {symbol} (Client ID: {client_order_id})...")
         order = await self.execute_with_retry(fn, *args)
         if order:
             print(f"[EXECUTION] Order submitted! ID: {order['id']}, Status: {order['status']}")

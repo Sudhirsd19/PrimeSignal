@@ -149,10 +149,20 @@ class RealTimeDataPipeline:
                                 float(kline['c']),           # Close
                                 float(kline['v'])            # Volume
                             ]
-                            is_closed = kline['x']
+                            # Always update latest_prices for any incoming kline event
+                            self.latest_prices[symbol] = candle[4]
+                            if symbol == Config.SYMBOL:
+                                from dashboard.app import DashboardState
+                                DashboardState.latest_price = candle[4]
                             
                             if timeframe == Config.LTF_TIMEFRAME:
-                                self.latest_prices[symbol] = candle[4]
+                                # Exact Timestamp-based Gap Detection (ChatGPT v2.2 specification)
+                                last_ts = self._last_candle_ts['ltf'].get(symbol, 0)
+                                tf_mins = int(Config.LTF_TIMEFRAME.replace('m', '').replace('h', '60'))
+                                tf_ms = tf_mins * 60 * 1000
+                                if last_ts > 0 and (candle[0] - last_ts) > (tf_ms * 1.5):
+                                    print(f"[DATA] ⚠️ Timestamp gap detected on {symbol}! (Expected: {last_ts + tf_ms}, Got: {candle[0]})")
+                                
                                 self._update_candle_cache(self.ltf_candles[symbol], candle, is_closed)
                                 if is_closed:
                                     self._last_candle_ts['ltf'][symbol] = candle[0]

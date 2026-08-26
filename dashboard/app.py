@@ -75,8 +75,8 @@ class DashboardState:
     coindcx_profile = None
     coindcx_balances = []
     
-    signal_light = "RED"
-    signal_light_reason = "System starting up..."
+    signal_light = "BLUE"
+    signal_light_reason = "Scanning market for institutional SMC setups..."
     
     symbol_change_requested = None # Holds new symbol if requested by UI
     active_websockets = set()
@@ -120,8 +120,8 @@ async def set_mode(req: ModeRequest):
                                 DashboardState.balance_usdt = usdt_balance
                         DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
             else:
-                # Switching to PAPER: reset to virtual balance
-                DashboardState.balance_usdt = bot_instance._dry_run_balance_usdt
+                # Switching to PAPER: reset to total virtual equity (cash + open positions)
+                DashboardState.balance_usdt = bot_instance.calculate_total_equity()
                 DashboardState.balance_base = 0.0
         except Exception as e:
             print(f"[MODE SWITCH] Error syncing balances: {e}")
@@ -408,8 +408,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
 def _build_state_payload():
     """Build the state dict to broadcast to WebSocket clients."""
+    live_p = bot_instance.pipeline.latest_prices.get(Config.SYMBOL, DashboardState.latest_price) if (bot_instance and hasattr(bot_instance, 'pipeline')) else DashboardState.latest_price
     return {
-        "latest_price": DashboardState.latest_price,
+        "latest_price": live_p,
         "latest_prices": bot_instance.pipeline.latest_prices if (bot_instance and hasattr(bot_instance, 'pipeline')) else {},
         "balance_usdt": DashboardState.balance_usdt,
         "balance_base": DashboardState.balance_base,
