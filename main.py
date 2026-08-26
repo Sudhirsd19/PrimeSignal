@@ -569,7 +569,7 @@ class PrimeSignalBot:
             return
             
         # Session Volume Block
-        if is_low_volume_session:
+        if getattr(Config, 'ENABLE_SESSION_FILTER', False) and not Config.PAPER_TRADING and is_low_volume_session:
             avg_vol = ltf_df['volume'].rolling(20).mean().iloc[-2] if len(ltf_df) > 20 else 0.0
             vol_mult = 1.0 if metadata.get('score', 0) >= 3.5 else 1.2
             if ltf_df['volume'].iloc[-1] < vol_mult * avg_vol:
@@ -769,18 +769,19 @@ class PrimeSignalBot:
                 return
                 
         min_vol = 30000000 if relaxed_used else getattr(Config, 'MIN_24H_VOL_USDT', 50000000)
-        if vol < min_vol:
-            all_tickers = await self.execution.fetch_all_tickers()
-            is_top_20 = False
-            if all_tickers:
-                sorted_tickers = sorted([t for t in all_tickers.values() if t.get('quoteVolume')], key=lambda x: x.get('quoteVolume', 0), reverse=True)
-                top_20 = [t['symbol'] for t in sorted_tickers[:20]]
-                if symbol in top_20:
-                    is_top_20 = True
-            
-            if not is_top_20:
-                add_log_message(f"[{symbol}] Rejected: Low volume ({vol:,.0f} USDT) and not in top 20.")
-                return
+        if not Config.PAPER_TRADING and vol > 0 and vol < min_vol:
+            if symbol not in Config.SUPPORTED_SYMBOLS:
+                all_tickers = await self.execution.fetch_all_tickers()
+                is_top_20 = False
+                if all_tickers:
+                    sorted_tickers = sorted([t for t in all_tickers.values() if t.get('quoteVolume')], key=lambda x: x.get('quoteVolume', 0), reverse=True)
+                    top_20 = [t['symbol'] for t in sorted_tickers[:20]]
+                    if symbol in top_20:
+                        is_top_20 = True
+                
+                if not is_top_20:
+                    add_log_message(f"[{symbol}] Rejected: Low volume ({vol:,.0f} USDT) and not in top 20.")
+                    return
         
         # Slippage Check
         live_price = ticker.get('last', entry_price)
