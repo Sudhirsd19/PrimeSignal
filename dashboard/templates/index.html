@@ -33,8 +33,14 @@
         }
 
         /* High-Visibility Custom Scrollbar for Active Positions */
+        .positions-scrollbar {
+            overflow-y: scroll !important;
+            scrollbar-width: thin;
+            scrollbar-color: #3b82f6 rgba(15, 23, 42, 0.8);
+        }
         .positions-scrollbar::-webkit-scrollbar {
             width: 6px;
+            display: block !important;
         }
         .positions-scrollbar::-webkit-scrollbar-track {
             background: rgba(15, 23, 42, 0.8);
@@ -46,10 +52,6 @@
         }
         .positions-scrollbar::-webkit-scrollbar-thumb:hover {
             background: #60a5fa;
-        }
-        .positions-scrollbar {
-            scrollbar-width: thin;
-            scrollbar-color: #3b82f6 rgba(15, 23, 42, 0.8);
         }
 
         /* --- LIGHT THEME OVERRIDES --- */
