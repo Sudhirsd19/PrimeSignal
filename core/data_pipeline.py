@@ -156,12 +156,16 @@ class RealTimeDataPipeline:
                                 DashboardState.latest_price = candle[4]
                             
                             if timeframe == Config.LTF_TIMEFRAME:
-                                # Exact Timestamp-based Gap Detection (ChatGPT v2.2 specification)
+                                # Exact Timestamp-based Gap Detection & Serialized Ingestion (P1 Invariant)
                                 last_ts = self._last_candle_ts['ltf'].get(symbol, 0)
                                 tf_mins = int(Config.LTF_TIMEFRAME.replace('m', '').replace('h', '60'))
                                 tf_ms = tf_mins * 60 * 1000
                                 if last_ts > 0 and (candle[0] - last_ts) > (tf_ms * 1.5):
-                                    print(f"[DATA] ⚠️ Timestamp gap detected on {symbol}! (Expected: {last_ts + tf_ms}, Got: {candle[0]})")
+                                    print(f"[DATA] ⚠️ Timestamp gap detected on {symbol}! (Expected: {last_ts + tf_ms}, Got: {candle[0]}). Serializing backfill...")
+                                    try:
+                                        await self.fetch_historical_data(symbol, Config.LTF_TIMEFRAME, limit=100)
+                                    except Exception as e:
+                                        print(f"[DATA] Backfill error: {e}")
                                 
                                 self._update_candle_cache(self.ltf_candles[symbol], candle, is_closed)
                                 if is_closed:
