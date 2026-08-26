@@ -593,11 +593,38 @@ def _build_state_payload():
             if tp_p < entry_p:
                 target_progress = max(0.0, min(1.0, (entry_p - live_p) / (entry_p - tp_p)))
 
+    # Compute authoritative held crypto quantity dynamically from open position
+    active_sym = Config.SYMBOL
+    base_coin = active_sym.split('/')[0]
+    held_qty = 0.0
+    if bot_instance and hasattr(bot_instance, 'in_position'):
+        if bot_instance.in_position.get(active_sym, False) and bot_instance.position_side.get(active_sym) == "LONG":
+            held_qty = bot_instance.position_size.get(active_sym, 0.0)
+    elif active_sym in DashboardState.active_positions:
+        pos = DashboardState.active_positions[active_sym]
+        if pos.get('side') == 'LONG':
+            held_qty = pos.get('position_size', 0.0)
+    elif in_pos and side == "LONG":
+        held_qty = DashboardState.position_size or 0.0
+        
+    DashboardState.balance_base = held_qty
+    
+    # Sync base coin holding in coindcx_balances array
+    coindcx_bals = list(DashboardState.coindcx_balances)
+    found_coin = False
+    for item in coindcx_bals:
+        if item.get('currency') == base_coin:
+            item['available'] = round(float(held_qty), 6)
+            found_coin = True
+            break
+    if not found_coin and base_coin not in ('USDT', 'INR'):
+        coindcx_bals.append({'currency': base_coin, 'available': round(float(held_qty), 6), 'locked': 0.0})
+
     return {
         "latest_price": live_p,
         "latest_prices": bot_instance.pipeline.latest_prices if (bot_instance and hasattr(bot_instance, 'pipeline')) else {},
         "balance_usdt": DashboardState.balance_usdt,
-        "balance_base": DashboardState.balance_base,
+        "balance_base": held_qty,
         "in_position": in_pos,
         "position_side": side,
         "entry_price": entry_p,
