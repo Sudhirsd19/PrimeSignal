@@ -55,6 +55,16 @@ class DashboardState:
     latest_price = 0.0
     balance_usdt = 10000.0
     balance_base = 0.0
+    
+    in_position = False
+    position_side = "HOLD"
+    entry_price = 0.0
+    stop_loss = 0.0
+    take_profit = 0.0
+    position_size = 0.0
+    current_pnl_usdt = 0.0
+    current_pnl_pct = 0.0
+    
     active_positions = {} # dictionary of symbol -> dict with position details
     
     trades = []
@@ -71,6 +81,7 @@ class DashboardState:
     active_ob_level = 0.0
     active_ob_type = "NONE"
     active_bullish_ob_level = 0.0
+    active_bearish_ob_level = 0.0
     chart_history = []
     coindcx_profile = {
         "status": "Paper Mode (Active)",
