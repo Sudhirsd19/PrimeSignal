@@ -1654,7 +1654,7 @@ class PrimeSignalBot:
         add_log_message(f"✅ Execution timeframe switched to {new_tf.upper()}. Chart & signals active.")
 
     def lock_position_profit(self, symbol):
-        """Manually lock profit for an active position by adjusting Stop Loss."""
+        """Manually lock profit for an active position by adjusting Stop Loss to breakeven or trailing profit."""
         if not self.in_position[symbol]:
             return False, f"No active position open for {symbol}."
             
@@ -1662,7 +1662,6 @@ class PrimeSignalBot:
         entry_p = self.entry_price[symbol]
         sl_p = self.stop_loss[symbol]
         is_long = (self.position_side[symbol] == "LONG")
-        r_dist = abs(entry_p - sl_p)
         
         # Guard: Reject profit lock if position is currently in a loss
         if is_long and live_p < entry_p:
@@ -1671,21 +1670,31 @@ class PrimeSignalBot:
             return False, f"Cannot lock profit for {symbol} — position is currently in loss (Live: {live_p:.4f} > Entry: {entry_p:.4f})."
         
         if is_long:
-            # Lock at least breakeven + 0.15R or 50% of current unrealized profit
-            lock_delta = max(0.15 * r_dist, (live_p - entry_p) * 0.5)
-            new_sl = max(sl_p, entry_p + lock_delta)
+            # Breakeven lock: set SL to entry_price + fee buffer (0.05%) or 50% of profit, but strictly below live price
+            fee_buffer = entry_p * 0.0005
+            target_sl = max(entry_p + fee_buffer, entry_p + (live_p - entry_p) * 0.5)
+            new_sl = min(live_p * 0.9995, target_sl)
+            new_sl = max(sl_p, new_sl) # Never worsen existing SL
             self.stop_loss[symbol] = new_sl
+            if symbol in DashboardState.active_positions:
+                DashboardState.active_positions[symbol]['stop_loss'] = new_sl
+                DashboardState.active_positions[symbol]['profit_locked'] = True
             if symbol == Config.SYMBOL:
                 DashboardState.stop_loss = new_sl
         else:
-            lock_delta = max(0.15 * r_dist, (entry_p - live_p) * 0.5)
-            new_sl = min(sl_p, entry_p - lock_delta)
+            fee_buffer = entry_p * 0.0005
+            target_sl = min(entry_p - fee_buffer, entry_p - (entry_p - live_p) * 0.5)
+            new_sl = max(live_p * 1.0005, target_sl)
+            new_sl = min(sl_p, new_sl) # Never worsen existing SL
             self.stop_loss[symbol] = new_sl
+            if symbol in DashboardState.active_positions:
+                DashboardState.active_positions[symbol]['stop_loss'] = new_sl
+                DashboardState.active_positions[symbol]['profit_locked'] = True
             if symbol == Config.SYMBOL:
                 DashboardState.stop_loss = new_sl
                 
         self.save_state()
-        msg = f"🔒 Profit locked for {symbol}! New Stop Loss set to {self.stop_loss[symbol]:.4f}"
+        msg = f"🔒 Profit locked for {symbol}! Stop Loss moved to ${self.stop_loss[symbol]:,.4f}"
         add_log_message(f"[{symbol}] {msg}")
         return True, msg
 
