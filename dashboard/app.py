@@ -266,6 +266,11 @@ async def trigger_test_trade(req: TestTradeRequest = None):
         tp2_p = live_p * 1.025 if is_long else live_p * 0.975
         pos_size = 0.05 if "BTC" in symbol else (0.5 if "ETH" in symbol else 5.0)
         
+        # Deduct position cost from dry run virtual cash
+        pos_cost = pos_size * live_p
+        if hasattr(bot_instance, '_dry_run_balance_usdt') and pos_cost <= bot_instance._dry_run_balance_usdt:
+            bot_instance._dry_run_balance_usdt -= pos_cost
+        
         bot_instance.in_position[symbol] = True
         bot_instance.position_side[symbol] = "LONG" if is_long else "SHORT"
         bot_instance.entry_price[symbol] = live_p
@@ -278,6 +283,11 @@ async def trigger_test_trade(req: TestTradeRequest = None):
         bot_instance.last_trade_time[symbol] = time.time()
         bot_instance.highest_price_reached[symbol] = live_p
         bot_instance.trades_today += 1
+        
+        # Calculate true authoritative net equity
+        DashboardState.balance_usdt = bot_instance.calculate_total_equity()
+        if is_long:
+            DashboardState.balance_base = pos_size
         
         entry_dt_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
