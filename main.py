@@ -261,6 +261,7 @@ class PrimeSignalBot:
             self.tp2_taken[sym] = False
 
         self.traded_zones_cache.clear()
+        DashboardState.trades.clear()
         DashboardState.balance_usdt = float(target_balance)
         DashboardState.balance_base = 0.0
         DashboardState.active_positions.clear()
@@ -272,7 +273,7 @@ class PrimeSignalBot:
         DashboardState.current_pnl_pct = 0.0
         DashboardState.current_pnl_usdt = 0.0
         self.save_state()
-        add_log_message(f"🔄 [ACCOUNT RESET] Virtual paper balance reset to ${target_balance:,.2f} USDT. All positions cleared for fresh trading.")
+        add_log_message(f"🔄 [ACCOUNT RESET] Virtual paper balance reset to ${target_balance:,.2f} USDT. All positions and trade history cleared for fresh trading.")
 
     async def initialize(self):
         add_log_message("Starting system initialization for all supported symbols...")
