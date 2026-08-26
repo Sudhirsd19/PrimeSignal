@@ -1362,9 +1362,9 @@
                             const sbStatus = document.getElementById('sidebar-dcx-status');
                             if (sbStatus) {
                                 sbStatus.innerText = p.status || "Offline";
-                                sbStatus.className = p.status === "Connected" 
+                                sbStatus.className = (p.status === "Connected" || (p.status && (p.status.includes("Paper") || p.status.includes("Demo") || p.status.includes("Active"))))
                                     ? "text-[10px] font-extrabold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
-                                    : (p.status && p.status.includes("Demo") ? "text-[10px] font-extrabold px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400 border border-indigo-500/30" : "text-[10px] font-extrabold px-2 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30");
+                                    : "text-[10px] font-extrabold px-2 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30";
                             }
                             const sbName = document.getElementById('sidebar-dcx-name');
                             if (sbName) sbName.innerText = p.name || "Unknown";
