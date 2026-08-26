@@ -27,11 +27,29 @@
         }
         .glow-red {
             box-shadow: 0 0 15px rgba(239, 68, 68, 0.2);
-            border-color: rgba(239, 68, 68, 0.4);
-        }
         .glow-blue {
             box-shadow: 0 0 15px rgba(59, 130, 246, 0.2);
             border-color: rgba(59, 130, 246, 0.4);
+        }
+
+        /* High-Visibility Custom Scrollbar for Active Positions */
+        .positions-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .positions-scrollbar::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.8);
+            border-radius: 6px;
+        }
+        .positions-scrollbar::-webkit-scrollbar-thumb {
+            background: #3b82f6;
+            border-radius: 6px;
+        }
+        .positions-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #60a5fa;
+        }
+        .positions-scrollbar {
+            scrollbar-width: thin;
+            scrollbar-color: #3b82f6 rgba(15, 23, 42, 0.8);
         }
 
         /* --- LIGHT THEME OVERRIDES --- */
@@ -415,13 +433,13 @@
 
                     <!-- Tab Content: Active Position -->
                     <div id="content-active-position" class="flex flex-col justify-between flex-grow min-h-0 p-3 overflow-hidden">
-                        <div class="flex-grow overflow-y-auto min-h-0 pr-1 space-y-2 scrollbar-thin">
+                        <div id="positions-scroll-container" class="flex-grow overflow-y-auto min-h-0 pr-1.5 space-y-2.5 positions-scrollbar">
                             <div id="no-position-view" class="flex flex-col items-center justify-center h-52 border border-dashed border-[#1f2937] rounded-xl text-gray-500">
                                 <p class="text-sm font-semibold text-gray-400">NO ACTIVE POSITIONS</p>
                                 <p class="text-xs text-gray-600 mt-1">Bot is actively scanning 20 pairs for setups...</p>
                             </div>
                             
-                            <div id="active-position-view" class="hidden flex-col gap-2">
+                            <div id="active-position-view" class="hidden flex-col gap-2.5">
                                 <!-- Cards injected here via JS -->
                             </div>
                         </div>
