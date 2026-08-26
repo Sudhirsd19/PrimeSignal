@@ -129,6 +129,27 @@
                         <span id="sidebar-dcx-id" class="text-gray-300 terminal-font text-[11px]">unknown</span>
                     </div>
                 </div>
+
+                <!-- Balances Table inside Sidebar -->
+                <div class="border-t border-[#1f2937] pt-2 mt-2">
+                    <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1.5">Live Wallet Balances</span>
+                    <div class="overflow-x-auto max-h-[140px] scrollbar-thin">
+                        <table class="w-full text-left text-[11px]">
+                            <thead class="text-gray-500 uppercase border-b border-[#1f2937] text-[9px] font-bold">
+                                <tr>
+                                    <th class="py-1">Asset</th>
+                                    <th class="py-1 text-right">Available</th>
+                                    <th class="py-1 text-right">Locked</th>
+                                </tr>
+                            </thead>
+                            <tbody id="sidebar-dcx-balances-tbody" class="divide-y divide-[#1f2937]/50 text-gray-300">
+                                <tr>
+                                    <td class="py-2 text-gray-500 text-center" colspan="3">No balance loaded</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
 
             <!-- Settings & Configuration -->
@@ -378,182 +399,109 @@
                 </div>
             </div>
 
-            <!-- Active Position & CoinDCX Account Panel -->
+            <!-- Active Position & Analytics Panel -->
             <div class="col-span-1 lg:col-span-1 flex flex-col h-[500px]">
-                <div id="position-card" class="bg-[#111827] border border-[#1f2937] rounded-xl flex flex-col h-full overflow-hidden">
-                    <!-- Tabs Header -->
-                    <div class="flex border-b border-[#1f2937] p-2 space-x-2">
-                        <button id="tab-active-position" class="flex-1 pb-2 text-[10px] font-bold uppercase tracking-wider text-blue-400 border-b-2 border-blue-500 focus:outline-none transition-colors duration-200 truncate px-1 flex items-center justify-center gap-1.5">
-                            <span>Position</span>
+                <div id="position-card" class="bg-[#111827] border border-[#1f2937] rounded-xl flex flex-col h-full overflow-hidden shadow-lg">
+                    <!-- Tabs Header (Clean 2-Tab Navigation) -->
+                    <div class="flex border-b border-[#1f2937] p-2 bg-[#0d121f]">
+                        <button id="tab-active-position" class="flex-1 py-2 text-[11px] font-bold uppercase tracking-wider text-blue-400 border-b-2 border-blue-500 focus:outline-none transition-colors duration-200 flex items-center justify-center gap-1.5 cursor-pointer">
+                            <span>Positions</span>
                             <span id="active-pos-count-badge" class="px-1.5 py-0.5 rounded-full text-[9px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hidden">0 ACTIVE</span>
                         </button>
-                        <button id="tab-analytics" class="flex-1 pb-2 text-[10px] font-bold uppercase tracking-wider text-gray-500 border-b-2 border-transparent hover:text-gray-300 focus:outline-none transition-colors duration-200 truncate px-1">
-                            Analytics
-                        </button>
-                        <button id="tab-coindcx-wallet" class="flex-1 pb-2 text-[10px] font-bold uppercase tracking-wider text-gray-500 border-b-2 border-transparent hover:text-gray-300 focus:outline-none transition-colors duration-200 truncate px-1">
-                            CoinDCX
+                        <button id="tab-analytics" class="flex-1 py-2 text-[11px] font-bold uppercase tracking-wider text-gray-500 border-b-2 border-transparent hover:text-gray-300 focus:outline-none transition-colors duration-200 flex items-center justify-center gap-1.5 cursor-pointer">
+                            <span>Analytics</span>
                         </button>
                     </div>
 
                     <!-- Tab Content: Active Position -->
-                    <div id="content-active-position" class="flex flex-col justify-between flex-grow p-4">
-                        <div class="flex-grow">
-                            <div id="no-position-view" class="flex flex-col items-center justify-center h-48 border border-dashed border-[#1f2937] rounded-xl text-gray-500">
-                                <p class="text-sm font-semibold">NO ACTIVE POSITION</p>
-                                <p class="text-xs text-gray-600 mt-1">Bot is waiting for trade triggers...</p>
+                    <div id="content-active-position" class="flex flex-col justify-between flex-grow p-3.5 overflow-hidden">
+                        <div class="flex-grow overflow-y-auto pr-0.5 scrollbar-thin">
+                            <div id="no-position-view" class="flex flex-col items-center justify-center h-52 border border-dashed border-[#1f2937] rounded-xl text-gray-500">
+                                <p class="text-sm font-semibold text-gray-400">NO ACTIVE POSITIONS</p>
+                                <p class="text-xs text-gray-600 mt-1">Bot is actively scanning 20 pairs for triggers...</p>
                             </div>
                             
-                            <div id="active-position-view" class="hidden flex-col gap-3 overflow-y-auto max-h-[250px] pr-1">
+                            <div id="active-position-view" class="hidden flex-col gap-2.5">
                                 <!-- Cards injected here via JS -->
                             </div>
                         </div>
                         
-                        <div id="pnl-box" class="hidden border-t border-[#1f2937] pt-3 mt-3 flex flex-col">
-                            <button id="btn-emergency-close" class="w-full bg-red-600/20 hover:bg-red-600/40 text-red-500 hover:text-red-400 border border-red-500/50 font-bold py-2 px-4 rounded transition-colors text-xs uppercase tracking-wider flex justify-center items-center gap-2">
+                        <div id="pnl-box" class="hidden border-t border-[#1f2937] pt-2.5 mt-2 flex flex-col">
+                            <button id="btn-emergency-close" class="w-full bg-red-600/20 hover:bg-red-600/40 text-red-500 hover:text-red-400 border border-red-500/50 font-bold py-2 px-4 rounded-lg transition-colors text-xs uppercase tracking-wider flex justify-center items-center gap-2 cursor-pointer shadow-sm">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
                                 Emergency Close All
                             </button>
                         </div>
                     </div>
 
-                    <!-- Tab Content: Analytics -->
-                    <div id="content-analytics" class="hidden flex-col flex-grow overflow-hidden p-4">
-                        <div class="flex-grow overflow-y-auto space-y-4 pr-1 scrollbar-thin" style="max-height: 430px;">
-                            <!-- 4-Stat Metrics Row -->
-                            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                                <div class="bg-[#171e2e] border border-[#1f2937] p-2.5 rounded-lg flex flex-col justify-between">
-                                    <span class="text-[9px] font-bold text-gray-400 uppercase">Win Rate</span>
-                                    <span id="analytics-winrate-text" class="text-base font-black text-blue-400 terminal-font">0%</span>
-                                </div>
-                                <div class="bg-[#171e2e] border border-[#1f2937] p-2.5 rounded-lg flex flex-col justify-between">
-                                    <span class="text-[9px] font-bold text-gray-400 uppercase">Total PnL</span>
-                                    <span id="analytics-pnl-text" class="text-base font-black text-white terminal-font">0.00 USDT</span>
-                                </div>
-                                <div class="bg-[#171e2e] border border-[#1f2937] p-2.5 rounded-lg flex flex-col justify-between">
-                                    <span class="text-[9px] font-bold text-gray-400 uppercase">Avg Duration</span>
-                                    <span id="analytics-avg-duration" class="text-base font-black text-indigo-300 terminal-font">N/A</span>
-                                </div>
-                                <div class="bg-[#171e2e] border border-[#1f2937] p-2.5 rounded-lg flex flex-col justify-between">
-                                    <span class="text-[9px] font-bold text-gray-400 uppercase">Total Trades</span>
-                                    <span id="analytics-total-trades" class="text-base font-black text-cyan-400 terminal-font">0</span>
-                                </div>
-                            </div>
-
-                            <!-- Visual Charts Row -->
-                            <div class="grid grid-cols-2 gap-3">
-                                <div class="bg-[#171e2e] border border-[#1f2937] p-2.5 rounded-lg">
-                                    <span class="text-[9px] font-bold text-gray-500 uppercase">Win / Loss Ratio</span>
-                                    <div class="w-full mt-1" style="height: 50px;">
-                                        <canvas id="winRateChart"></canvas>
-                                    </div>
-                                </div>
-                                <div class="bg-[#171e2e] border border-[#1f2937] p-2.5 rounded-lg">
-                                    <span class="text-[9px] font-bold text-gray-500 uppercase">Cumulative Equity</span>
-                                    <div class="w-full mt-1" style="height: 50px;">
-                                        <canvas id="equityChart"></canvas>
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <!-- Detailed Trade Execution Timeline & History -->
+                    <!-- Tab Content: Analytics (Clean, Single Scrollbar, High-Density) -->
+                    <div id="content-analytics" class="hidden flex-col flex-grow overflow-hidden p-3 space-y-2">
+                        <!-- 4-Stat Metric Ribbon -->
+                        <div class="grid grid-cols-4 gap-1 bg-[#090d16] p-2 rounded-lg border border-[#1f2937] text-center">
                             <div>
-                                <div class="flex justify-between items-center mb-1.5">
-                                    <h4 class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">⏱️ Trade Execution Timeline (Date & Time)</h4>
-                                    <span class="text-[9px] text-indigo-400 font-semibold">Live Logs</span>
-                                </div>
-                                <div class="bg-[#171e2e] border border-[#1f2937] rounded-lg overflow-x-auto max-h-[160px] scrollbar-thin">
-                                    <table class="w-full text-[10px] text-left">
-                                        <thead class="sticky top-0 bg-[#111827] text-gray-400 uppercase border-b border-[#1f2937] text-[8px] font-bold z-10">
-                                            <tr>
-                                                <th class="py-1.5 px-2">Executed / Closed</th>
-                                                <th class="py-1.5 px-1.5">Symbol</th>
-                                                <th class="py-1.5 px-1.5 text-center">Side</th>
-                                                <th class="py-1.5 px-1.5 text-center">Duration</th>
-                                                <th class="py-1.5 px-2 text-right">PnL</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody id="analytics-timeline-tbody" class="divide-y divide-[#1f2937]/50">
-                                            <tr>
-                                                <td class="py-2.5 px-2 text-gray-500 text-center" colspan="5">No trade executions recorded yet</td>
-                                            </tr>
-                                        </tbody>
-                                    </table>
-                                </div>
+                                <span class="text-[8px] font-bold text-gray-400 uppercase tracking-wider block">Win Rate</span>
+                                <span id="analytics-winrate-text" class="text-xs sm:text-sm font-black text-blue-400 terminal-font">0%</span>
                             </div>
-
-                            <!-- Per-Coin P&L Breakdown -->
-                            <div>
-                                <h4 class="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Profit / Loss by Coin</h4>
-                                <div class="bg-[#171e2e] border border-[#1f2937] rounded-lg overflow-hidden">
-                                    <table class="w-full text-[11px] text-left">
-                                        <thead>
-                                            <tr class="text-gray-500 uppercase border-b border-[#1f2937] text-[9px] font-bold">
-                                                <th class="py-2 px-3">Coin</th>
-                                                <th class="py-2 px-2 text-right">P&L</th>
-                                                <th class="py-2 px-2 text-center">W/L</th>
-                                                <th class="py-2 px-2 text-center">Trades</th>
-                                                <th class="py-2 px-2 text-right">Win%</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody id="coin-pnl-tbody" class="divide-y divide-[#1f2937]/50">
-                                            <tr>
-                                                <td class="py-3 px-3 text-gray-500 text-center" colspan="5">No trade data yet</td>
-                                            </tr>
-                                        </tbody>
-                                    </table>
-                                </div>
+                            <div class="border-l border-[#1f2937]">
+                                <span class="text-[8px] font-bold text-gray-400 uppercase tracking-wider block">Total PnL</span>
+                                <span id="analytics-pnl-text" class="text-xs sm:text-sm font-black text-white terminal-font">0.00</span>
                             </div>
-                        </div>
-                        
-                        <button onclick="loadAnalytics()" class="mt-3 w-full bg-[#1f2937] hover:bg-gray-700 text-white text-xs font-bold py-2 rounded transition-colors flex items-center justify-center gap-2">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-                            REFRESH DATA
-                        </button>
-                    </div>
-
-                    <!-- Tab Content: CoinDCX Wallet -->
-                    <div id="content-coindcx-wallet" class="hidden flex-col flex-grow overflow-hidden p-4">
-                        <!-- Profile Summary -->
-                        <div class="bg-[#171e2e] border border-[#1f2937] p-3 rounded-lg text-xs space-y-1.5 mb-3">
-                            <div class="flex justify-between">
-                                <span class="text-gray-500 font-semibold">Status:</span>
-                                <span id="dcx-status" class="font-bold text-red-400">Offline</span>
+                            <div class="border-l border-[#1f2937]">
+                                <span class="text-[8px] font-bold text-gray-400 uppercase tracking-wider block">Avg Duration</span>
+                                <span id="analytics-avg-duration" class="text-xs sm:text-sm font-black text-indigo-300 terminal-font">N/A</span>
                             </div>
-                            <div class="flex justify-between">
-                                <span class="text-gray-500 font-semibold">Name:</span>
-                                <span id="dcx-name" class="text-gray-300 font-bold">Unknown</span>
-                            </div>
-                            <div class="flex justify-between">
-                                <span class="text-gray-500 font-semibold">Email:</span>
-                                <span id="dcx-email" class="text-gray-300">unknown</span>
-                            </div>
-                            <div class="flex justify-between">
-                                <span class="text-gray-500 font-semibold">Account ID:</span>
-                                <span id="dcx-id" class="text-gray-300 terminal-font">unknown</span>
+                            <div class="border-l border-[#1f2937]">
+                                <span class="text-[8px] font-bold text-gray-400 uppercase tracking-wider block">Total Trades</span>
+                                <span id="analytics-total-trades" class="text-xs sm:text-sm font-black text-cyan-400 terminal-font">0</span>
                             </div>
                         </div>
 
-                        <!-- Balances List -->
-                        <div class="flex-grow overflow-y-auto max-h-[160px] scrollbar-thin">
-                            <table class="w-full text-left text-[11px]">
-                                <thead>
-                                    <tr class="text-gray-500 uppercase border-b border-[#1f2937] pb-1 font-semibold">
-                                        <th class="pb-1">Asset</th>
-                                        <th class="pb-1 text-right">Available</th>
-                                        <th class="pb-1 text-right">Locked</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="dcx-balances-tbody" class="divide-y divide-[#1f2937]/50 text-gray-300">
-                                    <tr>
-                                        <td class="py-2 text-gray-500 text-center" colspan="3">No balance loaded.</td>
-                                    </tr>
-                                </tbody>
-                            </table>
+                        <!-- Compact Visual Charts Strip -->
+                        <div class="grid grid-cols-2 gap-2 bg-[#090d16] p-2 rounded-lg border border-[#1f2937]">
+                            <div class="flex items-center gap-2">
+                                <span class="text-[8px] font-bold text-gray-400 uppercase w-10 leading-tight">Win / Loss</span>
+                                <div class="flex-1" style="height: 36px;">
+                                    <canvas id="winRateChart"></canvas>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2 border-l border-[#1f2937] pl-2">
+                                <span class="text-[8px] font-bold text-gray-400 uppercase w-10 leading-tight">Equity Curve</span>
+                                <div class="flex-1" style="height: 36px;">
+                                    <canvas id="equityChart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Trade Execution Timeline Table (Single Scrollbar on Table Body) -->
+                        <div class="flex flex-col flex-grow overflow-hidden bg-[#090d16] border border-[#1f2937] rounded-lg">
+                            <div class="flex justify-between items-center px-2.5 py-1.5 bg-[#111827] border-b border-[#1f2937]">
+                                <span class="text-[9px] font-bold text-gray-300 uppercase tracking-wider">⏱️ Trade Execution Timeline</span>
+                                <button onclick="loadAnalytics()" class="text-[9px] font-bold text-blue-400 hover:text-blue-300 transition-colors cursor-pointer flex items-center gap-1">
+                                    <span>🔄 Refresh</span>
+                                </button>
+                            </div>
+                            <div class="flex-grow overflow-y-auto max-h-[190px] scrollbar-thin">
+                                <table class="w-full text-[10px] text-left">
+                                    <thead class="sticky top-0 bg-[#111827] text-gray-400 uppercase border-b border-[#1f2937] text-[8px] font-bold z-10">
+                                        <tr>
+                                            <th class="py-1.5 px-2">Time (Executed ➔ Closed)</th>
+                                            <th class="py-1.5 px-1.5">Coin</th>
+                                            <th class="py-1.5 px-1.5 text-center">Side</th>
+                                            <th class="py-1.5 px-1.5 text-center">Duration</th>
+                                            <th class="py-1.5 px-2 text-right">PnL</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="analytics-timeline-tbody" class="divide-y divide-[#1f2937]/50">
+                                        <tr>
+                                            <td class="py-3 px-2 text-gray-500 text-center" colspan="5">No trade executions recorded yet</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
-        </div>
 
         <!-- LOWER SECTION (LOGS TERMINAL & RECENT TRADES) -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1409,28 +1357,9 @@
                         const fvgInd = document.getElementById('active-fvg-indicator');
                         if (fvgInd) fvgInd.innerText = state.active_fvg || "No FVG detected";
 
-                        // CoinDCX Profile updates
+                        // CoinDCX Profile updates (in Sidebar Drawer)
                         if (state.coindcx_profile) {
                             const p = state.coindcx_profile;
-                            const statusEl = document.getElementById('dcx-status');
-                            if (statusEl) {
-                                statusEl.innerText = p.status || "Offline";
-                                if (p.status === "Connected") {
-                                    statusEl.className = "font-bold text-green-400";
-                                } else if (p.status.includes("Demo")) {
-                                    statusEl.className = "font-bold text-indigo-400";
-                                } else {
-                                    statusEl.className = "font-bold text-red-400";
-                                }
-                            }
-                            const nameEl = document.getElementById('dcx-name');
-                            if (nameEl) nameEl.innerText = p.name || "Unknown";
-                            const emailEl = document.getElementById('dcx-email');
-                            if (emailEl) emailEl.innerText = p.email || "unknown";
-                            const idEl = document.getElementById('dcx-id');
-                            if (idEl) idEl.innerText = p.id || "unknown";
-
-                            // Sync to Sidebar CoinDCX Card
                             const sbStatus = document.getElementById('sidebar-dcx-status');
                             if (sbStatus) {
                                 sbStatus.innerText = p.status || "Offline";
@@ -1446,24 +1375,25 @@
                             if (sbId) sbId.innerText = p.id || "unknown";
                         }
 
-                        // CoinDCX Balances updates
-                        const dcxTbody = document.getElementById('dcx-balances-tbody');
+                        // CoinDCX Balances updates (in Sidebar Drawer)
+                        const dcxTbody = document.getElementById('sidebar-dcx-balances-tbody');
                         if (dcxTbody) {
                             if (state.coindcx_balances && state.coindcx_balances.length > 0) {
                                 dcxTbody.innerHTML = '';
                                 state.coindcx_balances.forEach(bal => {
                                     const tr = document.createElement('tr');
+                                    tr.className = "hover:bg-[#1f2937]/30 transition-colors text-[11px]";
                                     
                                     const assetTd = document.createElement('td');
-                                    assetTd.className = "py-1.5 font-bold";
+                                    assetTd.className = "py-1 font-bold text-white";
                                     assetTd.innerText = bal.currency;
                                     
                                     const availTd = document.createElement('td');
-                                    availTd.className = "py-1.5 text-right terminal-font";
+                                    availTd.className = "py-1 text-right terminal-font text-emerald-400 font-semibold";
                                     availTd.innerText = bal.available.toFixed(bal.currency === 'INR' || bal.currency === 'USDT' ? 2 : 5);
                                     
                                     const lockTd = document.createElement('td');
-                                    lockTd.className = "py-1.5 text-right terminal-font text-gray-500";
+                                    lockTd.className = "py-1 text-right terminal-font text-gray-500";
                                     lockTd.innerText = bal.locked.toFixed(bal.currency === 'INR' || bal.currency === 'USDT' ? 2 : 5);
                                     
                                     tr.appendChild(assetTd);
@@ -1472,7 +1402,7 @@
                                     dcxTbody.appendChild(tr);
                                 });
                             } else {
-                                dcxTbody.innerHTML = '<tr><td class="py-2 text-gray-500 text-center" colspan="3">No balance loaded.</td></tr>';
+                                dcxTbody.innerHTML = '<tr><td class="py-2 text-gray-500 text-center text-[10px]" colspan="3">No balance loaded</td></tr>';
                             }
                         }
                         
@@ -1910,42 +1840,42 @@
             }
         });
 
-        // --- 4. COINDCX TABS SWITCHER ---
+        // --- 4. TABS SWITCHER (POSITIONS & ANALYTICS) ---
         const tabActivePosition = document.getElementById('tab-active-position');
         const tabAnalytics = document.getElementById('tab-analytics');
-        const tabCoindcxWallet = document.getElementById('tab-coindcx-wallet');
         const contentActivePosition = document.getElementById('content-active-position');
         const contentAnalytics = document.getElementById('content-analytics');
-        const contentCoindcxWallet = document.getElementById('content-coindcx-wallet');
         
-        const activeClass = "flex-1 pb-2 text-[10px] font-bold uppercase tracking-wider text-blue-400 border-b-2 border-blue-500 focus:outline-none transition-colors duration-200 truncate px-1";
-        const inactiveClass = "flex-1 pb-2 text-[10px] font-bold uppercase tracking-wider text-gray-500 border-b-2 border-transparent hover:text-gray-300 focus:outline-none transition-colors duration-200 truncate px-1";
+        const activeClass = "flex-1 py-2 text-[11px] font-bold uppercase tracking-wider text-blue-400 border-b-2 border-blue-500 focus:outline-none transition-colors duration-200 flex items-center justify-center gap-1.5 cursor-pointer";
+        const inactiveClass = "flex-1 py-2 text-[11px] font-bold uppercase tracking-wider text-gray-500 border-b-2 border-transparent hover:text-gray-300 focus:outline-none transition-colors duration-200 flex items-center justify-center gap-1.5 cursor-pointer";
 
         function switchTab(activeTab, activeContent) {
-            tabActivePosition.className = tabActivePosition === activeTab ? activeClass : inactiveClass;
-            tabAnalytics.className = tabAnalytics === activeTab ? activeClass : inactiveClass;
-            tabCoindcxWallet.className = tabCoindcxWallet === activeTab ? activeClass : inactiveClass;
+            if (tabActivePosition) tabActivePosition.className = tabActivePosition === activeTab ? activeClass : inactiveClass;
+            if (tabAnalytics) tabAnalytics.className = tabAnalytics === activeTab ? activeClass : inactiveClass;
             
-            contentActivePosition.classList.add('hidden');
-            contentActivePosition.classList.remove('flex');
-            contentAnalytics.classList.add('hidden');
-            contentAnalytics.classList.remove('flex');
-            contentCoindcxWallet.classList.add('hidden');
-            contentCoindcxWallet.classList.remove('flex');
+            if (contentActivePosition) {
+                contentActivePosition.classList.add('hidden');
+                contentActivePosition.classList.remove('flex');
+            }
+            if (contentAnalytics) {
+                contentAnalytics.classList.add('hidden');
+                contentAnalytics.classList.remove('flex');
+            }
             
-            activeContent.classList.remove('hidden');
-            activeContent.classList.add('flex');
+            if (activeContent) {
+                activeContent.classList.remove('hidden');
+                activeContent.classList.add('flex');
+            }
         }
 
-        if (tabActivePosition && tabCoindcxWallet && tabAnalytics) {
+        if (tabActivePosition && tabAnalytics) {
             tabActivePosition.addEventListener('click', () => switchTab(tabActivePosition, contentActivePosition));
             tabAnalytics.addEventListener('click', () => {
                 switchTab(tabAnalytics, contentAnalytics);
-                if(!window.analyticsLoaded) {
+                if (!window.analyticsLoaded) {
                     loadAnalytics();
                 }
             });
-            tabCoindcxWallet.addEventListener('click', () => switchTab(tabCoindcxWallet, contentCoindcxWallet));
         }
         
         let winRateChartInstance = null;
@@ -2079,56 +2009,6 @@
                         });
                     } else if (timelineTbody) {
                         timelineTbody.innerHTML = '<tr><td class="py-2.5 px-2 text-gray-500 text-center" colspan="5">No trade executions recorded yet</td></tr>';
-                    }
-
-                    // === Per-Coin P&L Table ===
-                    const coinTbody = document.getElementById('coin-pnl-tbody');
-                    if (coinTbody && data.coin_pnl && data.coin_pnl.length > 0) {
-                        coinTbody.innerHTML = '';
-                        data.coin_pnl.forEach(coin => {
-                            const tr = document.createElement('tr');
-                            tr.className = 'hover:bg-[#1f2937]/30 transition-colors';
-                            
-                            const isProfitable = coin.total_pnl >= 0;
-                            const pnlColor = isProfitable ? 'text-emerald-400' : 'text-red-400';
-                            const pnlSign = isProfitable ? '+' : '';
-                            const winRateColor = coin.win_rate >= 60 ? 'text-emerald-400' : coin.win_rate >= 40 ? 'text-yellow-400' : 'text-red-400';
-                            
-                            // Coin symbol
-                            const coinTd = document.createElement('td');
-                            coinTd.className = 'py-2.5 px-3 font-bold text-white text-[11px]';
-                            const coinName = coin.symbol.replace('/USDT', '').replace('/INR', '');
-                            coinTd.innerHTML = `<span class="text-blue-400">${coinName}</span><span class="text-gray-600 text-[8px] ml-0.5">/USDT</span>`;
-                            
-                            // P&L
-                            const pnlTd = document.createElement('td');
-                            pnlTd.className = `py-2.5 px-2 text-right font-bold terminal-font text-[11px] ${pnlColor}`;
-                            pnlTd.textContent = `${pnlSign}${coin.total_pnl.toFixed(2)}`;
-                            
-                            // W/L
-                            const wlTd = document.createElement('td');
-                            wlTd.className = 'py-2.5 px-2 text-center text-[10px]';
-                            wlTd.innerHTML = `<span class="text-emerald-400 font-bold">${coin.wins}</span><span class="text-gray-600">/</span><span class="text-red-400 font-bold">${coin.losses}</span>`;
-                            
-                            // Trades count
-                            const tradesTd = document.createElement('td');
-                            tradesTd.className = 'py-2.5 px-2 text-center text-gray-400 font-semibold text-[10px]';
-                            tradesTd.textContent = coin.trades_count;
-                            
-                            // Win Rate %
-                            const winTd = document.createElement('td');
-                            winTd.className = `py-2.5 px-2 text-right font-bold text-[10px] ${winRateColor}`;
-                            winTd.textContent = coin.win_rate.toFixed(0) + '%';
-                            
-                            tr.appendChild(coinTd);
-                            tr.appendChild(pnlTd);
-                            tr.appendChild(wlTd);
-                            tr.appendChild(tradesTd);
-                            tr.appendChild(winTd);
-                            coinTbody.appendChild(tr);
-                        });
-                    } else if (coinTbody) {
-                        coinTbody.innerHTML = '<tr><td class="py-3 px-3 text-gray-500 text-center" colspan="5">No trade data yet</td></tr>';
                     }
                 }
             } catch (e) {
