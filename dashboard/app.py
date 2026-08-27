@@ -367,14 +367,15 @@ async def get_analytics():
         for mem_trade in DashboardState.trades:
             trades.append(mem_trade)
             
-        # Deduplicate trades by symbol + exit time + pnl
+        # Deduplicate trades by symbol + exit time + pnl + type
         seen_trades = set()
         unique_trades = []
         for t in trades:
             sym = t.get("symbol", "")
             ext = t.get("exit_time") or t.get("time") or t.get("ts") or 0
-            pnl_val = round(float(t.get("pnl_usdt", 0) or 0), 4)
-            key = f"{sym}_{ext}_{pnl_val}"
+            pnl_val = round(float(t.get("pnl_usdt") if t.get("pnl_usdt") is not None else (t.get("pnl", 0) or 0)), 4)
+            tr_type = t.get("type", "") or t.get("reason", "")
+            key = f"{sym}_{ext}_{pnl_val}_{tr_type}"
             if key not in seen_trades:
                 seen_trades.add(key)
                 unique_trades.append(t)
@@ -394,7 +395,7 @@ async def get_analytics():
         import datetime
 
         for t in trades:
-            pnl = float(t.get("pnl_usdt", 0) or 0)
+            pnl = float(t.get("pnl_usdt") if t.get("pnl_usdt") is not None else (t.get("pnl", 0) or 0))
             symbol = t.get("symbol", "UNKNOWN")
             
             if pnl > 0:
@@ -466,13 +467,20 @@ async def get_analytics():
                 except Exception:
                     pass
             
+            ent_p = float(t.get("entry_price") or t.get("entry") or 0.0)
+            ext_p = float(t.get("exit_price") or t.get("exit") or 0.0)
+            pnl_pct_val = float(t.get("pnl_pct") if t.get("pnl_pct") is not None else 0.0)
+            if pnl_pct_val == 0.0 and ent_p > 0 and ext_p > 0:
+                is_l = t.get("side", "LONG") == "LONG"
+                pnl_pct_val = ((ext_p - ent_p) / ent_p * 100.0) if is_l else ((ent_p - ext_p) / ent_p * 100.0)
+
             formatted_history.append({
                 "symbol": symbol,
                 "side": t.get("side", "LONG"),
-                "entry_price": float(t.get("entry_price") or t.get("entry") or 0.0),
-                "exit_price": float(t.get("exit_price") or t.get("exit") or 0.0),
+                "entry_price": ent_p,
+                "exit_price": ext_p,
                 "pnl_usdt": round(pnl, 4),
-                "pnl_pct": round(float(t.get("pnl_pct", 0) or 0.0), 2),
+                "pnl_pct": round(pnl_pct_val, 2),
                 "entry_time_str": e_time_str or "N/A",
                 "exit_time_str": x_time_str or "N/A",
                 "duration": dur_str,

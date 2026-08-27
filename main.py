@@ -59,6 +59,10 @@ class PrimeSignalBot:
         self.take_profit_1r = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.tp2_taken = {sym: False for sym in Config.SUPPORTED_SYMBOLS}
         self.take_profit_2r = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.realized_pnl = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.original_position_size = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.last_exit_time = {sym: 0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.tp_cooldown_until = {sym: 0 for sym in Config.SUPPORTED_SYMBOLS}
         self.consecutive_losses = 0
         self.global_pause_until = 0
         self.relaxed_losses = 0
@@ -107,6 +111,10 @@ class PrimeSignalBot:
             'take_profit_2r': self.take_profit_2r,
             'partial_tp_taken': self.partial_tp_taken,
             'tp2_taken': self.tp2_taken,
+            'realized_pnl': self.realized_pnl,
+            'original_position_size': self.original_position_size,
+            'last_exit_time': self.last_exit_time,
+            'tp_cooldown_until': self.tp_cooldown_until,
             'position_mode': self.position_mode,
             'last_trade_time': self.last_trade_time,
             'last_zone_traded': self.last_zone_traded,
@@ -173,6 +181,10 @@ class PrimeSignalBot:
             self.take_profit_2r = safe_load('take_profit_2r', 0.0)
             self.partial_tp_taken = safe_load('partial_tp_taken', False)
             self.tp2_taken = safe_load('tp2_taken', False)
+            self.realized_pnl = safe_load('realized_pnl', 0.0)
+            self.original_position_size = safe_load('original_position_size', 0.0)
+            self.last_exit_time = safe_load('last_exit_time', 0)
+            self.tp_cooldown_until = safe_load('tp_cooldown_until', 0)
             self.position_mode = safe_load('position_mode', 'STRICT')
             self.last_trade_time = safe_load('last_trade_time', 0)
             self.last_zone_traded = safe_load('last_zone_traded', None)
@@ -223,7 +235,7 @@ class PrimeSignalBot:
             log_file = Path("data") / "trade_logs.jsonl"
             if log_file.exists():
                 existing_keys = {
-                    f"{t.get('symbol')}_{t.get('exit_time') or t.get('time') or 0}_{round(float(t.get('pnl_usdt', 0) or 0), 4)}"
+                    f"{t.get('symbol')}_{t.get('exit_time') or t.get('time') or 0}_{round(float(t.get('pnl_usdt', t.get('pnl', 0)) or 0), 4)}"
                     for t in DashboardState.trades
                 }
                 with open(log_file, "r", encoding="utf-8") as f:
@@ -231,7 +243,7 @@ class PrimeSignalBot:
                         if line.strip():
                             try:
                                 tr = json.loads(line)
-                                k = f"{tr.get('symbol')}_{tr.get('exit_time') or tr.get('time') or 0}_{round(float(tr.get('pnl_usdt', 0) or 0), 4)}"
+                                k = f"{tr.get('symbol')}_{tr.get('exit_time') or tr.get('time') or 0}_{round(float(tr.get('pnl_usdt', tr.get('pnl', 0)) or 0), 4)}"
                                 if k not in existing_keys:
                                     DashboardState.trades.append(tr)
                                     existing_keys.add(k)
@@ -259,6 +271,10 @@ class PrimeSignalBot:
             self.lowest_price_reached[sym] = 999999.0
             self.partial_tp_taken[sym] = False
             self.tp2_taken[sym] = False
+            self.realized_pnl[sym] = 0.0
+            self.original_position_size[sym] = 0.0
+            self.last_exit_time[sym] = 0
+            self.tp_cooldown_until[sym] = 0
 
         self.traded_zones_cache.clear()
         self.trade_history.clear()
@@ -640,9 +656,17 @@ class PrimeSignalBot:
             add_log_message(f"[{symbol}] Trade skipped: Cluster loss cooldown active.")
             return
 
+        # Symbol Post-Exit & Profit-Harvest Cooldown (Prevent immediate re-entry at local top/bottom)
+        if time.time() < self.tp_cooldown_until.get(symbol, 0):
+            rem_m = max(1, int((self.tp_cooldown_until[symbol] - time.time()) / 60) + 1)
+            add_log_message(f"[{symbol}] Trade skipped: Post-exit / TP-harvest cooldown active ({rem_m}m remaining to prevent re-entering exhausted structure).")
+            return
+
         # Cooldown Check
-        if time.time() - self.last_trade_time.get(symbol, 0) < getattr(Config, 'COOLDOWN_MINUTES', 15) * 60:
-            add_log_message(f"[{symbol}] Trade skipped due to cooldown.")
+        cooldown_secs = getattr(Config, 'COOLDOWN_MINUTES', 20) * 60
+        if time.time() - self.last_trade_time.get(symbol, 0) < cooldown_secs:
+            rem_m = max(1, int((cooldown_secs - (time.time() - self.last_trade_time[symbol])) / 60) + 1)
+            add_log_message(f"[{symbol}] Trade skipped due to cooldown ({rem_m}m remaining).")
             return
 
         # Same Zone Check with Traded Zones Cache
@@ -863,6 +887,8 @@ class PrimeSignalBot:
                 
                 self.highest_price_reached[symbol] = entry_price
                 self.position_size[symbol] = pos_size
+                self.original_position_size[symbol] = pos_size
+                self.realized_pnl[symbol] = 0.0
                 self.entry_time[symbol] = int(time.time() * 1000)
                 self.last_trade_time[symbol] = time.time()
                 self.position_mode[symbol] = metadata.get('mode', 'STRICT')
@@ -935,6 +961,8 @@ class PrimeSignalBot:
                 
                 self.lowest_price_reached[symbol] = entry_price
                 self.position_size[symbol] = pos_size
+                self.original_position_size[symbol] = pos_size
+                self.realized_pnl[symbol] = 0.0
                 self.entry_time[symbol] = int(time.time() * 1000)
                 self.last_trade_time[symbol] = time.time()
                 self.position_mode[symbol] = metadata.get('mode', 'STRICT')
@@ -1095,28 +1123,66 @@ class PrimeSignalBot:
                                     self.partial_tp_taken[symbol] = True
                                     
                                     # Log partial TP1 trade record for accurate PnL tracking
-                                    tp1_pnl = tp1_size * (curr_price - self.entry_price[symbol])
-                                    DashboardState.trades.append({
-                                        'symbol': symbol, 'side': 'LONG', 'type': 'TP1_PARTIAL',
-                                        'entry': self.entry_price[symbol], 'exit': curr_price,
-                                        'size': tp1_size, 'pnl': round(tp1_pnl, 4),
-                                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
-                                    })
+                                    tp1_pnl_usdt = tp1_size * (curr_price - self.entry_price[symbol])
+                                    tp1_pnl_pct = (curr_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
+                                    self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp1_pnl_usdt
                                     
-                                    # PROFIT LOCK: Guarantee profit by setting Stop Loss to Breakeven (+0.15%)
-                                    profit_lock_sl = self.entry_price[symbol] * 1.0015
+                                    now_ts = int(time.time() * 1000)
+                                    entry_ts = self.entry_time.get(symbol, now_ts)
+                                    dur_secs = max(0, int((now_ts - entry_ts) / 1000))
+                                    dur_str = f"{dur_secs // 60}m {dur_secs % 60}s" if dur_secs >= 60 else f"{dur_secs}s"
+                                    
+                                    tp1_record = {
+                                        'symbol': symbol,
+                                        'side': 'LONG',
+                                        'type': 'TP1_PARTIAL',
+                                        'entry_price': self.entry_price[symbol],
+                                        'exit_price': curr_price,
+                                        'entry': self.entry_price[symbol],
+                                        'exit': curr_price,
+                                        'size': tp1_size,
+                                        'pnl_usdt': round(tp1_pnl_usdt, 4),
+                                        'pnl': round(tp1_pnl_usdt, 4),
+                                        'pnl_pct': round(tp1_pnl_pct, 2),
+                                        'entry_time': entry_ts,
+                                        'exit_time': now_ts,
+                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'duration': dur_str,
+                                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                                        'reason': 'TP1_HIT_50PCT'
+                                    }
+                                    DashboardState.trades.append(tp1_record)
+                                    
+                                    # Persist partial TP1 to trade_logs.jsonl
+                                    try:
+                                        log_dir = Path("data")
+                                        log_dir.mkdir(parents=True, exist_ok=True)
+                                        with open(log_dir / "trade_logs.jsonl", "a", encoding="utf-8") as f:
+                                            f.write(json.dumps(tp1_record) + "\n")
+                                    except Exception as e:
+                                        print(f"[LOG] Failed to write TP1 log: {e}")
+                                    
+                                    # PROFIT LOCK: Guarantee profit by setting Stop Loss to Breakeven (+0.30% fee safe / +0.35R)
+                                    fee_buf = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
+                                    profit_lock_sl = max(self.entry_price[symbol] * (1.0 + fee_buf), self.entry_price[symbol] + 0.35 * r_dist)
                                     if profit_lock_sl > self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = profit_lock_sl
                                         if symbol == Config.SYMBOL: DashboardState.stop_loss = profit_lock_sl
-                                        guar_pnl_pct = max(0.0, (profit_lock_sl - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0)
-                                        guar_pnl_usdt = max(0.0, self.position_size[symbol] * (profit_lock_sl - self.entry_price[symbol]))
-                                        add_log_message(f"[{symbol}] 🔒 PROFIT LOCKED at Stop Loss: {profit_lock_sl:.4f} (+{guar_pnl_usdt:.2f} USDT). New Target: TP2 @ {self.take_profit_2r[symbol]:.4f}")
-                                        await self.notifier.send_message(
-                                            f"🔒 *PROFIT LOCKED ({symbol})*\n"
-                                            f"🎯 TP1 Hit! 50% profit booked.\n"
-                                            f"🔒 Guaranteed Locked Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
-                                            f"🎯 New Active Target: TP2 (2.2R) @ {self.take_profit_2r[symbol]:.4f}"
-                                        )
+                                    
+                                    orig_sz = self.original_position_size.get(symbol, self.position_size[symbol] * 2) or (self.position_size[symbol] * 2)
+                                    runner_guar = max(0.0, self.position_size[symbol] * (self.stop_loss[symbol] - self.entry_price[symbol]))
+                                    guar_pnl_usdt = self.realized_pnl[symbol] + runner_guar
+                                    orig_val = orig_sz * self.entry_price[symbol]
+                                    guar_pnl_pct = (guar_pnl_usdt / orig_val * 100.0) if orig_val > 0 else 0.0
+                                    
+                                    add_log_message(f"[{symbol}] 🔒 PROFIT LOCKED at Stop Loss: {self.stop_loss[symbol]:.4f} (+{guar_pnl_usdt:.2f} USDT total locked). New Target: TP2 @ {self.take_profit_2r[symbol]:.4f}")
+                                    await self.notifier.send_message(
+                                        f"🔒 *PROFIT LOCKED ({symbol})*\n"
+                                        f"🎯 TP1 Hit! 50% profit booked (+{tp1_pnl_usdt:.2f} USDT).\n"
+                                        f"🔒 Total Guaranteed Locked Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
+                                        f"🎯 New Active Target: TP2 (2.2R) @ {self.take_profit_2r[symbol]:.4f}"
+                                    )
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP1 order REJECTED by exchange. State NOT updated.")
@@ -1137,24 +1203,62 @@ class PrimeSignalBot:
                                     self.tp2_taken[symbol] = True
                                     
                                     # Log partial TP2 trade record for accurate PnL tracking
-                                    tp2_pnl = tp2_size * (curr_price - self.entry_price[symbol])
-                                    DashboardState.trades.append({
-                                        'symbol': symbol, 'side': 'LONG', 'type': 'TP2_PARTIAL',
-                                        'entry': self.entry_price[symbol], 'exit': curr_price,
-                                        'size': tp2_size, 'pnl': round(tp2_pnl, 4),
-                                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
-                                    })
+                                    tp2_pnl_usdt = tp2_size * (curr_price - self.entry_price[symbol])
+                                    tp2_pnl_pct = (curr_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
+                                    self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp2_pnl_usdt
+                                    
+                                    now_ts = int(time.time() * 1000)
+                                    entry_ts = self.entry_time.get(symbol, now_ts)
+                                    dur_secs = max(0, int((now_ts - entry_ts) / 1000))
+                                    dur_str = f"{dur_secs // 60}m {dur_secs % 60}s" if dur_secs >= 60 else f"{dur_secs}s"
+                                    
+                                    tp2_record = {
+                                        'symbol': symbol,
+                                        'side': 'LONG',
+                                        'type': 'TP2_PARTIAL',
+                                        'entry_price': self.entry_price[symbol],
+                                        'exit_price': curr_price,
+                                        'entry': self.entry_price[symbol],
+                                        'exit': curr_price,
+                                        'size': tp2_size,
+                                        'pnl_usdt': round(tp2_pnl_usdt, 4),
+                                        'pnl': round(tp2_pnl_usdt, 4),
+                                        'pnl_pct': round(tp2_pnl_pct, 2),
+                                        'entry_time': entry_ts,
+                                        'exit_time': now_ts,
+                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'duration': dur_str,
+                                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                                        'reason': 'TP2_HIT_30PCT'
+                                    }
+                                    DashboardState.trades.append(tp2_record)
+                                    
+                                    # Persist partial TP2 to trade_logs.jsonl
+                                    try:
+                                        log_dir = Path("data")
+                                        log_dir.mkdir(parents=True, exist_ok=True)
+                                        with open(log_dir / "trade_logs.jsonl", "a", encoding="utf-8") as f:
+                                            f.write(json.dumps(tp2_record) + "\n")
+                                    except Exception as e:
+                                        print(f"[LOG] Failed to write TP2 log: {e}")
+                                    
                                     # Lock SL at TP1 level (Guaranteed deep profit lock)
                                     if self.take_profit_1r[symbol] > self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = self.take_profit_1r[symbol]
                                         if symbol == Config.SYMBOL: DashboardState.stop_loss = self.take_profit_1r[symbol]
-                                    guar_pnl_pct = max(0.0, (self.stop_loss[symbol] - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0)
-                                    guar_pnl_usdt = max(0.0, self.position_size[symbol] * (self.stop_loss[symbol] - self.entry_price[symbol]))
+                                    
+                                    orig_sz = self.original_position_size.get(symbol, self.position_size[symbol] / 0.20) or (self.position_size[symbol] / 0.20)
+                                    runner_guar = max(0.0, self.position_size[symbol] * (self.stop_loss[symbol] - self.entry_price[symbol]))
+                                    guar_pnl_usdt = self.realized_pnl[symbol] + runner_guar
+                                    orig_val = orig_sz * self.entry_price[symbol]
+                                    guar_pnl_pct = (guar_pnl_usdt / orig_val * 100.0) if orig_val > 0 else 0.0
+                                    
                                     add_log_message(f"[{symbol}] 🚀 TP2 Hit! SL locked at TP1 level ({self.stop_loss[symbol]:.4f}). Trailing Runner active.")
                                     await self.notifier.send_message(
                                         f"🚀 *DEEP PROFIT LOCKED ({symbol})*\n"
-                                        f"🎯 TP2 Hit! 30% profit booked.\n"
-                                        f"🔒 Guaranteed Deep Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
+                                        f"🎯 TP2 Hit! 30% profit booked (+{tp2_pnl_usdt:.2f} USDT).\n"
+                                        f"🔒 Total Guaranteed Deep Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
                                         f"🎯 New Active Target: Runner Target (3.5R) @ {self.take_profit[symbol]:.4f}"
                                     )
                                     self.save_state()
@@ -1238,28 +1342,66 @@ class PrimeSignalBot:
                                     self.partial_tp_taken[symbol] = True
                                     
                                     # Log partial TP1 trade record for accurate PnL tracking
-                                    tp1_pnl = tp1_size * (self.entry_price[symbol] - curr_price)
-                                    DashboardState.trades.append({
-                                        'symbol': symbol, 'side': 'SHORT', 'type': 'TP1_PARTIAL',
-                                        'entry': self.entry_price[symbol], 'exit': curr_price,
-                                        'size': tp1_size, 'pnl': round(tp1_pnl, 4),
-                                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
-                                    })
+                                    tp1_pnl_usdt = tp1_size * (self.entry_price[symbol] - curr_price)
+                                    tp1_pnl_pct = (self.entry_price[symbol] - curr_price) / self.entry_price[symbol] * 100.0
+                                    self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp1_pnl_usdt
                                     
-                                    # PROFIT LOCK: Guarantee profit by setting Stop Loss to Breakeven (-0.15%)
-                                    profit_lock_sl = self.entry_price[symbol] * 0.9985
+                                    now_ts = int(time.time() * 1000)
+                                    entry_ts = self.entry_time.get(symbol, now_ts)
+                                    dur_secs = max(0, int((now_ts - entry_ts) / 1000))
+                                    dur_str = f"{dur_secs // 60}m {dur_secs % 60}s" if dur_secs >= 60 else f"{dur_secs}s"
+                                    
+                                    tp1_record = {
+                                        'symbol': symbol,
+                                        'side': 'SHORT',
+                                        'type': 'TP1_PARTIAL',
+                                        'entry_price': self.entry_price[symbol],
+                                        'exit_price': curr_price,
+                                        'entry': self.entry_price[symbol],
+                                        'exit': curr_price,
+                                        'size': tp1_size,
+                                        'pnl_usdt': round(tp1_pnl_usdt, 4),
+                                        'pnl': round(tp1_pnl_usdt, 4),
+                                        'pnl_pct': round(tp1_pnl_pct, 2),
+                                        'entry_time': entry_ts,
+                                        'exit_time': now_ts,
+                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'duration': dur_str,
+                                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                                        'reason': 'TP1_HIT_50PCT'
+                                    }
+                                    DashboardState.trades.append(tp1_record)
+                                    
+                                    # Persist partial TP1 to trade_logs.jsonl
+                                    try:
+                                        log_dir = Path("data")
+                                        log_dir.mkdir(parents=True, exist_ok=True)
+                                        with open(log_dir / "trade_logs.jsonl", "a", encoding="utf-8") as f:
+                                            f.write(json.dumps(tp1_record) + "\n")
+                                    except Exception as e:
+                                        print(f"[LOG] Failed to write TP1 log: {e}")
+                                    
+                                    # PROFIT LOCK: Guarantee profit by setting Stop Loss to Breakeven (-0.30% fee safe / -0.35R)
+                                    fee_buf = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
+                                    profit_lock_sl = min(self.entry_price[symbol] * (1.0 - fee_buf), self.entry_price[symbol] - 0.35 * r_dist)
                                     if profit_lock_sl < self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = profit_lock_sl
                                         if symbol == Config.SYMBOL: DashboardState.stop_loss = profit_lock_sl
-                                        guar_pnl_pct = max(0.0, (self.entry_price[symbol] - profit_lock_sl) / self.entry_price[symbol] * 100.0)
-                                        guar_pnl_usdt = max(0.0, self.position_size[symbol] * (self.entry_price[symbol] - profit_lock_sl))
-                                        add_log_message(f"[{symbol}] 🔒 PROFIT LOCKED at Stop Loss: {profit_lock_sl:.4f} (+{guar_pnl_usdt:.2f} USDT). New Target: TP2 @ {self.take_profit_2r[symbol]:.4f}")
-                                        await self.notifier.send_message(
-                                            f"🔒 *PROFIT LOCKED ({symbol})*\n"
-                                            f"🎯 TP1 Hit! 50% profit booked.\n"
-                                            f"🔒 Guaranteed Locked Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
-                                            f"🎯 New Active Target: TP2 (2.2R) @ {self.take_profit_2r[symbol]:.4f}"
-                                        )
+                                    
+                                    orig_sz = self.original_position_size.get(symbol, self.position_size[symbol] * 2) or (self.position_size[symbol] * 2)
+                                    runner_guar = max(0.0, self.position_size[symbol] * (self.entry_price[symbol] - self.stop_loss[symbol]))
+                                    guar_pnl_usdt = self.realized_pnl[symbol] + runner_guar
+                                    orig_val = orig_sz * self.entry_price[symbol]
+                                    guar_pnl_pct = (guar_pnl_usdt / orig_val * 100.0) if orig_val > 0 else 0.0
+                                    
+                                    add_log_message(f"[{symbol}] 🔒 PROFIT LOCKED at Stop Loss: {self.stop_loss[symbol]:.4f} (+{guar_pnl_usdt:.2f} USDT total locked). New Target: TP2 @ {self.take_profit_2r[symbol]:.4f}")
+                                    await self.notifier.send_message(
+                                        f"🔒 *PROFIT LOCKED ({symbol})*\n"
+                                        f"🎯 TP1 Hit! 50% profit booked (+{tp1_pnl_usdt:.2f} USDT).\n"
+                                        f"🔒 Total Guaranteed Locked Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
+                                        f"🎯 New Active Target: TP2 (2.2R) @ {self.take_profit_2r[symbol]:.4f}"
+                                    )
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP1 order REJECTED by exchange. State NOT updated.")
@@ -1280,13 +1422,46 @@ class PrimeSignalBot:
                                     self.tp2_taken[symbol] = True
                                     
                                     # Log partial TP2 trade record for accurate PnL tracking
-                                    tp2_pnl = tp2_size * (self.entry_price[symbol] - curr_price)
-                                    DashboardState.trades.append({
-                                        'symbol': symbol, 'side': 'SHORT', 'type': 'TP2_PARTIAL',
-                                        'entry': self.entry_price[symbol], 'exit': curr_price,
-                                        'size': tp2_size, 'pnl': round(tp2_pnl, 4),
-                                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
-                                    })
+                                    tp2_pnl_usdt = tp2_size * (self.entry_price[symbol] - curr_price)
+                                    tp2_pnl_pct = (self.entry_price[symbol] - curr_price) / self.entry_price[symbol] * 100.0
+                                    self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp2_pnl_usdt
+                                    
+                                    now_ts = int(time.time() * 1000)
+                                    entry_ts = self.entry_time.get(symbol, now_ts)
+                                    dur_secs = max(0, int((now_ts - entry_ts) / 1000))
+                                    dur_str = f"{dur_secs // 60}m {dur_secs % 60}s" if dur_secs >= 60 else f"{dur_secs}s"
+                                    
+                                    tp2_record = {
+                                        'symbol': symbol,
+                                        'side': 'SHORT',
+                                        'type': 'TP2_PARTIAL',
+                                        'entry_price': self.entry_price[symbol],
+                                        'exit_price': curr_price,
+                                        'entry': self.entry_price[symbol],
+                                        'exit': curr_price,
+                                        'size': tp2_size,
+                                        'pnl_usdt': round(tp2_pnl_usdt, 4),
+                                        'pnl': round(tp2_pnl_usdt, 4),
+                                        'pnl_pct': round(tp2_pnl_pct, 2),
+                                        'entry_time': entry_ts,
+                                        'exit_time': now_ts,
+                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'duration': dur_str,
+                                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                                        'reason': 'TP2_HIT_30PCT'
+                                    }
+                                    DashboardState.trades.append(tp2_record)
+                                    
+                                    # Persist partial TP2 to trade_logs.jsonl
+                                    try:
+                                        log_dir = Path("data")
+                                        log_dir.mkdir(parents=True, exist_ok=True)
+                                        with open(log_dir / "trade_logs.jsonl", "a", encoding="utf-8") as f:
+                                            f.write(json.dumps(tp2_record) + "\n")
+                                    except Exception as e:
+                                        print(f"[LOG] Failed to write TP2 log: {e}")
+                                    
                                     # Lock SL at TP1 level (Guaranteed deep profit lock)
                                     if self.take_profit_1r[symbol] < self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = self.take_profit_1r[symbol]
@@ -1296,13 +1471,13 @@ class PrimeSignalBot:
                                         add_log_message(f"[{symbol}] 🚀 TP2 Hit! SL locked at TP1 level ({self.stop_loss[symbol]:.4f}). Trailing Runner active.")
                                         await self.notifier.send_message(
                                             f"🚀 *DEEP PROFIT LOCKED ({symbol})*\n"
-                                            f"🎯 TP2 Hit! 30% profit booked.\n"
-                                            f"🔒 Guaranteed Deep Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
+                                            f"🎯 TP2 Hit! 30% profit booked (+{tp2_pnl_usdt:.2f} USDT).\n"
+                                            f"🔒 Total Guaranteed Deep Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
                                             f"🎯 New Active Target: Runner Target (3.5R) @ {self.take_profit[symbol]:.4f}"
                                         )
                                         self.save_state()
-                                else:
-                                    add_log_message(f"[{symbol}] ⚠️ TP2 order REJECTED by exchange. State NOT updated.")
+                                    else:
+                                        add_log_message(f"[{symbol}] ⚠️ TP2 order REJECTED by exchange. State NOT updated.")
 
                             if self.partial_tp_taken[symbol]:
                                 new_sl = self.risk.update_trailing_stop(self.entry_price[symbol], self.lowest_price_reached[symbol], self.stop_loss[symbol], curr_atr, "SHORT")
@@ -1386,16 +1561,18 @@ class PrimeSignalBot:
                             active_target_name = "Runner Target"
                             target_stage = 3
 
-                        # Calculate guaranteed locked profit in USDT and %
-                        guaranteed_pnl_usdt = 0.0
-                        guaranteed_pnl_pct = 0.0
+                        # Calculate guaranteed locked profit in USDT and % (including realized partial TPs)
+                        realized_pnl_val = self.realized_pnl.get(s, 0.0)
+                        runner_guar = 0.0
                         if is_profit_locked and entry_val > 0:
                             if is_long:
-                                guaranteed_pnl_pct = max(0.0, (sl_val - entry_val) / entry_val * 100.0)
-                                guaranteed_pnl_usdt = max(0.0, pos_sz * (sl_val - entry_val))
+                                runner_guar = max(0.0, pos_sz * (sl_val - entry_val))
                             else:
-                                guaranteed_pnl_pct = max(0.0, (entry_val - sl_val) / entry_val * 100.0)
-                                guaranteed_pnl_usdt = max(0.0, pos_sz * (entry_val - sl_val))
+                                runner_guar = max(0.0, pos_sz * (entry_val - sl_val))
+                        guaranteed_pnl_usdt = realized_pnl_val + runner_guar
+                        orig_sz = self.original_position_size.get(s, pos_sz) or pos_sz
+                        orig_val = orig_sz * entry_val
+                        guaranteed_pnl_pct = (guaranteed_pnl_usdt / orig_val * 100.0) if orig_val > 0 else 0.0
 
                         e_time = self.entry_time.get(s, int(time.time() * 1000))
                         e_time_str = datetime.datetime.fromtimestamp(e_time / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
@@ -1582,9 +1759,27 @@ class PrimeSignalBot:
             elif not is_loss and pos_mode == 'RELAXED':
                 self.relaxed_losses = 0
 
+            now_exit = time.time()
+            self.last_exit_time[symbol] = now_exit
+            self.last_trade_time[symbol] = now_exit
+            self.global_last_trade_time = now_exit
+
+            # Check if previous position had taken profit (TP1 / TP2 / full TP exit)
+            had_tp = self.partial_tp_taken[symbol] or self.tp2_taken[symbol] or reason in ["TAKE_PROFIT_RUNNER", "TRAILING_STOP", "TP2_HIT"]
+            if had_tp and pnl_usdt >= 0:
+                tp_cooldown_mins = getattr(Config, 'TP_EXIT_COOLDOWN_MINUTES', 25)
+                self.tp_cooldown_until[symbol] = now_exit + (tp_cooldown_mins * 60)
+                add_log_message(f"[{symbol}] 🎯 Profit secured from wave ({reason}). Harvest cooldown active for {tp_cooldown_mins}m to prevent chasing exhausted move.")
+            else:
+                post_exit_mins = getattr(Config, 'POST_EXIT_COOLDOWN_MINUTES', 15)
+                self.tp_cooldown_until[symbol] = now_exit + (post_exit_mins * 60)
+                add_log_message(f"[{symbol}] ⏱️ Position closed. Post-exit cooldown active for {post_exit_mins}m.")
+
             self.in_position[symbol] = False
             self.position_side[symbol] = "HOLD"
             self.position_size[symbol] = 0.0
+            self.original_position_size[symbol] = 0.0
+            self.realized_pnl[symbol] = 0.0
             self.entry_price[symbol] = 0.0
             self.stop_loss[symbol] = 0.0
             self.take_profit[symbol] = 0.0
@@ -1676,9 +1871,10 @@ class PrimeSignalBot:
         if not is_long and live_p > entry_p:
             return False, f"Cannot lock profit for {symbol} — position is currently in loss (Live: {live_p:.4f} > Entry: {entry_p:.4f})."
         
+        fee_buffer_pct = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
         if is_long:
-            # Breakeven lock: set SL to entry_price + fee buffer (0.05%) or 50% of profit, but strictly below live price
-            fee_buffer = entry_p * 0.0005
+            # Breakeven lock: set SL to entry_price + fee buffer (0.30%) or 50% of profit, but strictly below live price
+            fee_buffer = entry_p * fee_buffer_pct
             target_sl = max(entry_p + fee_buffer, entry_p + (live_p - entry_p) * 0.5)
             new_sl = min(live_p * 0.9995, target_sl)
             new_sl = max(sl_p, new_sl) # Never worsen existing SL
@@ -1689,7 +1885,7 @@ class PrimeSignalBot:
             if symbol == Config.SYMBOL:
                 DashboardState.stop_loss = new_sl
         else:
-            fee_buffer = entry_p * 0.0005
+            fee_buffer = entry_p * fee_buffer_pct
             target_sl = min(entry_p - fee_buffer, entry_p - (entry_p - live_p) * 0.5)
             new_sl = max(live_p * 1.0005, target_sl)
             new_sl = min(sl_p, new_sl) # Never worsen existing SL

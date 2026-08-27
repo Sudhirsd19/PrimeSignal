@@ -27,34 +27,45 @@
         }
         .glow-red {
             box-shadow: 0 0 15px rgba(239, 68, 68, 0.2);
+            border-color: rgba(239, 68, 68, 0.4);
+        }
         .glow-blue {
             box-shadow: 0 0 15px rgba(59, 130, 246, 0.2);
             border-color: rgba(59, 130, 246, 0.4);
         }
 
-        /* High-Visibility Custom Scrollbar for Active Positions */
+        /* High-Visibility LEFT-SIDE Custom Scrollbar for Active Positions */
         .positions-scrollbar {
-            overflow-y: scroll !important;
+            direction: rtl !important; /* Renders vertical scrollbar on the LEFT edge */
+            overflow-y: auto !important;
+            overflow-x: hidden !important;
             scrollbar-width: thin;
-            scrollbar-color: #3b82f6 rgba(15, 23, 42, 0.8);
+            scrollbar-color: #3b82f6 rgba(15, 23, 42, 0.9);
+            padding-left: 6px;
+        }
+        .positions-scrollbar > * {
+            direction: ltr !important; /* Forces normal left-to-right reading direction for position cards */
         }
         .positions-scrollbar::-webkit-scrollbar {
-            width: 6px;
+            width: 7px;
             display: block !important;
         }
         .positions-scrollbar::-webkit-scrollbar-track {
-            background: rgba(15, 23, 42, 0.8);
+            background: rgba(15, 23, 42, 0.95);
             border-radius: 6px;
+            border-right: 1px solid rgba(59, 130, 246, 0.2);
         }
         .positions-scrollbar::-webkit-scrollbar-thumb {
-            background: #3b82f6;
+            background: linear-gradient(180deg, #3b82f6, #60a5fa);
             border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
         }
         .positions-scrollbar::-webkit-scrollbar-thumb:hover {
-            background: #60a5fa;
+            background: #93c5fd;
         }
 
-        /* --- LIGHT THEME OVERRIDES --- */
+        /* --- COMPREHENSIVE LIGHT THEME OVERRIDES --- */
         body.light-theme {
             background-color: #f1f5f9;
             color: #0f172a;
@@ -64,27 +75,44 @@
             border-color: #e2e8f0 !important;
             box-shadow: 0 4px 12px -1px rgba(0, 0, 0, 0.06), 0 2px 4px -1px rgba(0, 0, 0, 0.04) !important;
         }
-        body.light-theme .bg-\[\#0b0f19\], body.light-theme .bg-\[\#0e1320\], body.light-theme .bg-\[\#070b13\], body.light-theme .bg-\[\#0c101c\]\/60, body.light-theme .bg-\[\#090d16\] {
+        body.light-theme .bg-\[\#0b0f19\], 
+        body.light-theme .bg-\[\#0e1320\], 
+        body.light-theme .bg-\[\#070b13\], 
+        body.light-theme .bg-\[\#0c101c\]\/60, 
+        body.light-theme .bg-\[\#0c101c\]\/80, 
+        body.light-theme .bg-\[\#090d16\],
+        body.light-theme .bg-\[\#0d121f\],
+        body.light-theme .bg-\[\#141b2a\]\/90 {
             background-color: #f8fafc !important;
             border-color: #e2e8f0 !important;
         }
-        body.light-theme .bg-\[\#171e2e\], body.light-theme .bg-\[\#1f2937\], body.light-theme .bg-\[\#161f30\]\/80 {
+        body.light-theme .bg-\[\#171e2e\], 
+        body.light-theme .bg-\[\#1f2937\], 
+        body.light-theme .bg-\[\#161f30\]\/80,
+        body.light-theme .bg-\[\#1a2336\] {
             background-color: #f1f5f9 !important;
             border-color: #cbd5e1 !important;
         }
         body.light-theme .text-white {
             color: #0f172a !important;
         }
-        body.light-theme .text-gray-300, body.light-theme .text-slate-200, body.light-theme .text-gray-200 {
+        body.light-theme .text-gray-300, 
+        body.light-theme .text-slate-200, 
+        body.light-theme .text-gray-200 {
             color: #1e293b !important;
         }
-        body.light-theme .text-gray-400, body.light-theme .text-slate-400 {
+        body.light-theme .text-gray-400, 
+        body.light-theme .text-slate-400 {
             color: #475569 !important;
         }
-        body.light-theme .text-gray-500, body.light-theme .text-slate-500 {
+        body.light-theme .text-gray-500, 
+        body.light-theme .text-slate-500 {
             color: #64748b !important;
         }
-        body.light-theme .border-\[\#1f2937\], body.light-theme .border-\[\#374151\] {
+        body.light-theme .border-\[\#1f2937\], 
+        body.light-theme .border-\[\#374151\],
+        body.light-theme .border-\[\#1f2937\]\/60,
+        body.light-theme .border-\[\#1f2937\]\/80 {
             border-color: #e2e8f0 !important;
         }
     </style>
@@ -824,14 +852,15 @@
         try {
             if (typeof LightweightCharts !== 'undefined') {
                 const chartElement = document.getElementById('chart-container');
+                const isInitLight = (localStorage.getItem('primesignal_theme') || 'dark') === 'light';
                 chart = LightweightCharts.createChart(chartElement, {
                     layout: {
-                        background: { type: LightweightCharts.ColorType.Solid, color: '#0e1320' },
-                        textColor: '#94a3b8',
+                        background: { type: LightweightCharts.ColorType.Solid, color: isInitLight ? '#ffffff' : '#0e1320' },
+                        textColor: isInitLight ? '#475569' : '#94a3b8',
                     },
                     grid: {
-                        verticalLines: { color: '#1f2937' },
-                        horizontalLines: { color: '#1f2937' },
+                        verticalLines: { color: isInitLight ? '#f1f5f9' : '#1f2937' },
+                        horizontalLines: { color: isInitLight ? '#f1f5f9' : '#1f2937' },
                     },
                     leftPriceScale: {
                         visible: true,
@@ -1479,7 +1508,7 @@
                             posView.classList.remove('hidden');
                             pnlBox.classList.remove('hidden');
                             
-                            if (posCard) posCard.className = "bg-[#111827] border p-5 rounded-xl flex flex-col justify-between glow-blue";
+                            if (posCard) posCard.className = "bg-[#111827] border border-[#1f2937] rounded-xl flex flex-col h-full max-h-[500px] overflow-hidden shadow-lg glow-blue";
                             
                             posView.innerHTML = ''; // clear old cards
                             
@@ -1661,7 +1690,7 @@
                             if (noPosView) noPosView.classList.remove('hidden');
                             if (posView) posView.classList.add('hidden');
                             if (pnlBox) pnlBox.classList.add('hidden');
-                            if (posCard) posCard.className = "bg-[#111827] border border-[#1f2937] p-5 rounded-xl flex flex-col justify-between";
+                            if (posCard) posCard.className = "bg-[#111827] border border-[#1f2937] rounded-xl flex flex-col h-full max-h-[500px] overflow-hidden shadow-lg";
                             if (posView) posView.innerHTML = '';
                         }
                         
@@ -2189,6 +2218,24 @@
 
             const sbText = document.getElementById('sidebar-theme-text');
             if (sbText) sbText.innerText = isLight ? 'Light Mode' : 'Dark Mode';
+
+            // Also update TradingView Chart Theme if initialized
+            if (typeof chart !== 'undefined' && chart) {
+                try {
+                    chart.applyOptions({
+                        layout: {
+                            background: { type: LightweightCharts.ColorType.Solid, color: isLight ? '#ffffff' : '#0e1320' },
+                            textColor: isLight ? '#475569' : '#94a3b8'
+                        },
+                        grid: {
+                            verticalLines: { color: isLight ? '#f1f5f9' : '#1f2937' },
+                            horizontalLines: { color: isLight ? '#f1f5f9' : '#1f2937' }
+                        }
+                    });
+                } catch (e) {
+                    console.error("Error adjusting chart theme:", e);
+                }
+            }
         }
 
         function toggleTheme() {
@@ -2204,7 +2251,7 @@
         window.currentMaxTrades = 6;
 
         async function changeMaxTrades(delta) {
-            const newMax = Math.max(1, Math.min(20, (window.currentMaxTrades || 6) + delta));
+            const newMax = Math.max(1, Math.min(200, (window.currentMaxTrades || 6) + delta));
             window.currentMaxTrades = newMax;
             
             const badge = document.getElementById('daily-trades-badge');
