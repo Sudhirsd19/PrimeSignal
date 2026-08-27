@@ -317,6 +317,11 @@
                     </div>
                 </div>
 
+                <!-- Header Sound Alert Toggle Button -->
+                <button onclick="toggleAudio()" id="header-audio-btn" title="Toggle Sound Chimes" class="p-2 rounded-md bg-[#1f2937] hover:bg-[#374151] text-gray-300 hover:text-white border border-[#374151] transition-all cursor-pointer">
+                    <span id="header-audio-icon" class="text-xs">🔊</span>
+                </button>
+
                 <!-- Header Theme Toggle Button -->
                 <button onclick="toggleTheme()" id="header-theme-btn" title="Toggle Dark / Light Theme" class="p-2 rounded-md bg-[#1f2937] hover:bg-[#374151] text-gray-300 hover:text-white border border-[#374151] transition-all cursor-pointer">
                     <span id="header-theme-icon" class="text-xs">🌙</span>
@@ -329,6 +334,11 @@
             </div>
         </header>
 
+        <!-- TOP 20 COINS MINI-SCANNER / QUICK TICKER BAR -->
+        <div id="top-20-ticker-bar" class="flex items-center gap-1.5 overflow-x-auto py-2 px-2 bg-[#0d121f]/95 border border-[#1f2937] rounded-xl scrollbar-thin shadow-inner mb-4 select-none">
+            <!-- 20 pairs rendered via JS -->
+        </div>
+
         <!-- STATS GRID: 4 CLEAN HERO CARDS -->
         <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             
@@ -336,7 +346,7 @@
             <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-2xl flex flex-col justify-between h-36 relative overflow-hidden shadow-lg hover:border-blue-500/40 transition-all">
                 <div class="flex justify-between items-center">
                     <span class="text-xs font-bold uppercase tracking-wider text-slate-400">💰 Account Balance</span>
-                    <span class="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30">Net Equity</span>
+                    <span id="today-pnl-badge" class="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Today: +$0.00 | 0W 0L</span>
                 </div>
                 <div class="flex flex-col my-1">
                     <span id="balance-usdt" class="text-2xl font-black text-white terminal-font">0.00 USDT</span>
@@ -370,6 +380,9 @@
             <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-2xl flex flex-col justify-between h-36 relative overflow-hidden shadow-lg hover:border-blue-500/40 transition-all">
                 <div class="flex justify-between items-center">
                     <span class="text-xs font-bold uppercase tracking-wider text-slate-400">🚦 Bot Status</span>
+                    <div id="cooldown-timer-badge" class="hidden text-[9px] font-extrabold text-amber-300 bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 rounded-full animate-pulse flex items-center gap-1 shadow-sm">
+                        <span id="cooldown-timer-text">⏳ Cooldown: 00:00</span>
+                    </div>
                     <span id="signal-progress-text" class="text-[10px] text-blue-400 font-bold hidden">0%</span>
                 </div>
                 <div class="flex items-center space-x-3 my-1">
@@ -693,7 +706,71 @@
         let bearishObLine = null;
         let entryPriceLine = null;
         let slPriceLine = null;
-        let tpPriceLine = null;
+        let tp1PriceLine = null;
+        let tp2PriceLine = null;
+        let tp3PriceLine = null;
+
+        // Web Audio API Sound Chimes
+        let audioEnabled = localStorage.getItem('prime_audio_enabled') === 'true';
+
+        function toggleAudio() {
+            audioEnabled = !audioEnabled;
+            localStorage.setItem('prime_audio_enabled', audioEnabled ? 'true' : 'false');
+            updateAudioIcon();
+            if (audioEnabled) playChime('test');
+        }
+
+        function updateAudioIcon() {
+            const icon = document.getElementById('header-audio-icon');
+            const btn = document.getElementById('header-audio-btn');
+            if (icon) icon.innerText = audioEnabled ? '🔊' : '🔇';
+            if (btn) btn.className = audioEnabled 
+                ? "p-2 rounded-md bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/40 transition-all cursor-pointer shadow-sm"
+                : "p-2 rounded-md bg-[#1f2937] hover:bg-[#374151] text-gray-400 hover:text-white border border-[#374151] transition-all cursor-pointer";
+        }
+
+        function playChime(type) {
+            if (!audioEnabled) return;
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                if (!AudioContext) return;
+                const ctx = new AudioContext();
+                if (type === 'tp' || type === 'win') {
+                    const osc1 = ctx.createOscillator();
+                    const osc2 = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc1.type = 'sine'; osc2.type = 'sine';
+                    osc1.frequency.setValueAtTime(587.33, ctx.currentTime);
+                    osc2.frequency.setValueAtTime(880.00, ctx.currentTime + 0.12);
+                    gain.gain.setValueAtTime(0.15, ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+                    osc1.connect(gain); osc2.connect(gain); gain.connect(ctx.destination);
+                    osc1.start(); osc2.start(ctx.currentTime + 0.12);
+                    osc1.stop(ctx.currentTime + 0.5); osc2.stop(ctx.currentTime + 0.5);
+                } else if (type === 'entry') {
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(440.00, ctx.currentTime);
+                    osc.frequency.exponentialRampToValueAtTime(659.25, ctx.currentTime + 0.15);
+                    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+                    osc.connect(gain); gain.connect(ctx.destination);
+                    osc.start(); osc.stop(ctx.currentTime + 0.4);
+                } else {
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(523.25, ctx.currentTime);
+                    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.2);
+                    osc.connect(gain); gain.connect(ctx.destination);
+                    osc.start(); osc.stop(ctx.currentTime + 0.2);
+                }
+            } catch (e) {
+                console.warn("Audio chime error:", e);
+            }
+        }
 
         function calculateEMA(data, period) {
             let ema = [];
@@ -1185,7 +1262,9 @@
                                 if (bearishObLine) { candleSeries.removePriceLine(bearishObLine); bearishObLine = null; }
                                 if (entryPriceLine) { candleSeries.removePriceLine(entryPriceLine); entryPriceLine = null; }
                                 if (slPriceLine) { candleSeries.removePriceLine(slPriceLine); slPriceLine = null; }
-                                if (tpPriceLine) { candleSeries.removePriceLine(tpPriceLine); tpPriceLine = null; }
+                                if (tp1PriceLine) { candleSeries.removePriceLine(tp1PriceLine); tp1PriceLine = null; }
+                                if (tp2PriceLine) { candleSeries.removePriceLine(tp2PriceLine); tp2PriceLine = null; }
+                                if (tp3PriceLine) { candleSeries.removePriceLine(tp3PriceLine); tp3PriceLine = null; }
                                 
                                 // Draw Active Support
                                 if (bullishOb && bullishOb > 0) {
@@ -1210,7 +1289,7 @@
                                     });
                                 }
                                 
-                                // Draw active position lines
+                                // Draw active position lines (Entry, SL, TP1, TP2, TP3/Runner)
                                 const activePos = (state.active_positions && state.symbol) ? state.active_positions[state.symbol] : null;
                                 if (activePos) {
                                     const isLocked = activePos.profit_locked || (activePos.side === 'LONG' ? activePos.stop_loss >= activePos.entry_price : (activePos.stop_loss <= activePos.entry_price && activePos.stop_loss > 0));
@@ -1224,20 +1303,48 @@
                                     });
                                     slPriceLine = candleSeries.createPriceLine({
                                         price: activePos.stop_loss,
-                                        color: isLocked ? '#f59e0b' : '#f87171', // gold/amber if profit is locked, soft red if normal SL
+                                        color: isLocked ? '#f59e0b' : '#f87171', // gold/amber if profit locked, soft red if normal SL
                                         lineWidth: 2,
                                         lineStyle: LightweightCharts.LineStyle.Dotted,
                                         axisLabelVisible: true,
                                         title: isLocked ? '🔒 Locked SL' : 'Stop Loss (SL)',
                                     });
-                                    tpPriceLine = candleSeries.createPriceLine({
-                                        price: activePos.take_profit,
-                                        color: '#34d399', // soft green
-                                        lineWidth: 2,
-                                        lineStyle: LightweightCharts.LineStyle.Dotted,
-                                        axisLabelVisible: true,
-                                        title: activePos.active_target_name || 'Take Profit (TP)',
-                                    });
+
+                                    // Draw 3-Stage Target Lines
+                                    const tp1P = activePos.target_1r || activePos.take_profit_1r;
+                                    const tp2P = activePos.target_2r || activePos.take_profit_2r;
+                                    const tp3P = activePos.final_target || activePos.take_profit;
+
+                                    if (tp1P && tp1P > 0) {
+                                        tp1PriceLine = candleSeries.createPriceLine({
+                                            price: tp1P,
+                                            color: '#10b981', // Emerald green
+                                            lineWidth: 2,
+                                            lineStyle: LightweightCharts.LineStyle.Dotted,
+                                            axisLabelVisible: true,
+                                            title: 'TP1 (1.2R) 50%',
+                                        });
+                                    }
+                                    if (tp2P && tp2P > 0) {
+                                        tp2PriceLine = candleSeries.createPriceLine({
+                                            price: tp2P,
+                                            color: '#f59e0b', // Amber
+                                            lineWidth: 2,
+                                            lineStyle: LightweightCharts.LineStyle.Dashed,
+                                            axisLabelVisible: true,
+                                            title: 'TP2 (2.2R) 30%',
+                                        });
+                                    }
+                                    if (tp3P && tp3P > 0 && tp3P !== tp1P && tp3P !== tp2P) {
+                                        tp3PriceLine = candleSeries.createPriceLine({
+                                            price: tp3P,
+                                            color: '#a855f7', // Purple runner
+                                            lineWidth: 2,
+                                            lineStyle: LightweightCharts.LineStyle.Dashed,
+                                            axisLabelVisible: true,
+                                            title: 'Runner (3.5R) 20%',
+                                        });
+                                    }
                                 }
                                 }
                             } catch (err) {
@@ -1743,6 +1850,29 @@
                                 tbody.innerHTML = '<tr><td class="py-2.5 text-gray-500 text-center" colspan="5">No trades executed yet.</td></tr>';
                             }
                         }
+
+                        // Telemetry & UI Sync
+                        latestStateRef = state;
+                        renderTop20Ticker(state);
+                        updateTodayPnLBadge(state.trades);
+
+                        // Sound alert chime detection
+                        const currentOpenCount = Object.keys(state.active_positions || {}).length;
+                        if (currentOpenCount > lastKnownPosCount && lastKnownPosCount >= 0) {
+                            playChime('entry');
+                        }
+                        lastKnownPosCount = currentOpenCount;
+
+                        const currentTradesCount = (state.trades || []).length;
+                        if (currentTradesCount > lastKnownTradesCount && lastKnownTradesCount > 0) {
+                            const latestTrade = state.trades[state.trades.length - 1];
+                            const pnl = parseFloat(latestTrade.pnl_usdt || latestTrade.pnl || 0);
+                            if (pnl > 0) {
+                                playChime('tp');
+                            }
+                        }
+                        lastKnownTradesCount = currentTradesCount;
+
                     } catch (e) {
                         console.error("Error parsing WebSocket message content:", e);
                     }
@@ -1767,6 +1897,105 @@
             }
         }
         
+        let latestStateRef = null;
+        let lastKnownPosCount = 0;
+        let lastKnownTradesCount = 0;
+
+        function renderTop20Ticker(state) {
+            const bar = document.getElementById('top-20-ticker-bar');
+            if (!bar) return;
+            const symbols = state.supported_symbols || [
+                "BTC/USDT","ETH/USDT","SOL/USDT","BNB/USDT","XRP/USDT","ADA/USDT","DOGE/USDT","AVAX/USDT",
+                "DOT/USDT","LTC/USDT","SUI/USDT","LINK/USDT","TIA/USDT","INJ/USDT","RENDER/USDT","APT/USDT",
+                "NEAR/USDT","ARB/USDT","OP/USDT","POL/USDT"
+            ];
+            const latestPrices = state.latest_prices || {};
+            const activePositions = state.active_positions || {};
+            const activeSym = state.symbol || "BTC/USDT";
+            
+            let html = '';
+            symbols.forEach(sym => {
+                const base = sym.split('/')[0];
+                const hasPos = activePositions[sym];
+                const isSelected = (sym === activeSym);
+                const priceVal = latestPrices[sym];
+                const price = priceVal ? (priceVal >= 10 ? priceVal.toFixed(2) : priceVal.toFixed(4)) : '--';
+                
+                let borderClass = isSelected 
+                    ? "border-blue-500 bg-blue-500/25 text-blue-300 font-black shadow-[0_0_10px_rgba(59,130,246,0.35)]" 
+                    : (hasPos 
+                        ? (hasPos.side === 'LONG' ? "border-emerald-500/60 bg-emerald-500/15 text-emerald-300 animate-pulse" : "border-rose-500/60 bg-rose-500/15 text-rose-300 animate-pulse")
+                        : "border-[#1f2937] bg-[#111827]/80 hover:bg-[#1f2937] text-gray-400 hover:text-white");
+                
+                let posBadge = hasPos ? `<span class="text-[8px] font-extrabold px-1 rounded ${hasPos.side === 'LONG' ? 'bg-emerald-500 text-black' : 'bg-rose-500 text-white'}">${hasPos.side === 'LONG' ? 'L' : 'S'}</span>` : '';
+                
+                html += `
+                    <button onclick="selectSymbolFromPosition('${sym}')" class="px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1.5 shrink-0 transition-all cursor-pointer ${borderClass}" title="${sym}: $${price}">
+                        <span>${base}</span>
+                        <span class="text-[9px] font-mono text-gray-300">$${price}</span>
+                        ${posBadge}
+                    </button>
+                `;
+            });
+            bar.innerHTML = html;
+        }
+
+        function updateTodayPnLBadge(trades) {
+            const badge = document.getElementById('today-pnl-badge');
+            if (!badge) return;
+            if (!trades || trades.length === 0) {
+                badge.innerText = "Today: $0.00 | 0W 0L";
+                badge.className = "text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-slate-500/20 text-slate-400 border border-slate-500/30";
+                return;
+            }
+            
+            let todayPnL = 0.0;
+            let wins = 0;
+            let losses = 0;
+            
+            trades.forEach(t => {
+                const pnl = parseFloat(t.pnl_usdt || t.pnl || 0.0);
+                todayPnL += pnl;
+                if (pnl > 0.001) wins++;
+                else if (pnl < -0.001) losses++;
+            });
+            
+            const totalCount = wins + losses;
+            const winRate = totalCount > 0 ? Math.round((wins / totalCount) * 100) : 100;
+            const sign = todayPnL >= 0 ? '+' : '';
+            const colorClass = todayPnL >= 0 
+                ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30 shadow-[0_0_8px_rgba(16,185,129,0.2)]" 
+                : "bg-rose-500/15 text-rose-400 border-rose-500/30 shadow-[0_0_8px_rgba(244,63,94,0.2)]";
+            
+            badge.innerText = `Today: ${sign}$${todayPnL.toFixed(2)} | ${wins}W ${losses}L (${winRate}%)`;
+            badge.className = `text-[10px] font-extrabold px-2 py-0.5 rounded-full border ${colorClass}`;
+        }
+
+        // 1s Cooldown ticker
+        setInterval(() => {
+            if (!latestStateRef) return;
+            const nowSecs = Date.now() / 1000.0;
+            const tpCooldown = latestStateRef.tp_cooldown_until || 0;
+            const globalPause = latestStateRef.global_pause_until || 0;
+            const clusterPause = latestStateRef.cluster_loss_pause_until || 0;
+            
+            const activePauseUntil = Math.max(tpCooldown, globalPause, clusterPause);
+            const badgeEl = document.getElementById('cooldown-timer-badge');
+            const textEl = document.getElementById('cooldown-timer-text');
+            
+            if (activePauseUntil > nowSecs && badgeEl && textEl) {
+                const remSecs = Math.max(0, Math.floor(activePauseUntil - nowSecs));
+                const m = Math.floor(remSecs / 60);
+                const s = remSecs % 60;
+                const timeStr = `${m}m ${s < 10 ? '0' : ''}${s}s`;
+                const pauseType = clusterPause > nowSecs ? "Safety Loss Pause" : (tpCooldown > nowSecs ? "Post-TP Cooldown" : "Cooldown");
+                textEl.innerText = `⏳ ${pauseType}: ${timeStr}`;
+                badgeEl.classList.remove('hidden');
+            } else if (badgeEl) {
+                badgeEl.classList.add('hidden');
+            }
+        }, 1000);
+
         // Helper: Quick-switch chart symbol when clicking an active position card
         function selectSymbolFromPosition(sym) {
             const symbolSelect = document.getElementById('symbol-select');
@@ -2288,6 +2517,7 @@
             }
         }
 
+        updateAudioIcon();
         connectWS();
         
         // Watchdog: checks every 5s for stale connection

@@ -667,7 +667,11 @@ def _build_state_payload():
         "coindcx_balances": DashboardState.coindcx_balances,
         "signal_light": DashboardState.signal_light,
         "signal_light_reason": DashboardState.signal_light_reason,
-        "signal_progress": DashboardState.signal_progress
+        "signal_progress": DashboardState.signal_progress,
+        "global_pause_until": getattr(bot_instance, 'global_pause_until', 0.0) if bot_instance else 0.0,
+        "cluster_loss_pause_until": getattr(bot_instance, 'cluster_loss_pause_until', 0.0) if bot_instance else 0.0,
+        "tp_cooldown_until": getattr(bot_instance, 'tp_cooldown_until', 0.0) if bot_instance else 0.0,
+        "supported_symbols": Config.SUPPORTED_SYMBOLS
     }
 
 async def send_state_to_ws(websocket):
