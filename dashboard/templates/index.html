@@ -37,29 +37,30 @@
         /* High-Visibility LEFT-SIDE Custom Scrollbar for Active Positions */
         .positions-scrollbar {
             direction: rtl !important; /* Renders vertical scrollbar on the LEFT edge */
-            overflow-y: auto !important;
+            overflow-y: scroll !important; /* Forces scrollbar to be always visible and accessible on the left */
             overflow-x: hidden !important;
             scrollbar-width: thin;
-            scrollbar-color: #3b82f6 rgba(15, 23, 42, 0.9);
-            padding-left: 6px;
+            scrollbar-color: #3b82f6 rgba(15, 23, 42, 0.95);
+            padding-left: 8px;
+            scrollbar-gutter: stable;
         }
         .positions-scrollbar > * {
             direction: ltr !important; /* Forces normal left-to-right reading direction for position cards */
         }
         .positions-scrollbar::-webkit-scrollbar {
-            width: 7px;
+            width: 8px;
             display: block !important;
         }
         .positions-scrollbar::-webkit-scrollbar-track {
             background: rgba(15, 23, 42, 0.95);
-            border-radius: 6px;
-            border-right: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 8px;
+            border-right: 1px solid rgba(59, 130, 246, 0.3);
         }
         .positions-scrollbar::-webkit-scrollbar-thumb {
             background: linear-gradient(180deg, #3b82f6, #60a5fa);
-            border-radius: 6px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            box-shadow: 0 0 10px rgba(59, 130, 246, 0.6);
         }
         .positions-scrollbar::-webkit-scrollbar-thumb:hover {
             background: #93c5fd;
@@ -448,8 +449,8 @@
             </div>
 
             <!-- Active Position & Analytics Panel -->
-            <div class="col-span-1 lg:col-span-1 flex flex-col h-[500px] min-h-0">
-                <div id="position-card" class="bg-[#111827] border border-[#1f2937] rounded-xl flex flex-col h-full max-h-[500px] overflow-hidden shadow-lg">
+            <div class="col-span-1 lg:col-span-1 flex flex-col h-[540px] min-h-0">
+                <div id="position-card" class="bg-[#111827] border border-[#1f2937] rounded-xl flex flex-col h-full max-h-[540px] overflow-hidden shadow-lg">
                     <!-- Tabs Header (Clean 2-Tab Navigation) -->
                     <div class="flex border-b border-[#1f2937] p-2 bg-[#0d121f] shrink-0">
                         <button id="tab-active-position" class="flex-1 py-2 text-[11px] font-bold uppercase tracking-wider text-blue-400 border-b-2 border-blue-500 focus:outline-none transition-colors duration-200 flex items-center justify-center gap-1.5 cursor-pointer">
@@ -462,8 +463,8 @@
                     </div>
 
                     <!-- Tab Content: Active Position -->
-                    <div id="content-active-position" class="flex flex-col justify-between flex-grow min-h-0 p-3 overflow-hidden">
-                        <div id="positions-scroll-container" class="flex-grow overflow-y-auto min-h-0 pr-1.5 space-y-2.5 positions-scrollbar">
+                    <div id="content-active-position" class="flex flex-col flex-1 min-h-0 p-3 overflow-hidden">
+                        <div id="positions-scroll-container" class="flex-1 overflow-y-scroll min-h-0 pr-1 space-y-2.5 positions-scrollbar">
                             <div id="no-position-view" class="flex flex-col items-center justify-center h-52 border border-dashed border-[#1f2937] rounded-xl text-gray-500">
                                 <p class="text-sm font-semibold text-gray-400">NO ACTIVE POSITIONS</p>
                                 <p class="text-xs text-gray-600 mt-1">Bot is actively scanning 20 pairs for setups...</p>
@@ -474,7 +475,7 @@
                             </div>
                         </div>
                         
-                        <div id="pnl-box" class="hidden border-t border-[#1f2937] pt-2 mt-2 flex flex-col shrink-0">
+                        <div id="pnl-box" class="hidden border-t border-[#1f2937] pt-2 mt-2 flex flex-col shrink-0 z-10 bg-[#111827]">
                             <button id="btn-emergency-close" class="w-full bg-red-600/20 hover:bg-red-600/40 text-red-500 hover:text-red-400 border border-red-500/50 font-bold py-2 px-4 rounded-lg transition-colors text-xs uppercase tracking-wider flex justify-center items-center gap-2 cursor-pointer shadow-sm">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
                                 Emergency Close All
@@ -1508,7 +1509,7 @@
                             posView.classList.remove('hidden');
                             pnlBox.classList.remove('hidden');
                             
-                            if (posCard) posCard.className = "bg-[#111827] border border-[#1f2937] rounded-xl flex flex-col h-full max-h-[500px] overflow-hidden shadow-lg glow-blue";
+                            if (posCard) posCard.className = "bg-[#111827] border border-[#1f2937] rounded-xl flex flex-col h-full max-h-[540px] overflow-hidden shadow-lg glow-blue";
                             
                             posView.innerHTML = ''; // clear old cards
                             
@@ -1690,7 +1691,7 @@
                             if (noPosView) noPosView.classList.remove('hidden');
                             if (posView) posView.classList.add('hidden');
                             if (pnlBox) pnlBox.classList.add('hidden');
-                            if (posCard) posCard.className = "bg-[#111827] border border-[#1f2937] rounded-xl flex flex-col h-full max-h-[500px] overflow-hidden shadow-lg";
+                            if (posCard) posCard.className = "bg-[#111827] border border-[#1f2937] rounded-xl flex flex-col h-full max-h-[540px] overflow-hidden shadow-lg";
                             if (posView) posView.innerHTML = '';
                         }
                         
