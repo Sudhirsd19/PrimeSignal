@@ -66,14 +66,31 @@
             background: #93c5fd;
         }
 
+        /* --- HORIZONTAL TICKER BAR SLIM SCROLLBAR --- */
+        #top-20-ticker-bar::-webkit-scrollbar {
+            height: 5px;
+        }
+        #top-20-ticker-bar::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.6);
+            border-radius: 4px;
+        }
+        #top-20-ticker-bar::-webkit-scrollbar-thumb {
+            background: #3b82f6;
+            border-radius: 4px;
+        }
+        #top-20-ticker-bar::-webkit-scrollbar-thumb:hover {
+            background: #60a5fa;
+        }
+
         /* --- COMPREHENSIVE LIGHT THEME OVERRIDES --- */
         body.light-theme {
             background-color: #f1f5f9;
             color: #0f172a;
         }
-        body.light-theme .bg-\[\#111827\] {
+        body.light-theme .bg-\[\#111827\],
+        body.light-theme .bg-\[\#111827\]\/80 {
             background-color: #ffffff !important;
-            border-color: #e2e8f0 !important;
+            border-color: #cbd5e1 !important;
             box-shadow: 0 4px 12px -1px rgba(0, 0, 0, 0.06), 0 2px 4px -1px rgba(0, 0, 0, 0.04) !important;
         }
         body.light-theme .bg-\[\#0b0f19\], 
@@ -83,15 +100,17 @@
         body.light-theme .bg-\[\#0c101c\]\/80, 
         body.light-theme .bg-\[\#090d16\],
         body.light-theme .bg-\[\#0d121f\],
+        body.light-theme .bg-\[\#0d121f\]\/90,
+        body.light-theme .bg-\[\#0d121f\]\/95,
         body.light-theme .bg-\[\#141b2a\]\/90 {
-            background-color: #f8fafc !important;
-            border-color: #e2e8f0 !important;
+            background-color: #ffffff !important;
+            border-color: #cbd5e1 !important;
         }
         body.light-theme .bg-\[\#171e2e\], 
         body.light-theme .bg-\[\#1f2937\], 
         body.light-theme .bg-\[\#161f30\]\/80,
         body.light-theme .bg-\[\#1a2336\] {
-            background-color: #f1f5f9 !important;
+            background-color: #f8fafc !important;
             border-color: #cbd5e1 !important;
         }
         body.light-theme .text-white {
@@ -104,17 +123,72 @@
         }
         body.light-theme .text-gray-400, 
         body.light-theme .text-slate-400 {
-            color: #475569 !important;
+            color: #334155 !important;
         }
         body.light-theme .text-gray-500, 
         body.light-theme .text-slate-500 {
-            color: #64748b !important;
+            color: #475569 !important;
         }
         body.light-theme .border-\[\#1f2937\], 
         body.light-theme .border-\[\#374151\],
         body.light-theme .border-\[\#1f2937\]\/60,
         body.light-theme .border-\[\#1f2937\]\/80 {
-            border-color: #e2e8f0 !important;
+            border-color: #cbd5e1 !important;
+        }
+
+        /* --- LIGHT THEME TICKER BAR VISIBILITY --- */
+        body.light-theme #top-20-ticker-bar {
+            background-color: #ffffff !important;
+            border-color: #cbd5e1 !important;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.05) !important;
+        }
+        body.light-theme #top-20-ticker-bar::-webkit-scrollbar-track {
+            background: #e2e8f0;
+        }
+        body.light-theme #top-20-ticker-bar::-webkit-scrollbar-thumb {
+            background: #94a3b8;
+        }
+        body.light-theme #top-20-ticker-bar button {
+            background-color: #f8fafc !important;
+            border-color: #cbd5e1 !important;
+            color: #0f172a !important;
+        }
+        body.light-theme #top-20-ticker-bar button span.font-mono {
+            color: #334155 !important;
+            font-weight: 700 !important;
+        }
+        body.light-theme #top-20-ticker-bar button:hover {
+            background-color: #f1f5f9 !important;
+            border-color: #3b82f6 !important;
+        }
+        body.light-theme #top-20-ticker-bar button.border-blue-500 {
+            background-color: #eff6ff !important;
+            border-color: #2563eb !important;
+            color: #1d4ed8 !important;
+            box-shadow: 0 0 8px rgba(37,99,235,0.2) !important;
+        }
+        body.light-theme #top-20-ticker-bar button.border-blue-500 span.font-mono {
+            color: #1d4ed8 !important;
+        }
+
+        /* --- LIGHT THEME HEADER CONTROLS --- */
+        body.light-theme #symbol-select {
+            background-color: #ffffff !important;
+            border-color: #cbd5e1 !important;
+            color: #2563eb !important;
+        }
+        body.light-theme #btn-open-sidebar,
+        body.light-theme #header-audio-btn,
+        body.light-theme #header-theme-btn {
+            background-color: #f8fafc !important;
+            border-color: #cbd5e1 !important;
+            color: #334155 !important;
+        }
+        body.light-theme #btn-open-sidebar:hover,
+        body.light-theme #header-audio-btn:hover,
+        body.light-theme #header-theme-btn:hover {
+            background-color: #f1f5f9 !important;
+            color: #0f172a !important;
         }
     </style>
 </head>
