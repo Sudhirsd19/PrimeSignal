@@ -2277,12 +2277,32 @@
                             const pnlColor = isWin ? 'text-emerald-400' : 'text-rose-400';
                             const pnlSign = isWin ? '+' : '';
                             
+                            const formatTimeHelper = (str, rawTs) => {
+                                if (str && typeof str === 'string' && str !== 'N/A' && str.includes(' ')) {
+                                    const parts = str.split(' ');
+                                    return { date: parts[0], time: parts[1] };
+                                }
+                                if (rawTs) {
+                                    const num = parseFloat(rawTs);
+                                    if (!isNaN(num) && num > 0) {
+                                        const dt = new Date(num > 1e11 ? num : num * 1000);
+                                        if (!isNaN(dt.getTime())) {
+                                            const date = dt.toISOString().slice(0, 10);
+                                            const time = dt.toTimeString().split(' ')[0];
+                                            return { date, time };
+                                        }
+                                    }
+                                }
+                                return { date: '', time: (str && str !== 'N/A') ? str : '--:--:--' };
+                            };
+
+                            const eObj = formatTimeHelper(t.entry_time_str, t.entry_time || t.ts);
+                            const xObj = formatTimeHelper(t.exit_time_str, t.exit_time || t.time);
+                            const dateStr = eObj.date || xObj.date || (t.timestamp && t.timestamp !== 'N/A' ? t.timestamp.slice(0, 10) : '');
+                            
                             const timeTd = document.createElement('td');
                             timeTd.className = 'py-2 px-2 text-gray-400 terminal-font';
-                            const eTime = t.entry_time_str ? t.entry_time_str.split(' ')[1] : 'N/A';
-                            const xTime = t.exit_time_str ? t.exit_time_str.split(' ')[1] : 'N/A';
-                            const dateStr = t.entry_time_str ? t.entry_time_str.split(' ')[0] : '';
-                            timeTd.innerHTML = `<div><span class="text-white font-bold">${eTime}</span> ➔ <span class="text-gray-300">${xTime}</span></div><div class="text-[8px] text-gray-500">${dateStr}</div>`;
+                            timeTd.innerHTML = `<div><span class="text-white font-bold">${eObj.time}</span> ➔ <span class="text-gray-300">${xObj.time}</span></div><div class="text-[8px] text-gray-500">${dateStr}</div>`;
                             
                             const symTd = document.createElement('td');
                             symTd.className = 'py-2 px-1.5 font-bold text-white';

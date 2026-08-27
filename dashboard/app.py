@@ -481,8 +481,11 @@ async def get_analytics():
                 "exit_price": ext_p,
                 "pnl_usdt": round(pnl, 4),
                 "pnl_pct": round(pnl_pct_val, 2),
+                "entry_time": e_ts,
+                "exit_time": x_ts,
                 "entry_time_str": e_time_str or "N/A",
                 "exit_time_str": x_time_str or "N/A",
+                "timestamp": t.get("timestamp") or x_time_str or "N/A",
                 "duration": dur_str,
                 "reason": t.get("reason") or t.get("type") or "TP/SL Exit"
             })
