@@ -1466,8 +1466,13 @@ class PrimeSignalBot:
                                     if self.take_profit_1r[symbol] < self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = self.take_profit_1r[symbol]
                                         if symbol == Config.SYMBOL: DashboardState.stop_loss = self.take_profit_1r[symbol]
-                                        guar_pnl_pct = max(0.0, (self.entry_price[symbol] - self.stop_loss[symbol]) / self.entry_price[symbol] * 100.0)
-                                        guar_pnl_usdt = max(0.0, self.position_size[symbol] * (self.entry_price[symbol] - self.stop_loss[symbol]))
+                                        
+                                        orig_sz = self.original_position_size.get(symbol, self.position_size[symbol] / 0.20) or (self.position_size[symbol] / 0.20)
+                                        runner_guar = max(0.0, self.position_size[symbol] * (self.entry_price[symbol] - self.stop_loss[symbol]))
+                                        guar_pnl_usdt = self.realized_pnl[symbol] + runner_guar
+                                        orig_val = orig_sz * self.entry_price[symbol]
+                                        guar_pnl_pct = (guar_pnl_usdt / orig_val * 100.0) if orig_val > 0 else 0.0
+                                        
                                         add_log_message(f"[{symbol}] 🚀 TP2 Hit! SL locked at TP1 level ({self.stop_loss[symbol]:.4f}). Trailing Runner active.")
                                         await self.notifier.send_message(
                                             f"🚀 *DEEP PROFIT LOCKED ({symbol})*\n"
@@ -1728,8 +1733,9 @@ class PrimeSignalBot:
             except Exception as e:
                 print(f"[LOG] Failed to write trade log: {e}")
 
-            # Task 5: Cluster Loss Tracking
-            is_loss = pnl_usdt < 0
+            # Task 5: Cluster Loss Tracking (Evaluates Total Trade Return = Realized TP1/TP2 Cash + Final Runner PnL)
+            total_trade_pnl = self.realized_pnl.get(symbol, 0.0) + pnl_usdt
+            is_loss = total_trade_pnl < -0.01
             self.trade_history.append(is_loss)
             if len(self.trade_history) > 6:
                 self.trade_history.pop(0)
