@@ -1422,11 +1422,11 @@
                                     if (tp1P && tp1P > 0) {
                                         tp1PriceLine = candleSeries.createPriceLine({
                                             price: tp1P,
-                                            color: '#10b981', // Emerald green
+                                            color: '#10b981', // Emerald
                                             lineWidth: 2,
                                             lineStyle: LightweightCharts.LineStyle.Dotted,
                                             axisLabelVisible: true,
-                                            title: 'TP1 (1.2R) 50%',
+                                            title: 'TP1 (1.0R) 50%',
                                         });
                                     }
                                     if (tp2P && tp2P > 0) {
@@ -1436,17 +1436,17 @@
                                             lineWidth: 2,
                                             lineStyle: LightweightCharts.LineStyle.Dashed,
                                             axisLabelVisible: true,
-                                            title: 'TP2 (2.2R) 30%',
+                                            title: 'TP2 (2.5R) 30%',
                                         });
                                     }
                                     if (tp3P && tp3P > 0 && tp3P !== tp1P && tp3P !== tp2P) {
                                         tp3PriceLine = candleSeries.createPriceLine({
                                             price: tp3P,
-                                            color: '#a855f7', // Purple runner
+                                            color: '#a855f7', // Purple
                                             lineWidth: 2,
                                             lineStyle: LightweightCharts.LineStyle.Dashed,
                                             axisLabelVisible: true,
-                                            title: 'Runner (3.5R) 20%',
+                                            title: 'Runner (4.0R) 20%',
                                         });
                                     }
                                 }
@@ -1761,13 +1761,13 @@
                                     statusBadgeHTML = `<span class="text-[9px] px-1.5 py-0.5 font-bold rounded uppercase tracking-wider bg-slate-500/20 text-slate-300 border border-slate-500/30">⚪ EVEN (0.00%)</span>`;
                                 }
                                 
-                                const target1P = pos.target_1r || (isLong ? entryP * 1.012 : entryP * 0.988);
-                                const target2P = pos.target_2r || (isLong ? entryP * 1.022 : entryP * 0.978);
-                                const finalTargetP = pos.final_target || (isLong ? entryP * 1.035 : entryP * 0.965);
+                                const target1P = pos.target_1r || (isLong ? entryP * 1.010 : entryP * 0.990);
+                                const target2P = pos.target_2r || (isLong ? entryP * 1.025 : entryP * 0.975);
+                                const finalTargetP = pos.final_target || (isLong ? entryP * 1.040 : entryP * 0.960);
                                 
                                 const stage = pos.target_stage || (pos.tp2_hit ? 3 : (pos.tp1_hit ? 2 : 1));
                                 const activeTargetP = pos.active_target || (stage === 1 ? target1P : (stage === 2 ? target2P : finalTargetP));
-                                const activeTargetName = pos.active_target_name || (stage === 1 ? "TP1 (1.2R)" : (stage === 2 ? "TP2 (2.2R)" : "Runner Target"));
+                                const activeTargetName = pos.active_target_name || (stage === 1 ? "TP1 (1.0R)" : (stage === 2 ? "TP2 (2.5R)" : "Runner Target (4.0R)"));
                                 
                                 // Check if profit is genuine locked
                                 const isProfitLocked = pos.tp1_hit || (isLong ? (slP >= entryP && slP > 0) : (slP <= entryP && slP > 0 && entryP > 0));

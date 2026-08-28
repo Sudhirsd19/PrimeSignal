@@ -880,10 +880,10 @@ class PrimeSignalBot:
                 self.partial_tp_taken[symbol] = False
                 self.tp2_taken[symbol] = False
                 r_amount = abs(sl - entry_price)
-                self.take_profit_1r[symbol] = metadata.get('tp1', entry_price + (1.2 * r_amount))
-                self.take_profit_2r[symbol] = metadata.get('tp2', entry_price + (2.2 * r_amount))
-                # Extended Runner Target at 3.5R (so runner target stays above SL & TP2)
-                self.take_profit[symbol] = metadata.get('tp3', entry_price + (3.5 * r_amount))
+                self.take_profit_1r[symbol] = metadata.get('tp1', entry_price + (1.0 * r_amount))
+                self.take_profit_2r[symbol] = metadata.get('tp2', entry_price + (2.5 * r_amount))
+                # Extended Runner Target at 4.0R (so runner target stays above SL & TP2)
+                self.take_profit[symbol] = metadata.get('tp3', entry_price + (4.0 * r_amount))
                 
                 self.highest_price_reached[symbol] = entry_price
                 self.position_size[symbol] = pos_size
@@ -911,16 +911,16 @@ class PrimeSignalBot:
                 self.save_state()
                 # Telegram Notification with 3-Stage Target Levels
                 msg_str = (
-                    f"🟢 *BUY (LONG) {symbol}*\\n"
-                    f"Mode: {metadata.get('mode', 'STRICT')}\\n"
-                    f"Setup Type: {metadata.get('setup_type', 'NONE')}\\n"
-                    f"Entry: {entry_price:.4f}\\n"
-                    f"Stop Loss: {sl:.4f}\\n"
-                    f"TP1 (1.2R - 50%): {self.take_profit_1r[symbol]:.4f}\\n"
-                    f"TP2 (2.2R - 30%): {self.take_profit_2r[symbol]:.4f}\\n"
-                    f"Runner (3.5R - 20%): {self.take_profit[symbol]:.4f}\\n"
-                    f"Position Size: {pos_size:.6f}\\n"
-                    f"Confidence: {prob:.2f}\\n"
+                    f"🟢 *BUY (LONG) {symbol}*\n"
+                    f"Mode: {metadata.get('mode', 'STRICT')}\n"
+                    f"Setup Type: {metadata.get('setup_type', 'NONE')}\n"
+                    f"Entry: {entry_price:.4f}\n"
+                    f"Stop Loss: {sl:.4f}\n"
+                    f"TP1 (1.0R - 50%): {self.take_profit_1r[symbol]:.4f}\n"
+                    f"TP2 (2.5R - 30%): {self.take_profit_2r[symbol]:.4f}\n"
+                    f"Runner (4.0R - 20%): {self.take_profit[symbol]:.4f}\n"
+                    f"Position Size: {pos_size:.6f}\n"
+                    f"Confidence: {prob:.2f}\n"
                     f"Reason: {metadata.get('reason', 'N/A')}"
                 )
                 add_log_message(f"[{symbol}] " + msg_str.replace('\\n', ' | '))
@@ -954,10 +954,10 @@ class PrimeSignalBot:
                 self.partial_tp_taken[symbol] = False
                 self.tp2_taken[symbol] = False
                 r_amount = abs(sl - entry_price)
-                self.take_profit_1r[symbol] = metadata.get('tp1', entry_price - (1.2 * r_amount))
-                self.take_profit_2r[symbol] = metadata.get('tp2', entry_price - (2.2 * r_amount))
-                # Extended Runner Target at 3.5R (so runner target stays below SL & TP2)
-                self.take_profit[symbol] = metadata.get('tp3', entry_price - (3.5 * r_amount))
+                self.take_profit_1r[symbol] = metadata.get('tp1', entry_price - (1.0 * r_amount))
+                self.take_profit_2r[symbol] = metadata.get('tp2', entry_price - (2.5 * r_amount))
+                # Extended Runner Target at 4.0R (so runner target stays below SL & TP2)
+                self.take_profit[symbol] = metadata.get('tp3', entry_price - (4.0 * r_amount))
                 
                 self.lowest_price_reached[symbol] = entry_price
                 self.position_size[symbol] = pos_size
@@ -984,16 +984,16 @@ class PrimeSignalBot:
 
                 self.save_state()
                 msg_str = (
-                    f"🔴 *SELL (SHORT) {symbol}*\\n"
-                    f"Mode: {metadata.get('mode', 'STRICT')}\\n"
-                    f"Setup Type: {metadata.get('setup_type', 'NONE')}\\n"
-                    f"Entry: {entry_price:.4f}\\n"
-                    f"Stop Loss: {sl:.4f}\\n"
-                    f"TP1 (1.2R - 50%): {self.take_profit_1r[symbol]:.4f}\\n"
-                    f"TP2 (2.2R - 30%): {self.take_profit_2r[symbol]:.4f}\\n"
-                    f"Runner (3.5R - 20%): {self.take_profit[symbol]:.4f}\\n"
-                    f"Position Size: {pos_size:.6f}\\n"
-                    f"Confidence: {prob:.2f}\\n"
+                    f"🔴 *SELL (SHORT) {symbol}*\n"
+                    f"Mode: {metadata.get('mode', 'STRICT')}\n"
+                    f"Setup Type: {metadata.get('setup_type', 'NONE')}\n"
+                    f"Entry: {entry_price:.4f}\n"
+                    f"Stop Loss: {sl:.4f}\n"
+                    f"TP1 (1.0R - 50%): {self.take_profit_1r[symbol]:.4f}\n"
+                    f"TP2 (2.5R - 30%): {self.take_profit_2r[symbol]:.4f}\n"
+                    f"Runner (4.0R - 20%): {self.take_profit[symbol]:.4f}\n"
+                    f"Position Size: {pos_size:.6f}\n"
+                    f"Confidence: {prob:.2f}\n"
                     f"Reason: {metadata.get('reason', 'N/A')}"
                 )
                 add_log_message(f"[{symbol}] " + msg_str.replace('\\n', ' | '))
@@ -1535,15 +1535,15 @@ class PrimeSignalBot:
                         is_profit_locked = (is_long and sl_val >= entry_val) or (not is_long and sl_val <= entry_val and sl_val > 0)
                         
                         r_dist = abs(entry_val - sl_val) if abs(entry_val - sl_val) > 0 else (entry_val * 0.01)
-                        target_1r = self.take_profit_1r[s] if self.take_profit_1r[s] > 0 else (entry_val + 1.2 * r_dist if is_long else entry_val - 1.2 * r_dist)
-                        target_2r = self.take_profit_2r[s] if self.take_profit_2r[s] > 0 else (entry_val + 2.2 * r_dist if is_long else entry_val - 2.2 * r_dist)
-                        final_tp = self.take_profit[s] if self.take_profit[s] > 0 else (entry_val + 3.5 * r_dist if is_long else entry_val - 3.5 * r_dist)
+                        target_1r = self.take_profit_1r[s] if self.take_profit_1r[s] > 0 else (entry_val + 1.0 * r_dist if is_long else entry_val - 1.0 * r_dist)
+                        target_2r = self.take_profit_2r[s] if self.take_profit_2r[s] > 0 else (entry_val + 2.5 * r_dist if is_long else entry_val - 2.5 * r_dist)
+                        final_tp = self.take_profit[s] if self.take_profit[s] > 0 else (entry_val + 4.0 * r_dist if is_long else entry_val - 4.0 * r_dist)
                         
                         # Guarantee final_tp is beyond target_2r
                         if is_long and final_tp <= target_2r:
-                            final_tp = entry_val + 3.5 * r_dist
+                            final_tp = entry_val + 4.0 * r_dist
                         elif not is_long and final_tp >= target_2r:
-                            final_tp = entry_val - 3.5 * r_dist
+                            final_tp = entry_val - 4.0 * r_dist
 
                         tp1_hit = self.partial_tp_taken[s]
                         tp2_hit = self.tp2_taken[s]
@@ -1551,11 +1551,11 @@ class PrimeSignalBot:
                         # Dynamic target escalation upon hitting targets
                         if not tp1_hit:
                             active_target = target_1r
-                            active_target_name = "TP1 (1.2R)"
+                            active_target_name = "TP1 (1.0R)"
                             target_stage = 1
                         elif not tp2_hit:
                             active_target = target_2r
-                            active_target_name = "TP2 (2.2R)"
+                            active_target_name = "TP2 (2.5R)"
                             target_stage = 2
                         else:
                             # Runner stage: Ensure target is strictly ahead of trailing SL
@@ -1563,7 +1563,7 @@ class PrimeSignalBot:
                                 active_target = max(final_tp, sl_val + r_dist)
                             else:
                                 active_target = min(final_tp, sl_val - r_dist)
-                            active_target_name = "Runner Target"
+                            active_target_name = "Runner Target (4.0R)"
                             target_stage = 3
 
                         # Calculate guaranteed locked profit in USDT and % (including realized partial TPs)

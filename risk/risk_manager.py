@@ -1,4 +1,5 @@
 import math
+import os
 import threading
 from config import Config
 
@@ -43,8 +44,10 @@ class RiskManager:
         if account_equity <= 0 or entry_price <= 0:
             return 0.0
 
-        # 1. Calculate USDT budget to risk
-        usdt_risk = account_equity * (Config.RISK_PCT / 100.0)
+        # 1. Calculate USDT budget to risk (Normalize and cap max dollar risk at $25.0 USDT to prevent outsized altcoin losses)
+        base_risk = account_equity * (Config.RISK_PCT / 100.0)
+        max_single_trade_risk = float(os.getenv("MAX_SINGLE_TRADE_RISK_USDT", "25.0"))
+        usdt_risk = min(base_risk, max_single_trade_risk) if account_equity >= 1000.0 else base_risk
 
         # 2. Calculate stop distance
         stop_distance = abs(entry_price - stop_loss)
