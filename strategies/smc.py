@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 
+from typing import Any
+
 def detect_fvgs(df):
     """
     Detects Fair Value Gaps (FVGs) in the DataFrame using vectorized numpy arrays.
@@ -8,7 +10,7 @@ def detect_fvgs(df):
         fvg_series: pandas Series of dicts containing FVG details or None.
     """
     n = len(df)
-    fvg_list = [None] * n
+    fvg_list: list[Any] = [None] * n
     if n < 3:
         return pd.Series(fvg_list, index=df.index)
 
@@ -98,7 +100,7 @@ def detect_order_blocks(df, lookback=50):
     Identifies bullish and bearish order blocks using high-performance numpy arrays.
     """
     n = len(df)
-    ob_list = [None] * n
+    ob_list: list[Any] = [None] * n
     if n < 6:
         return pd.Series(ob_list, index=df.index)
 
@@ -219,8 +221,8 @@ def detect_structure(df, period=5):
     Identifies market structure changes (BOS / CHOCH) using numpy arrays.
     """
     n = len(df)
-    bos_list = [None] * n
-    choch_list = [None] * n
+    bos_list: list[Any] = [None] * n
+    choch_list: list[Any] = [None] * n
     if n < period * 2 + 1:
         return pd.Series(bos_list, index=df.index), pd.Series(choch_list, index=df.index)
 

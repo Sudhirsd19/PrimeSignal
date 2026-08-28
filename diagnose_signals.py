@@ -32,7 +32,6 @@ def main():
     with open("htf_data.json", "r") as f:
         htf_ohlcv = json.load(f)
     
-    ltf_df = prepare_dataframe(ltf_ohlcv)
     
     # We only have BTC data cached, so test on different windows to simulate
     # multiple coin scenarios
@@ -64,12 +63,14 @@ def main():
         # Relaxed
         signal_r, meta_r = strategy.generate_signal(htf_df, window_ltf_df, relaxed=True)
         
-        dbg = meta_s.get('debug_checks', {})
-        trend = meta_s.get('htf_trend', 'N/A')
-        regime = meta_s.get('market_regime', 'N/A')
-        score = meta_s.get('score', 0)
-        rsi = meta_s.get('ltf_rsi', 0)
-        reason = meta_s.get('reason', 'Unknown')
+        dbg: dict = meta_s.get('debug_checks') if isinstance(meta_s.get('debug_checks'), dict) else {}
+        trend: str = str(meta_s.get('htf_trend') or 'N/A')
+        regime: str = str(meta_s.get('market_regime') or 'N/A')
+        raw_score = meta_s.get('score')
+        score: float = float(raw_score) if isinstance(raw_score, (int, float)) else 0.0
+        raw_rsi = meta_s.get('ltf_rsi')
+        rsi: float = float(raw_rsi) if isinstance(raw_rsi, (int, float)) else 0.0
+        reason: str = str(meta_s.get('reason') or 'Unknown')
         
         if signal_s in ["BUY", "SELL"]:
             total_buy += 1
@@ -93,14 +94,14 @@ def main():
             elif score < 3:
                 fail_counts['score'] += 1
         
-        t = dbg.get('trend', '?')
-        z = dbg.get('zone', '?')
-        tr = dbg.get('trigger', '?')
-        v = dbg.get('vwap', '?')
-        vol = dbg.get('volatility', '?')
+        t: str = str(dbg.get('trend', '?'))
+        z: str = str(dbg.get('zone', '?'))
+        tr: str = str(dbg.get('trigger', '?'))
+        v: str = str(dbg.get('vwap', '?'))
+        vol: str = str(dbg.get('volatility', '?'))
         
         label = f"bar_{end_idx}"
-        print(f"{label:<12} {signal_s:<8} {signal_r:<8} {trend:<10} {regime:<10} {score:<6} {rsi:<8.2f} {t:<5} {z:<5} {tr:<5} {v:<5} {vol:<5} {reason[:50]}")
+        print(f"{label:<12} {signal_s:<8} {signal_r:<8} {trend:<10} {regime:<10} {score:<6.1f} {rsi:<8.2f} {t:<5} {z:<5} {tr:<5} {v:<5} {vol:<5} {reason[:50]}")
     
     print("=" * 130)
     print(f"\nSummary over {len(test_points)} test windows:")

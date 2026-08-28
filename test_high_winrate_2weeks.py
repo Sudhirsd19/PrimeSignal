@@ -1,17 +1,13 @@
 import json
 import os
 import sys
-import time
-import ccxt
-import pandas as pd
-import numpy as np
 
 # Reconfigure stdout for utf-8 on Windows
 if sys.platform == 'win32':
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
-        sys.stderr.reconfigure(encoding='utf-8')
-    except AttributeError:
+        getattr(sys.stdout, 'reconfigure', lambda **kw: None)(encoding='utf-8')
+        getattr(sys.stderr, 'reconfigure', lambda **kw: None)(encoding='utf-8')
+    except (AttributeError, Exception):
         pass
 
 from config import Config
@@ -39,8 +35,8 @@ def run_high_winrate_backtest():
     print("    HIGH-WINRATE (WINS > LOSSES) 2-WEEK MULTI-COIN SMC INSTITUTIONAL BACKTEST    ", flush=True)
     print("=" * 95, flush=True)
     print(f"Target Assets : {len(symbols)} coins")
-    print(f"Strategy Rules: Macro 50/200 EMA + Reversal Candle + 1.2R TP1 (65% Size) + BE @ 0.7R", flush=True)
-    print(f"Starting Fund : $1,000 USDT per coin ($20,000 USDT Total Portfolio)\n", flush=True)
+    print("Strategy Rules: Macro 50/200 EMA + Reversal Candle + 1.2R TP1 (65% Size) + BE @ 0.7R", flush=True)
+    print("Starting Fund : $1,000 USDT per coin ($20,000 USDT Total Portfolio)\n", flush=True)
 
     results = []
     tot_t, tot_w, tot_l = 0, 0, 0
@@ -78,6 +74,17 @@ def run_high_winrate_backtest():
         pause_until_bar = 0
         last_trade_bar = -999
         fee_rate = 0.00075
+
+        entry_p = 0.0
+        init_sl = 0.0
+        high_p = 0.0
+        low_p = 0.0
+        partial_taken = False
+        p_size = 0.0
+        tp1 = 0.0
+        tp2 = 0.0
+        sl = 0.0
+        pnl1 = 0.0
 
         for i in range(start_eval, len(ltf_df)):
             if i < pause_until_bar:
@@ -149,7 +156,8 @@ def run_high_winrate_backtest():
                         exit_p = tp2
                         pnl2 = p_size * (entry_p - exit_p) - (p_size * exit_p * fee_rate)
                         balance += pnl2
-                        trades.append({'pnl': tot_pnl if partial_taken else pnl2, 'symbol': sym, 'side': 'SHORT', 'reason': 'TP2'})
+                        tot_pnl = (pnl1 if partial_taken else 0.0) + pnl2
+                        trades.append({'pnl': tot_pnl, 'symbol': sym, 'side': 'SHORT', 'reason': 'TP2'})
                         in_pos = False
                         consecutive_losses = 0
                     elif c_high >= sl:
@@ -227,8 +235,8 @@ def run_high_winrate_backtest():
                         balance -= (p_size * entry_p * fee_rate)
                         last_trade_bar = i
 
-        wins = len([t for t in trades if t['pnl'] > 0])
-        losses = len([t for t in trades if t['pnl'] <= 0])
+        wins = len([t for t in trades if float(t['pnl']) > 0])
+        losses = len([t for t in trades if float(t['pnl']) <= 0])
         tot = len(trades)
         pnl = balance - 1000.0
         tot_t += tot
@@ -261,13 +269,13 @@ def run_high_winrate_backtest():
     print(f"{'Asset':<12} | {'Days':<6} | {'Trades':<8} | {'Wins':<6} | {'Losses':<6} | {'Win Rate':<10} | {'PnL (USDT)':<14} | {'Return %':<10}", flush=True)
     print("-" * 95, flush=True)
     for r in results:
-        if r['trades'] > 0:
+        if int(r['trades']) > 0:
             print(f"{r['symbol']:<12} | {r['days']:<6.1f} | {r['trades']:<8} | {r['wins']:<6} | {r['losses']:<6} | {r['win_rate']:>6.1f}%    | {r['pnl']:>+10.2f} USDT | {r['pnl_pct']:>+7.2f}%", flush=True)
     print("-" * 95, flush=True)
     print(f"{'PORTFOLIO':<12} | {'14.0':<6} | {tot_t:<8} | {tot_w:<6} | {tot_l:<6} | {portfolio_wr:>6.1f}%    | {net_pnl:>+10.2f} USDT | {net_ret:>+7.2f}%", flush=True)
     print("=" * 95, flush=True)
 
-    print(f"\n[SUMMARY: WINS vs LOSSES]")
+    print("\n[SUMMARY: WINS vs LOSSES]")
     print(f"  • Total Executed Trades  : {tot_t} Trades")
     print(f"  • Total WINS             : {tot_w} WINS  🏆 (Wins count is significantly higher!)")
     print(f"  • Total LOSSES           : {tot_l} LOSSES")

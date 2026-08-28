@@ -1,8 +1,8 @@
-﻿import asyncio
+import asyncio
 import pandas as pd
 import numpy as np
 from config import Config
-from strategies.indicators import calculate_bollinger_bands, calculate_ema
+from strategies.indicators import calculate_bollinger_bands
 from execution.execution_engine import ExecutionEngine
 from main import PrimeSignalBot
 

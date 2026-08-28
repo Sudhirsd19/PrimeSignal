@@ -1,3 +1,4 @@
+from typing import Any
 from strategies.base import BaseStrategy
 from strategies.indicators import calculate_ema, calculate_rsi, calculate_atr, calculate_vwap, calculate_adx, calculate_bollinger_bands, detect_rsi_divergence
 from strategies.smc import detect_fvgs, detect_order_blocks, detect_structure
@@ -21,7 +22,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         if isinstance(ltf_df, list):
             ltf_df = prepare_dataframe(ltf_df)
 
-        metadata = {
+        metadata: dict[str, Any] = {
             'htf_trend': 'NEUTRAL',
             'strong_trend': False,
             'ltf_rsi': 50.0,
@@ -150,7 +151,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         metadata['strong_trend'] = strong_trend
 
         import datetime
-        now_dt = datetime.datetime.utcnow()
+        now_dt = datetime.datetime.now(datetime.timezone.utc)
         current_hour = now_dt.hour
         current_weekday = now_dt.weekday()
         
@@ -432,6 +433,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             else: score_thresh = 3.0
                 
             metadata['score'] = score
+            metadata['score_threshold'] = score_thresh
             
             # Multi-Trigger Valid Entry:
             # 1. Zone Setups (OB, FVG, SWEEP) with rejection trigger OR micro_bos
@@ -620,6 +622,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             else: score_thresh = 3.0
                 
             metadata['score'] = score
+            metadata['score_threshold'] = score_thresh
             
             # Multi-Trigger Valid Entry:
             # 1. Zone Setups (OB, FVG, SWEEP) with rejection trigger OR micro_bos

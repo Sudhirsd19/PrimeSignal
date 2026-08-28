@@ -134,7 +134,7 @@ class CoinDCXClient:
             print(f"[CoinDCX] ERROR calling public ticker: {e}")
             return None
 
-    async def place_order(self, side: str, order_type: str, amount: float, price: float = None, symbol: str = None):
+    async def place_order(self, side: str, order_type: str, amount: float, price: float | None = None, symbol: str | None = None):
         """Places a spot order on CoinDCX."""
         if not self.initialized:
             await self.initialize()

@@ -38,41 +38,43 @@ class BacktestEngine:
         print(f"[BACKTEST] Aligned data frames: HTF ({len(htf_df)} bars) | LTF ({len(ltf_df)} bars)")
         
         # Track state
-        in_position = False
-        position_side = None
-        entry_price = 0.0
-        position_size = 0.0
-        stop_loss = 0.0
-        initial_stop_loss = 0.0
-        take_profit = 0.0
-        highest_price = 0.0
-        lowest_price = 999999.0
+        in_position: bool = False
+        position_side: str | None = None
+        entry_price: float = 0.0
+        position_size: float = 0.0
+        stop_loss: float = 0.0
+        initial_stop_loss: float = 0.0
+        take_profit: float = 0.0
+        highest_price: float = 0.0
+        lowest_price: float = 999999.0
         entry_time = None
-        last_trade_time = 0
-        last_zone_traded = None
-        volatility_pause_until = 0
-        partial_tp_taken = False
-        take_profit_1r = 0.0
-        setup_mode = 'STRICT'
+        last_trade_time: float = 0.0
+        last_zone_traded: str | None = None
+        volatility_pause_until: int = 0
+        partial_tp_taken: bool = False
+        take_profit_1r: float = 0.0
+        setup_mode: str = 'STRICT'
         
-        consecutive_losses = 0
-        global_pause_until = 0
-        relaxed_losses = 0
-        relaxed_disabled_until = 0
-        relaxed_trades_today = 0
-        fee_rate = getattr(Config, 'FEE_RATE', 0.001)
-        slippage_pct = getattr(Config, 'MAX_SLIPPAGE_PCT', 0.002)
+        consecutive_losses: int = 0
+        global_pause_until: float = 0.0
+        relaxed_losses: int = 0
+        relaxed_disabled_until: float = 0.0
+        relaxed_trades_today: int = 0
+        fee_rate: float = float(getattr(Config, 'FEE_RATE', 0.001))
+        slippage_pct: float = float(getattr(Config, 'MAX_SLIPPAGE_PCT', 0.002))
 
         # We start loop from index where indicators are warmed up
         start_idx = max(Config.LONG_EMA * 4, 100)
         if start_idx >= len(ltf_df) - 50:
             start_idx = max(10, len(ltf_df) // 4)
             
-        last_trade_day = ltf_df.index[start_idx].date()
+        start_ts = pd.Timestamp(str(ltf_df.index[start_idx]))
+        last_trade_day = start_ts.date() if isinstance(start_ts, pd.Timestamp) else None
         print(f"[BACKTEST] Running simulation loop from bar {start_idx} to {len(ltf_df)}...")
         
         for i in range(start_idx, len(ltf_df)):
-            ltf_time = ltf_df.index[i]
+            ltf_time = pd.Timestamp(str(ltf_df.index[i]))
+            ltf_ts: float = ltf_time.timestamp() if isinstance(ltf_time, pd.Timestamp) else 0.0
             curr_candle = ltf_df.iloc[i]
             
             # Slice historical data to prevent look-ahead bias (matches live 250-bar rolling window)
@@ -82,16 +84,18 @@ class BacktestEngine:
             # For HTF, we can only see candles that closed BEFORE the current LTF timestamp (subtract 1h so unclosed bar is excluded)
             sub_htf = htf_df[htf_df.index <= (ltf_time - pd.Timedelta(hours=1))].iloc[-250:]
             
-            current_close = curr_candle['close']
-            current_high = curr_candle['high']
-            current_low = curr_candle['low']
-            curr_atr = ltf_atr.iloc[i]
+            current_close: float = float(curr_candle['close'])
+            current_high: float = float(curr_candle['high'])
+            current_low: float = float(curr_candle['low'])
+            current_open: float = float(curr_candle['open'])
+            curr_atr: float = float(ltf_atr.iloc[i])
             
-            if ltf_time.date() != last_trade_day:
+            curr_date = ltf_time.date() if isinstance(ltf_time, pd.Timestamp) else None
+            if curr_date != last_trade_day:
                 relaxed_trades_today = 0
-                last_trade_day = ltf_time.date()
+                last_trade_day = curr_date
 
-            if ltf_time.timestamp() < global_pause_until:
+            if ltf_ts < global_pause_until:
                 continue
             
             # Record equity curve
@@ -115,15 +119,26 @@ class BacktestEngine:
                     # Early Profit Lock / Trailing Stop:
                     # When price reaches 1.0R in profit, lock Stop Loss to Breakeven (+ fees)
                     risk_distance = abs(entry_price - initial_stop_loss)
-                    tsl_r = getattr(Config, 'TSL_ACTIVATION_R', 0.50)
+                    tsl_r = float(getattr(Config, 'TSL_ACTIVATION_R', 0.50))
                     if highest_price >= entry_price + (risk_distance * tsl_r):
                         breakeven_sl = entry_price * 1.0015
                         stop_loss = max(stop_loss, breakeven_sl)
                         stop_loss = self.risk.update_trailing_stop(entry_price, highest_price, stop_loss, curr_atr, "LONG")
                     
-                    # PRIORITY EXIT CHECK: Take Profit checked FIRST
-                    if current_high >= take_profit:
-                        exit_price = max(take_profit, curr_candle['open'])
+                    # Intrabar Trajectory-Aware Exit Check (Handles Wide-Wick Candle Ambiguity)
+                    hit_tp = current_high >= take_profit
+                    hit_sl = current_low <= stop_loss
+
+                    if hit_tp and hit_sl:
+                        # If both touched in the same candle:
+                        # If bearish candle or open closer to SL -> SL touched first
+                        if current_open > current_close or abs(current_open - stop_loss) < abs(current_open - take_profit):
+                            hit_tp = False
+                        else:
+                            hit_sl = False
+
+                    if hit_tp:
+                        exit_price = max(take_profit, current_open)
                         gross_val = position_size * exit_price
                         fee = gross_val * fee_rate
                         self.balance += gross_val - fee
@@ -150,19 +165,19 @@ class BacktestEngine:
                             if setup_mode == 'RELAXED': relaxed_losses = 0
                             
                         if consecutive_losses >= 3:
-                            global_pause_until = ltf_time.timestamp() + 3600
+                            global_pause_until = ltf_ts + 3600
                             consecutive_losses = 0
                         if relaxed_losses >= 2:
-                            relaxed_disabled_until = ltf_time.timestamp() + 7200
+                            relaxed_disabled_until = ltf_ts + 7200
                             relaxed_losses = 0
                             
                         in_position = False
                         position_size = 0.0
 
                     # Check Stop Loss
-                    elif current_low <= stop_loss:
+                    elif hit_sl:
                         # Exit at stop loss level or open if gap down
-                        exit_price = min(stop_loss, curr_candle['open'])
+                        exit_price = min(stop_loss, current_open)
                         gross_val = position_size * exit_price
                         fee = gross_val * fee_rate
                         self.balance += gross_val - fee
@@ -189,10 +204,10 @@ class BacktestEngine:
                             if setup_mode == 'RELAXED': relaxed_losses = 0
                             
                         if consecutive_losses >= 3:
-                            global_pause_until = ltf_time.timestamp() + 3600
+                            global_pause_until = ltf_ts + 3600
                             consecutive_losses = 0
                         if relaxed_losses >= 2:
-                            relaxed_disabled_until = ltf_time.timestamp() + 7200
+                            relaxed_disabled_until = ltf_ts + 7200
                             relaxed_losses = 0
                             
                         in_position = False
@@ -207,15 +222,26 @@ class BacktestEngine:
                     # Early Profit Lock / Trailing Stop:
                     # When price reaches 1.0R in profit, lock Stop Loss to Breakeven (- fees)
                     risk_distance = abs(entry_price - initial_stop_loss)
-                    tsl_r = getattr(Config, 'TSL_ACTIVATION_R', 0.50)
+                    tsl_r = float(getattr(Config, 'TSL_ACTIVATION_R', 0.50))
                     if lowest_price <= entry_price - (risk_distance * tsl_r):
                         breakeven_sl = entry_price * 0.9985
                         stop_loss = min(stop_loss, breakeven_sl)
                         stop_loss = self.risk.update_trailing_stop(entry_price, lowest_price, stop_loss, curr_atr, "SHORT")
                     
-                    # PRIORITY EXIT CHECK: Take Profit checked FIRST
-                    if current_low <= take_profit:
-                        exit_price = min(take_profit, curr_candle['open'])
+                    # Intrabar Trajectory-Aware Exit Check (Handles Wide-Wick Candle Ambiguity)
+                    hit_tp = current_low <= take_profit
+                    hit_sl = current_high >= stop_loss
+
+                    if hit_tp and hit_sl:
+                        # If both touched in the same candle:
+                        # If bullish candle or open closer to SL -> SL touched first
+                        if current_close > current_open or abs(current_open - stop_loss) < abs(current_open - take_profit):
+                            hit_tp = False
+                        else:
+                            hit_sl = False
+
+                    if hit_tp:
+                        exit_price = min(take_profit, current_open)
                         collateral_return = position_size * entry_price
                         gross_pnl = position_size * (entry_price - exit_price)
                         exit_fee = position_size * exit_price * fee_rate
@@ -243,18 +269,18 @@ class BacktestEngine:
                             if setup_mode == 'RELAXED': relaxed_losses = 0
                             
                         if consecutive_losses >= 3:
-                            global_pause_until = ltf_time.timestamp() + 3600
+                            global_pause_until = ltf_ts + 3600
                             consecutive_losses = 0
                         if relaxed_losses >= 2:
-                            relaxed_disabled_until = ltf_time.timestamp() + 7200
+                            relaxed_disabled_until = ltf_ts + 7200
                             relaxed_losses = 0
                             
                         in_position = False
                         position_size = 0.0
 
                     # Check Stop Loss
-                    elif current_high >= stop_loss:
-                        exit_price = max(stop_loss, curr_candle['open'])
+                    elif hit_sl:
+                        exit_price = max(stop_loss, current_open)
                         # PnL for short = collateral + gross_pnl - exit_fee
                         collateral_return = position_size * entry_price
                         gross_pnl = position_size * (entry_price - exit_price)
@@ -283,10 +309,10 @@ class BacktestEngine:
                             if setup_mode == 'RELAXED': relaxed_losses = 0
                             
                         if consecutive_losses >= 3:
-                            global_pause_until = ltf_time.timestamp() + 3600
+                            global_pause_until = ltf_ts + 3600
                             consecutive_losses = 0
                         if relaxed_losses >= 2:
-                            relaxed_disabled_until = ltf_time.timestamp() + 7200
+                            relaxed_disabled_until = ltf_ts + 7200
                             relaxed_losses = 0
                             
                         in_position = False
@@ -310,8 +336,8 @@ class BacktestEngine:
                 setup_mode = 'STRICT'
                 
                 if signal == "HOLD" and self.relaxed_enabled:
-                    if ltf_time.timestamp() - last_trade_time >= 30 * 60:
-                        if relaxed_trades_today < 2 and ltf_time.timestamp() > relaxed_disabled_until:
+                    if ltf_ts - last_trade_time >= 30 * 60:
+                        if relaxed_trades_today < 2 and ltf_ts > relaxed_disabled_until:
                             signal, signal_meta = self.strategy.generate_signal(sub_htf, sub_ltf, relaxed=True)
                             setup_mode = 'RELAXED' 
                 
@@ -321,23 +347,26 @@ class BacktestEngine:
                     if self.ml:
                         ml_prob = self.ml.predict_bias(sub_ltf)
                         
-                    trade_risk_pct = getattr(Config, 'RISK_PCT', 0.02)
-                    if ml_prob < getattr(Config, 'ML_CONFIRMATION_THRESHOLD', 0.60):
+                    trade_risk_pct = float(getattr(Config, 'RISK_PCT', 0.02))
+                    if ml_prob < float(getattr(Config, 'ML_CONFIRMATION_THRESHOLD', 0.60)):
                         trade_risk_pct *= 0.5
                         
                     # Calculate Stop Loss and Take Profit
-                    sl = signal_meta['stop_loss']
-                    tp = signal_meta['take_profit']
+                    sl_raw = signal_meta.get('stop_loss') if signal_meta else None
+                    tp_raw = signal_meta.get('take_profit') if signal_meta else None
                     
-                    if sl is None or tp is None:
+                    if sl_raw is None or tp_raw is None:
                         continue
+                    
+                    sl: float = float(sl_raw)
+                    tp: float = float(tp_raw)
                         
                     # Cooldown check
-                    if ltf_time.timestamp() - last_trade_time < getattr(Config, 'COOLDOWN_MINUTES', 15) * 60:
+                    if ltf_ts - last_trade_time < getattr(Config, 'COOLDOWN_MINUTES', 15) * 60:
                         continue
                         
                     # Zone check
-                    zone_id = signal_meta.get('zone_id')
+                    zone_id = signal_meta.get('zone_id') if signal_meta else None
                     if zone_id and zone_id == last_zone_traded:
                         continue
                         
@@ -350,12 +379,14 @@ class BacktestEngine:
                     take_profit = tp
                     highest_price = entry_price
                     lowest_price = entry_price
-                    last_trade_time = ltf_time.timestamp()
+                    last_trade_time = ltf_ts
                     last_zone_traded = zone_id
                     
                     # Calculate dynamic position size based on risk percent
-                    position_size = self.risk.calculate_position_size(self.balance, entry_price, stop_loss)
-                    position_size = position_size * (trade_risk_pct / (getattr(Config, 'RISK_PCT', 0.8) / 100.0))
+                    pos_size = self.risk.calculate_position_size(self.balance, entry_price, stop_loss)
+                    if self.ml and ml_prob < float(getattr(Config, 'ML_CONFIRMATION_THRESHOLD', 0.60)):
+                        pos_size *= 0.5
+                    position_size = pos_size
                     
                     if position_size <= 0.0:
                         continue
@@ -382,7 +413,7 @@ class BacktestEngine:
 
         # Liquidate open position at the end of backtest
         if in_position:
-            exit_price = ltf_df['close'].iloc[-1]
+            exit_price = float(ltf_df['close'].iloc[-1])
             exit_time = ltf_df.index[-1]
             if position_side == "LONG":
                 gross_val = position_size * exit_price

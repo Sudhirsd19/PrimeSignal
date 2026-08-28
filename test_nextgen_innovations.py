@@ -1,15 +1,14 @@
-import asyncio
 import sys
 import pandas as pd
 import numpy as np
 
 if sys.platform == 'win32':
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
-    except AttributeError:
+        getattr(sys.stdout, 'reconfigure', lambda **kw: None)(encoding='utf-8')
+        getattr(sys.stderr, 'reconfigure', lambda **kw: None)(encoding='utf-8')
+    except (AttributeError, Exception):
         pass
 
-from config import Config
 from core.liquidation_engine import LiquidationEngine
 from core.orderflow_engine import OrderFlowEngine
 from core.lead_lag_arbitrage import LeadLagArbitrageEngine

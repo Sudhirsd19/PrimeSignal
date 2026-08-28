@@ -26,10 +26,8 @@ def prove_80pct_winrate():
         df_15m = df.resample('15min').agg({
             'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
         }).dropna()
-        ltf_ohlcv = [
-            [int(ts.timestamp() * 1000), float(row['open']), float(row['high']), float(row['low']), float(row['close']), float(row['volume'])]
-            for ts, row in df_15m.iterrows()
-        ]
+        df_15m['timestamp'] = df_15m.index.astype('int64') // 1000000
+        ltf_ohlcv = df_15m[['timestamp', 'open', 'high', 'low', 'close', 'volume']].values.tolist()
 
     htf_df = prepare_dataframe(htf_ohlcv)
     ltf_df = prepare_dataframe(ltf_ohlcv)
@@ -45,8 +43,8 @@ def prove_80pct_winrate():
 
     strategy = MultiTimeframeSMCStrategy()
 
-    start_date = timestamps[100].strftime('%Y-%m-%d %H:%M UTC')
-    end_date = timestamps[-1].strftime('%Y-%m-%d %H:%M UTC')
+    start_date = pd.to_datetime(timestamps[100]).strftime('%Y-%m-%d %H:%M UTC')
+    end_date = pd.to_datetime(timestamps[-1]).strftime('%Y-%m-%d %H:%M UTC')
 
     print(f"Asset Tested      : BTC/USDT")
     print(f"Historical Window : {start_date} to {end_date}")
@@ -240,8 +238,8 @@ def prove_80pct_winrate():
     print("ITEMIZED TRADE-BY-TRADE VERIFICATION LOG:")
     print("-" * 80)
     for idx, t in enumerate(trades, 1):
-        e_t = t['entry_time'].strftime('%Y-%m-%d %H:%M')
-        x_t = t['exit_time'].strftime('%Y-%m-%d %H:%M')
+        e_t = pd.to_datetime(str(t['entry_time'])).strftime('%Y-%m-%d %H:%M')
+        x_t = pd.to_datetime(str(t['exit_time'])).strftime('%Y-%m-%d %H:%M')
         status = "WIN  [+]" if t['is_win'] else "LOSS [-]"
         print(f"Trade #{idx:02d} | {t['side']:<5} | In: {e_t} @ {t['entry']:.2f} -> Out: {x_t} @ {t['exit']:.2f}")
         print(f"         PnL: {t['pnl']:>+7.2f} USDT | Result: {t['reason']:<22} | Status: {status}")

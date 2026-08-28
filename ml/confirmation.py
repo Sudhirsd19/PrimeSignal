@@ -121,7 +121,8 @@ class MLSignalConfirmator:
             self.is_trained = True
 
             # Print simple feature importances
-            importances = self.model.feature_importances_
+            raw_importances = getattr(self.model, "feature_importances_", [])
+            importances = [float(imp) for imp in raw_importances]
             print("[ML] Trained Successfully! Feature Importances:")
             sorted_feats = sorted(zip(X.columns, importances), key=lambda x: x[1], reverse=True)
             for name, imp in sorted_feats:

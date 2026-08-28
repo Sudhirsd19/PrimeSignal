@@ -22,10 +22,8 @@ def test_high_winrate_strategy():
         df_15m = df.resample('15min').agg({
             'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
         }).dropna()
-        ltf_ohlcv = [
-            [int(ts.timestamp() * 1000), float(row['open']), float(row['high']), float(row['low']), float(row['close']), float(row['volume'])]
-            for ts, row in df_15m.iterrows()
-        ]
+        df_15m['timestamp'] = df_15m.index.astype('int64') // 1000000
+        ltf_ohlcv = df_15m[['timestamp', 'open', 'high', 'low', 'close', 'volume']].values.tolist()
 
     htf_df = prepare_dataframe(htf_ohlcv)
     ltf_df = prepare_dataframe(ltf_ohlcv)

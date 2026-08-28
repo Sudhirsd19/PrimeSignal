@@ -1,10 +1,7 @@
 import json
 import os
 import pandas as pd
-import numpy as np
-from config import Config
-from strategies.indicators import prepare_dataframe, calculate_ema, calculate_rsi, calculate_atr, calculate_adx, calculate_vwap
-from strategies.smc import detect_fvgs, detect_order_blocks, detect_structure
+from strategies.indicators import prepare_dataframe, calculate_atr
 from ml.confirmation import MLSignalConfirmator
 
 def run_simulation(tsl_activation_r=0.6, rr_ratio=1.5, ml_threshold=0.60, min_adx=20.0):
@@ -22,10 +19,8 @@ def run_simulation(tsl_activation_r=0.6, rr_ratio=1.5, ml_threshold=0.60, min_ad
         df_15m = df.resample('15min').agg({
             'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
         }).dropna()
-        ltf_ohlcv = [
-            [int(ts.timestamp() * 1000), float(row['open']), float(row['high']), float(row['low']), float(row['close']), float(row['volume'])]
-            for ts, row in df_15m.iterrows()
-        ]
+        df_15m['timestamp'] = df_15m.index.astype('int64') // 1000000
+        ltf_ohlcv = df_15m[['timestamp', 'open', 'high', 'low', 'close', 'volume']].values.tolist()
 
     htf_df = prepare_dataframe(htf_ohlcv)
     ltf_df = prepare_dataframe(ltf_ohlcv)
@@ -40,20 +35,18 @@ def run_simulation(tsl_activation_r=0.6, rr_ratio=1.5, ml_threshold=0.60, min_ad
     ltf_atr = calculate_atr(test_ltf_df, 14)
 
     # Simulation state
-    balance = 10000.0
+    balance: float = 10000.0
     in_position = False
     position_side = None
-    entry_price = 0.0
-    stop_loss = 0.0
-    initial_sl = 0.0
-    take_profit = 0.0
-    tp1 = 0.0
-    tp1_taken = False
-    highest_price = 0.0
-    lowest_price = 999999.0
-    position_size = 0.0
-    trades = []
-    fee_rate = 0.00075
+    entry_price: float = 0.0
+    stop_loss: float = 0.0
+    initial_sl: float = 0.0
+    take_profit: float = 0.0
+    highest_price: float = 0.0
+    lowest_price: float = 999999.0
+    position_size: float = 0.0
+    trades: list[dict] = []
+    fee_rate: float = 0.00075
 
     from strategies.multi_timeframe import MultiTimeframeSMCStrategy
     strategy = MultiTimeframeSMCStrategy()
@@ -64,10 +57,9 @@ def run_simulation(tsl_activation_r=0.6, rr_ratio=1.5, ml_threshold=0.60, min_ad
         sub_ltf = test_ltf_df.iloc[max(0, i-250):i+1]
         sub_htf = htf_df[htf_df.index < ltf_time].iloc[-250:]
         
-        curr_close = curr_candle['close']
-        curr_high = curr_candle['high']
-        curr_low = curr_candle['low']
-        curr_atr = ltf_atr.iloc[i]
+        curr_close = float(curr_candle['close'])
+        curr_high = float(curr_candle['high'])
+        curr_low = float(curr_candle['low'])
 
         if in_position:
             if position_side == "LONG":
@@ -86,7 +78,7 @@ def run_simulation(tsl_activation_r=0.6, rr_ratio=1.5, ml_threshold=0.60, min_ad
                     trades.append({'pnl': pnl, 'side': 'LONG', 'reason': 'TP'})
                     in_position = False
                 elif curr_low <= stop_loss:
-                    exit_p = min(stop_loss, curr_candle['open'])
+                    exit_p = min(stop_loss, float(curr_candle['open']))
                     pnl = position_size * (exit_p - entry_price) - (position_size * exit_p * fee_rate)
                     balance += position_size * exit_p - (position_size * exit_p * fee_rate)
                     trades.append({'pnl': pnl, 'side': 'LONG', 'reason': 'SL/BE'})
@@ -106,7 +98,7 @@ def run_simulation(tsl_activation_r=0.6, rr_ratio=1.5, ml_threshold=0.60, min_ad
                     trades.append({'pnl': pnl, 'side': 'SHORT', 'reason': 'TP'})
                     in_position = False
                 elif curr_high >= stop_loss:
-                    exit_p = max(stop_loss, curr_candle['open'])
+                    exit_p = max(stop_loss, float(curr_candle['open']))
                     pnl = position_size * (entry_price - exit_p) - (position_size * exit_p * fee_rate)
                     balance += pnl
                     trades.append({'pnl': pnl, 'side': 'SHORT', 'reason': 'SL/BE'})
@@ -122,10 +114,12 @@ def run_simulation(tsl_activation_r=0.6, rr_ratio=1.5, ml_threshold=0.60, min_ad
                 if signal == "SELL" and (1.0 - prob) < ml_threshold:
                     continue
 
-                sl = meta.get('stop_loss')
-                tp = meta.get('take_profit')
-                if not sl or not tp:
+                sl_raw = meta.get('stop_loss')
+                tp_raw = meta.get('take_profit')
+                if sl_raw is None or tp_raw is None:
                     continue
+                sl = float(sl_raw)
+                tp = float(tp_raw)
 
                 entry_price = curr_close
                 stop_loss = sl
@@ -144,8 +138,8 @@ def run_simulation(tsl_activation_r=0.6, rr_ratio=1.5, ml_threshold=0.60, min_ad
     if not trades:
         return 0, 0, 0.0, balance
 
-    wins = [t for t in trades if t['pnl'] > 0]
-    losses = [t for t in trades if t['pnl'] <= 0]
+    wins = [t for t in trades if float(t['pnl']) > 0]
+    losses = [t for t in trades if float(t['pnl']) <= 0]
     wr = len(wins) / len(trades) * 100
     print(f"Params: TSL_R={tsl_activation_r} | ML_TH={ml_threshold} => Trades: {len(trades)} | Wins: {len(wins)} | Losses: {len(losses)} | WinRate: {wr:.2f}% | Final: {balance:.2f}")
     return len(trades), len(wins), wr, balance

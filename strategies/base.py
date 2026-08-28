@@ -5,13 +5,14 @@ class BaseStrategy(ABC):
         self.name = name
 
     @abstractmethod
-    def generate_signal(self, htf_df, ltf_df):
+    def generate_signal(self, htf_df, ltf_df, relaxed=False) -> tuple[str, dict]:
         """
         Analyzes Higher Timeframe (HTF) and Lower Timeframe (LTF) dataframes to output a signal.
         
         Args:
             htf_df: pandas DataFrame containing HTF candles
             ltf_df: pandas DataFrame containing LTF candles
+            relaxed: bool indicating if relaxed criteria should be applied
             
         Returns:
             signal: str ("BUY", "SELL", "HOLD")

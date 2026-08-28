@@ -4,6 +4,22 @@ import websockets
 import pandas as pd
 from config import Config
 
+def parse_timeframe_to_minutes(tf_str: str) -> int:
+    """Safely converts timeframe string (e.g. '1m', '5m', '15m', '1h', '4h', '1d') to minutes."""
+    if not tf_str:
+        return 15
+    tf = tf_str.lower().strip()
+    if tf.endswith('m'):
+        return int(tf[:-1])
+    elif tf.endswith('h'):
+        return int(tf[:-1]) * 60
+    elif tf.endswith('d'):
+        return int(tf[:-1]) * 1440
+    try:
+        return int(tf)
+    except ValueError:
+        return 15
+
 class RealTimeDataPipeline:
     def __init__(self, execution_engine):
         self.execution = execution_engine
@@ -173,7 +189,7 @@ class RealTimeDataPipeline:
                             if timeframe == Config.LTF_TIMEFRAME:
                                 # Exact Timestamp-based Gap Detection & Serialized Ingestion (P1 Invariant)
                                 last_ts = self._last_candle_ts['ltf'].get(symbol, 0)
-                                tf_mins = int(Config.LTF_TIMEFRAME.replace('m', '').replace('h', '60'))
+                                tf_mins = parse_timeframe_to_minutes(Config.LTF_TIMEFRAME)
                                 tf_ms = tf_mins * 60 * 1000
                                 if last_ts > 0 and (candle[0] - last_ts) > (tf_ms * 1.5):
                                     print(f"[DATA] ⚠️ Sequence gap detected on {symbol}! (Expected: {last_ts + tf_ms}, Got: {candle[0]}). Serializing backfill...")
@@ -187,7 +203,7 @@ class RealTimeDataPipeline:
                                 
                                 self._update_candle_cache(self.ltf_candles[symbol], candle, is_closed)
                                 if is_closed:
-                                    self._last_candle_ts['ltf'][symbol] = candle[0]
+                                    self._last_candle_ts['ltf'][symbol] = int(candle[0])
                                 
                                 # If a lower-timeframe candle just closed, trigger strategy evaluation
                                 if is_closed and self.on_candle_close_callback:
@@ -198,11 +214,11 @@ class RealTimeDataPipeline:
                             elif timeframe == Config.HTF_TIMEFRAME:
                                 self._update_candle_cache(self.htf_candles[symbol], candle, is_closed)
                                 if is_closed:
-                                    self._last_candle_ts['htf'][symbol] = candle[0]
+                                    self._last_candle_ts['htf'][symbol] = int(candle[0])
                             elif timeframe == '4h':
                                 self._update_candle_cache(self.htf_4h_candles[symbol], candle, is_closed)
                                 if is_closed:
-                                    self._last_candle_ts['4h'][symbol] = candle[0]
+                                    self._last_candle_ts['4h'][symbol] = int(candle[0])
                                 
             except websockets.exceptions.ConnectionClosed:
                 print(f"[DATA] WebSocket disconnected. Reconnecting in {retry_delay:.1f}s...")

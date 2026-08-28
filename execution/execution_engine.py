@@ -1,6 +1,8 @@
 import ccxt.async_support as ccxt
 import asyncio
+import inspect
 import time
+from typing import Any, cast
 from config import Config
 
 
@@ -12,7 +14,7 @@ class ExecutionEngine:
         self.public_client = ccxt.binance()
 
         # 2. Trading client (for private actions)
-        options = {}
+        options: dict[str, Any] = {}
         if Config.API_KEY and Config.API_KEY != "your_api_key_here":
             options['apiKey'] = Config.API_KEY
         if Config.SECRET_KEY and Config.SECRET_KEY != "your_api_secret_here":
@@ -21,10 +23,10 @@ class ExecutionEngine:
         # Feature 2: Futures support — set defaultType to 'future' for USDT-M
         if is_futures:
             options['options'] = {'defaultType': 'future'}
-            self.trade_client = ccxt.binance(options)
+            self.trade_client = ccxt.binance(cast(Any, options))
             print(f"[EXECUTION] Binance USDT-M Futures mode enabled (Leverage: {Config.FUTURES_LEVERAGE}x, Margin: {Config.FUTURES_MARGIN_MODE})")
         else:
-            self.trade_client = ccxt.binance(options)
+            self.trade_client = ccxt.binance(cast(Any, options))
 
         # 3. CoinDCX Integration (spot only — CoinDCX has no standard futures API)
         from execution.coindcx_client import CoinDCXClient
@@ -43,7 +45,7 @@ class ExecutionEngine:
             print("[EXECUTION] WARNING: Live mainnet enabled. Operating with real funds.")
 
         self._tickers_cache = {}
-        self._tickers_cache_time = 0
+        self._tickers_cache_time = 0.0
         self._futures_initialized = False
 
     async def _init_futures(self, symbol=None):
@@ -148,7 +150,7 @@ class ExecutionEngine:
         return 0.0
 
     # ── Feature 1: Order fill confirmation ───────────────────────────────
-    async def wait_for_fill(self, order_id: str, symbol: str, timeout: float = 30.0) -> dict | None:
+    async def wait_for_fill(self, order_id: str, symbol: str, timeout: float = 30.0) -> Any:
         """
         Polls order status until filled, cancelled, or timeout.
         Returns the final order dict or None on timeout/cancellation.
@@ -176,13 +178,16 @@ class ExecutionEngine:
 
     async def place_order(self, side, order_type, amount, price=None,
                           max_slippage_pct=0.005, symbol=None,
-                          is_exit_order=False, confirm_fill=True):
+                          is_exit_order=False, confirm_fill=True,
+                          order_role="ENTRY", candle_ts=None):
         """
         Routes orders with slippage checks, retry logic, and fill confirmation.
 
         is_exit_order (bool): If True, bypasses slippage guard. Exit orders
             MUST always execute regardless of slippage.
         confirm_fill (bool): If True, polls order status until filled/cancelled.
+        order_role (str): "ENTRY", "TP1", "TP2", "SL", "EMERGENCY"
+        candle_ts (int/float): Timestamp of candle that generated the signal
         """
         if symbol is None:
             symbol = Config.SYMBOL
@@ -199,7 +204,7 @@ class ExecutionEngine:
             order = await self.coindcx_client.place_order(side, order_type, amount, price, symbol=coindcx_symbol)
             # CoinDCX fill confirmation via their order status endpoint
             if order and confirm_fill and order.get('id'):
-                confirmed = await self.coindcx_client.wait_for_fill(order['id'])
+                confirmed = await self.coindcx_client.wait_for_fill(str(order['id']))
                 if confirmed:
                     order.update(confirmed)
             return order
@@ -208,7 +213,8 @@ class ExecutionEngine:
         try:
             if not self.trade_client.markets:
                 await self.trade_client.load_markets()
-            precise_amount = float(self.trade_client.amount_to_precision(symbol, amount))
+            amount_prec = self.trade_client.amount_to_precision(symbol, amount)
+            precise_amount = float(amount_prec) if amount_prec is not None else float(amount)
             if precise_amount != amount:
                 print(f"[EXECUTION] Quantity rounded for exchange precision: {amount} → {precise_amount}")
             amount = precise_amount
@@ -252,7 +258,9 @@ class ExecutionEngine:
         order_intent = f"PS_v23_{symbol.replace('/', '')}_{side.upper()}_{order_type.upper()}_{order_role.upper()}_{round(amount, 6)}_{round(price or 0.0, 4)}_{signal_ts}"
         deterministic_hash = hashlib.sha256(order_intent.encode()).hexdigest()[:8].upper()
         client_order_id = f"PS_{symbol.replace('/', '')[:4]}_{side.upper()[:1]}_{order_role[:2]}_{deterministic_hash}"
-        params = {'clientOrderId': client_order_id}
+        params: dict[str, Any] = {'clientOrderId': client_order_id}
+        if is_exit_order and Config.EXCHANGE_TYPE == 'futures':
+            params['reduceOnly'] = True
         
         fn = None
         args = [symbol, amount]
@@ -290,7 +298,7 @@ class ExecutionEngine:
         """
         for attempt in range(1, retries + 1):
             try:
-                if asyncio.iscoroutinefunction(func):
+                if inspect.iscoroutinefunction(func):
                     return await func(*args)
                 else:
                     return func(*args)

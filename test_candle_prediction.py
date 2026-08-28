@@ -1,13 +1,12 @@
 import json
 import os
 import sys
-import pandas as pd
-import numpy as np
 
 if sys.platform == 'win32':
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
-    except AttributeError:
+        getattr(sys.stdout, 'reconfigure', lambda **kw: None)(encoding='utf-8')
+        getattr(sys.stderr, 'reconfigure', lambda **kw: None)(encoding='utf-8')
+    except (AttributeError, Exception):
         pass
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -50,9 +49,8 @@ def test_candle_prediction():
         window_df = df_test.iloc[max(0, k-60):k+1]
         
         pred = model.predict_next_candle(window_df)
-        pred_color = pred['color']
-        conf = pred['confidence_pct']
-        prob = pred['bullish_prob']
+        pred_color = str(pred['color'])
+        conf = float(pred['confidence_pct'])
 
         next_candle = df_test.iloc[k+1]
         actual_color = "GREEN" if next_candle['close'] >= next_candle['open'] else "RED"

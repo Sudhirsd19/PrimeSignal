@@ -10,9 +10,9 @@ from datetime import datetime, timezone
 # Reconfigure stdout for utf-8 on Windows
 if sys.platform == 'win32':
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
-        sys.stderr.reconfigure(encoding='utf-8')
-    except AttributeError:
+        getattr(sys.stdout, 'reconfigure', lambda **kw: None)(encoding='utf-8')
+        getattr(sys.stderr, 'reconfigure', lambda **kw: None)(encoding='utf-8')
+    except (AttributeError, Exception):
         pass
 
 from config import Config
@@ -83,8 +83,10 @@ def simulate_1day_coin(symbol, htf_ohlcv, ltf_ohlcv, initial_balance=1000.0, tes
     tp2 = 0.0
     p_size = 0.0
     partial_taken = False
+    pnl_tp1 = 0.0
     high_p = 0.0
     low_p = 999999.0
+    t_entry = None
     trades = []
     fee_rate = 0.00075
     last_trade_bar = -999
@@ -296,8 +298,8 @@ def simulate_1day_coin(symbol, htf_ohlcv, ltf_ohlcv, initial_balance=1000.0, tes
             'reason': 'EOD_CLOSE'
         })
 
-    wins = [t for t in trades if t['pnl'] > 0]
-    losses = [t for t in trades if t['pnl'] <= 0]
+    wins = [t for t in trades if float(t['pnl']) > 0]
+    losses = [t for t in trades if float(t['pnl']) <= 0]
     wr = (len(wins) / len(trades) * 100.0) if trades else 0.0
     pnl = balance - initial_balance
 

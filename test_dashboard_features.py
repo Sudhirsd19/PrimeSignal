@@ -1,12 +1,7 @@
-import asyncio
-import json
 import os
+import time
 from fastapi.testclient import TestClient
 from dashboard.app import app, DashboardState, _DASHBOARD_SECRET
-import websockets
-import time
-import threading
-import uvicorn
 
 def run_tests():
     client = TestClient(app)
@@ -84,12 +79,18 @@ def run_tests():
     else:
         results.append(f"FAIL: Lock Profit API (POST /api/lock_profit) - Status {res.status_code}")
 
-    # 9. Test Auth Rejection (no key)
-    res_no_auth = client.get("/api/state")
-    if res_no_auth.status_code == 403:
-        results.append("PASS: Auth Rejection (GET /api/state without key)")
-    else:
-        results.append(f"FAIL: Auth Rejection - Expected 403, got {res_no_auth.status_code}")
+    # 9. Test Auth Rejection (when secret is configured)
+    import dashboard.app
+    orig_secret = dashboard.app._DASHBOARD_SECRET
+    try:
+        dashboard.app._DASHBOARD_SECRET = "test_secret_123"
+        res_no_auth = client.get("/api/state")
+        if res_no_auth.status_code == 403:
+            results.append("PASS: Auth Rejection (GET /api/state without key)")
+        else:
+            results.append(f"FAIL: Auth Rejection - Expected 403, got {res_no_auth.status_code}")
+    finally:
+        dashboard.app._DASHBOARD_SECRET = orig_secret
 
     print("\n--- DASHBOARD TESTING RESULTS ---")
     for r in results:

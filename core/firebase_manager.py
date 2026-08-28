@@ -1,10 +1,11 @@
+from typing import Any, Optional
 import os
 import json
 import firebase_admin
 from firebase_admin import credentials, firestore
 
 class FirebaseManager:
-    _instance = None
+    _instance: Optional['FirebaseManager'] = None
 
     def __new__(cls):
         if cls._instance is None:
@@ -13,8 +14,8 @@ class FirebaseManager:
         return cls._instance
 
     def _init_firebase(self):
-        self.db = None
-        self.is_connected = False
+        self.db: Any = None
+        self.is_connected: bool = False
         
         # Try to load credentials from environment variable (Render)
         cred_json = os.getenv("FIREBASE_CREDENTIALS_JSON")

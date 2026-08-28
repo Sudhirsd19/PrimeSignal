@@ -3,6 +3,8 @@ import json
 import os
 import time
 import secrets
+from typing import Any, Optional
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -14,11 +16,26 @@ from config import Config
 from collections import deque
 from core.firebase_manager import FirebaseManager
 
-app = FastAPI(title="PrimeSignal Trading Dashboard")
-
 # Global bot instance — set by main.py before server starts
-bot_instance = None
-_bot_task = None
+bot_instance: Any = None
+_bot_task: Any = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _bot_task
+    # Start the websocket broadcast background task
+    asyncio.create_task(broadcast_state_loop())
+    # Launch bot loop if bot_instance is registered
+    if bot_instance is not None:
+        print("[STARTUP] Launching bot trading loop from FastAPI lifespan...")
+        _bot_task = asyncio.create_task(_run_bot(bot_instance))
+    else:
+        print("[STARTUP] WARNING: bot_instance not registered. Bot will NOT run.")
+    yield
+    if _bot_task:
+        _bot_task.cancel()
+
+app = FastAPI(title="PrimeSignal Trading Dashboard", lifespan=lifespan)
 
 # Templates path setup
 templates_dir = os.path.join(os.path.dirname(__file__), "templates")
@@ -45,7 +62,7 @@ else:
     print(f"[SECURITY] Dashboard API key auth is DISABLED (DASHBOARD_SECRET not set).")
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-async def verify_dashboard_key(key: str = Depends(_api_key_header)):
+async def verify_dashboard_key(key: Optional[str] = Depends(_api_key_header)):
     """Only enforces auth if DASHBOARD_SECRET is set in environment."""
     if _DASHBOARD_SECRET and key != _DASHBOARD_SECRET:
         raise HTTPException(status_code=403, detail="Invalid dashboard API key. Set X-API-Key header.")
@@ -172,7 +189,7 @@ async def emergency_stop():
     try:
         try:
             firebase = FirebaseManager()
-            if firebase.is_connected:
+            if firebase.is_connected and firebase.db is not None:
                 firebase.db.collection("control").document("kill_switch").set({"active": True})
         except Exception:
             pass
@@ -234,13 +251,13 @@ class ResetAccountRequest(BaseModel):
     target_balance: float = 10000.0
 
 @app.post("/api/reset_account", dependencies=[Depends(verify_dashboard_key)])
-async def reset_account(req: ResetAccountRequest = None):
+async def reset_account(req: Optional[ResetAccountRequest] = None):
     balance = req.target_balance if req else 10000.0
     if bot_instance is not None:
         bot_instance.reset_account_state(balance)
         return {"status": "success", "message": f"Account reset to ${balance:,.2f} USDT. All positions cleared."}
     else:
-        DashboardState.balance_usdt = float(balance)
+        DashboardState.balance_usdt = balance
         DashboardState.balance_base = 0.0
         DashboardState.active_positions.clear()
         DashboardState.in_position = False
@@ -251,7 +268,7 @@ class TestTradeRequest(BaseModel):
     side: str | None = "BUY"
 
 @app.post("/api/trigger_test_trade", dependencies=[Depends(verify_dashboard_key)])
-async def trigger_test_trade(req: TestTradeRequest = None):
+async def trigger_test_trade(req: Optional[TestTradeRequest] = None):
     from config import Config
     import datetime
     symbol = (req.symbol if req and req.symbol else Config.SYMBOL) or "BTC/USDT"
@@ -677,7 +694,7 @@ def _build_state_payload():
         "supported_symbols": Config.SUPPORTED_SYMBOLS
     }
 
-async def send_state_to_ws(websocket):
+async def send_state_to_ws(websocket: WebSocket):
     """Sends current state dict as JSON to a specific WebSocket client."""
     state_payload = _build_state_payload()
     await websocket.send_text(json.dumps(state_payload, default=str))
@@ -695,7 +712,7 @@ async def broadcast_state_loop():
                 await asyncio.sleep(0.5)
                 continue
             
-            async def _safe_send(ws):
+            async def _safe_send(ws: WebSocket):
                 try:
                     await ws.send_text(json_str)
                 except Exception:
@@ -704,19 +721,7 @@ async def broadcast_state_loop():
             await asyncio.gather(*[_safe_send(ws) for ws in sockets])
         await asyncio.sleep(0.5) # Clean 500ms broadcast rate without buffer exhaustion
 
-@app.on_event("startup")
-async def startup_event():
-    global _bot_task
-    # Start the websocket broadcast background task
-    asyncio.create_task(broadcast_state_loop())
-    # Launch bot loop if bot_instance is registered
-    if bot_instance is not None:
-        print("[STARTUP] Launching bot trading loop from FastAPI startup event...")
-        _bot_task = asyncio.create_task(_run_bot(bot_instance))
-    else:
-        print("[STARTUP] WARNING: bot_instance not registered. Bot will NOT run.")
-
-async def _run_bot(bot):
+async def _run_bot(bot: Any):
     """Wrapper that runs bot initialization and risk monitor loop."""
     try:
         print("[BOT] Initializing bot...")
@@ -730,7 +735,7 @@ async def _run_bot(bot):
         print(f"[BOT] FATAL ERROR: {e}")
         traceback.print_exc()
 
-def add_log_message(msg):
+def add_log_message(msg: str):
     import datetime
     import sys
     time_str = datetime.datetime.now().strftime("%H:%M:%S")

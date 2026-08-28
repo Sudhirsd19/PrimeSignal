@@ -22,10 +22,8 @@ def optimize_for_80pct_winrate():
         df_15m = df.resample('15min').agg({
             'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
         }).dropna()
-        ltf_ohlcv = [
-            [int(ts.timestamp() * 1000), float(row['open']), float(row['high']), float(row['low']), float(row['close']), float(row['volume'])]
-            for ts, row in df_15m.iterrows()
-        ]
+        df_15m['timestamp'] = df_15m.index.astype('int64') // 1000000
+        ltf_ohlcv = df_15m[['timestamp', 'open', 'high', 'low', 'close', 'volume']].values.tolist()
 
     htf_df = prepare_dataframe(htf_ohlcv)
     ltf_df = prepare_dataframe(ltf_ohlcv)
@@ -65,20 +63,20 @@ def optimize_for_80pct_winrate():
                     balance = 10000.0
                     in_pos = False
                     p_side = None
-                    entry_p = 0.0
-                    sl = 0.0
-                    init_sl = 0.0
-                    tp = 0.0
-                    p_size = 0.0
-                    high_p = 0.0
-                    low_p = 999999.0
+                    entry_p: float = 0.0
+                    sl: float = 0.0
+                    init_sl: float = 0.0
+                    tp: float = 0.0
+                    p_size: float = 0.0
+                    high_p: float = 0.0
+                    low_p: float = 999999.0
                     trades = []
 
                     for idx, (i, ltf_time, sig, meta, prob) in enumerate(signals):
-                        curr_close = closes[i]
-                        curr_high = highs[i]
-                        curr_low = lows[i]
-                        curr_open = opens[i]
+                        curr_close = float(closes[i])
+                        curr_high = float(highs[i])
+                        curr_low = float(lows[i])
+                        curr_open = float(opens[i])
 
                         if in_pos:
                             if p_side == "LONG":
@@ -122,8 +120,9 @@ def optimize_for_80pct_winrate():
                                 if sig == "BUY" and prob < ml_th: continue
                                 if sig == "SELL" and (1.0 - prob) < ml_th: continue
 
-                                base_sl = meta.get('stop_loss')
-                                if not base_sl: continue
+                                base_sl_raw = meta.get('stop_loss')
+                                if base_sl_raw is None: continue
+                                base_sl = float(base_sl_raw)
 
                                 entry_p = curr_close
                                 if tight_sl:

@@ -4,14 +4,15 @@ import uvicorn
 import time
 import datetime
 import json
+import pandas as pd
 from pathlib import Path
 
 # Reconfigure stdout/stderr to utf-8 on Windows to prevent UnicodeEncodeError
 if sys.platform == 'win32':
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
-        sys.stderr.reconfigure(encoding='utf-8')
-    except AttributeError:
+        getattr(sys.stdout, 'reconfigure', lambda **kw: None)(encoding='utf-8')
+        getattr(sys.stderr, 'reconfigure', lambda **kw: None)(encoding='utf-8')
+    except (AttributeError, Exception):
         pass
 
 from config import Config
@@ -39,7 +40,7 @@ class PrimeSignalBot:
         self.lead_lag = LeadLagArbitrageEngine()
         self.courtroom = AdversarialDebateCourtroom()
         
-        self.ml_models = {sym: MLSignalConfirmator() for sym in Config.SUPPORTED_SYMBOLS}
+        self.ml_models: dict[str, MLSignalConfirmator] = {sym: MLSignalConfirmator() for sym in Config.SUPPORTED_SYMBOLS}
         
         # Internal State tracking (Per Symbol)
         self.in_position = {sym: False for sym in Config.SUPPORTED_SYMBOLS}
@@ -50,30 +51,30 @@ class PrimeSignalBot:
         self.highest_price_reached = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.lowest_price_reached = {sym: 999999.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.position_size = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.position_mode = {sym: "STRICT" for sym in Config.SUPPORTED_SYMBOLS}
-        self.entry_time = {sym: 0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.last_trade_time = {sym: 0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.last_zone_traded = {sym: None for sym in Config.SUPPORTED_SYMBOLS}
-        self.volatility_pause_until = {sym: 0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.position_mode: dict[str, str] = {sym: "STRICT" for sym in Config.SUPPORTED_SYMBOLS}
+        self.entry_time: dict[str, float] = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.last_trade_time: dict[str, float] = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.last_zone_traded: dict[str, str | None] = {sym: None for sym in Config.SUPPORTED_SYMBOLS}
+        self.volatility_pause_until: dict[str, float] = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.partial_tp_taken = {sym: False for sym in Config.SUPPORTED_SYMBOLS}
         self.take_profit_1r = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.tp2_taken = {sym: False for sym in Config.SUPPORTED_SYMBOLS}
         self.take_profit_2r = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.realized_pnl = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.original_position_size = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.last_exit_time = {sym: 0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.tp_cooldown_until = {sym: 0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.last_exit_time: dict[str, float] = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
+        self.tp_cooldown_until: dict[str, float] = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.consecutive_losses = 0
-        self.global_pause_until = 0
+        self.global_pause_until: float = 0.0
         self.relaxed_losses = 0
-        self.relaxed_disabled_until = 0
+        self.relaxed_disabled_until: float = 0.0
         self.relaxed_trades_today = 0
         self.trades_today = 0
         self.last_trade_day = datetime.datetime.now(datetime.timezone.utc).date()
-        self.trade_history = []
-        self.cluster_loss_pause_until = 0
+        self.trade_history: list[int] = []
+        self.cluster_loss_pause_until: float = 0.0
         self.cluster_risk_penalty = False
-        self.global_last_trade_time = 0
+        self.global_last_trade_time: float = 0.0
         self.traded_zones_cache = {}
 
         # Dry-run virtual balance (used for paper trading & dry-run simulation)
@@ -87,6 +88,7 @@ class PrimeSignalBot:
         # Per-symbol locks to prevent concurrent candle processing on the same symbol
         self._candle_locks = {sym: asyncio.Lock() for sym in Config.SUPPORTED_SYMBOLS}
         self._pending_candle_evaluations = {sym: False for sym in Config.SUPPORTED_SYMBOLS}
+        self._active_scan_tasks: set[asyncio.Task] = set()
         self._last_reset_date = datetime.datetime.now(datetime.timezone.utc).date()
         
         # Link callbacks
@@ -256,7 +258,7 @@ class PrimeSignalBot:
 
     def reset_account_state(self, target_balance: float = 10000.0):
         """Resets virtual paper balance to target amount and closes all simulated positions for fresh trading."""
-        self._dry_run_balance_usdt = float(target_balance)
+        self._dry_run_balance_usdt = target_balance
         for sym in Config.SUPPORTED_SYMBOLS:
             self.in_position[sym] = False
             self.position_side[sym] = "HOLD"
@@ -266,22 +268,22 @@ class PrimeSignalBot:
             self.take_profit_1r[sym] = 0.0
             self.take_profit_2r[sym] = 0.0
             self.position_size[sym] = 0.0
-            self.entry_time[sym] = 0
+            self.entry_time[sym] = 0.0
             self.highest_price_reached[sym] = 0.0
             self.lowest_price_reached[sym] = 999999.0
             self.partial_tp_taken[sym] = False
             self.tp2_taken[sym] = False
             self.realized_pnl[sym] = 0.0
             self.original_position_size[sym] = 0.0
-            self.last_exit_time[sym] = 0
-            self.tp_cooldown_until[sym] = 0
+            self.last_exit_time[sym] = 0.0
+            self.tp_cooldown_until[sym] = 0.0
 
         self.traded_zones_cache.clear()
         self.trade_history.clear()
-        self.global_pause_until = 0
-        self.cluster_loss_pause_until = 0
+        self.global_pause_until = 0.0
+        self.cluster_loss_pause_until = 0.0
         DashboardState.trades.clear()
-        DashboardState.balance_usdt = float(target_balance)
+        DashboardState.balance_usdt = target_balance
         DashboardState.balance_base = 0.0
         DashboardState.active_positions.clear()
         DashboardState.in_position = False
@@ -322,7 +324,7 @@ class PrimeSignalBot:
                 df = prepare_dataframe(ltf_history)
                 trained = self.ml_models[sym].train(df)
                 if not trained:
-                    self.ml_models[sym] = None
+                    self.ml_models[sym].is_trained = False
         
         add_log_message("ML Models initialized (optional filtering mode).")
 
@@ -369,12 +371,12 @@ class PrimeSignalBot:
                 # Fetch live CoinDCX wallet balances
                 raw_bal = await self.execution.fetch_balance()
                 if raw_bal and 'total' in raw_bal:
-                    bal_list = []
+                    bal_list: list[dict[str, float | str]] = []
                     for curr, tot in raw_bal['total'].items():
                         if tot > 0:
-                            free = raw_bal.get('free', {}).get(curr, tot)
-                            used = raw_bal.get('used', {}).get(curr, 0.0)
-                            bal_list.append({"currency": curr, "available": float(free), "locked": float(used)})
+                            free = (raw_bal.get('free') or {}).get(curr, tot) or 0.0
+                            used = (raw_bal.get('used') or {}).get(curr, 0.0) or 0.0
+                            bal_list.append({"currency": str(curr), "available": float(free), "locked": float(used)})
                     if bal_list:
                         DashboardState.coindcx_balances = bal_list
             except Exception as e:
@@ -388,9 +390,9 @@ class PrimeSignalBot:
                 "id": "DCX-VIRTUAL-8849"
             }
             DashboardState.coindcx_balances = [
-                {"currency": "USDT", "available": float(DashboardState.balance_usdt), "locked": 0.0},
-                {"currency": "INR", "available": round(float(DashboardState.balance_usdt) * 85.0, 2), "locked": 0.0},
-                {"currency": "BTC", "available": float(DashboardState.balance_base), "locked": 0.0}
+                {"currency": "USDT", "available": DashboardState.balance_usdt, "locked": 0.0},
+                {"currency": "INR", "available": round(DashboardState.balance_usdt * 85.0, 2), "locked": 0.0},
+                {"currency": "BTC", "available": DashboardState.balance_base, "locked": 0.0}
             ]
 
     async def on_candle_close(self, symbol):
@@ -513,22 +515,27 @@ class PrimeSignalBot:
                 if last_candle['volume'] < 1.5 * avg_vol:
                     pause_candles = getattr(Config, 'VOLATILITY_PAUSE_CANDLES', 2)
                     tf_minutes = int(Config.LTF_TIMEFRAME.replace('m', '').replace('h', '')) * (60 if 'h' in Config.LTF_TIMEFRAME else 1)
-                    self.volatility_pause_until[symbol] = time.time() + (pause_candles * tf_minutes * 60)
+                    self.volatility_pause_until[symbol] = time.time() + (pause_candles * tf_minutes * 60.0)
                     add_log_message(f"[{symbol}] Trading paused: High volatility detected ({move_pct*100:.2f}% move) on LOW volume.")
                 else:
                     add_log_message(f"[{symbol}] High volatility ({move_pct*100:.2f}%) on HIGH volume. Institutional move allowed.")
 
-        if time.time() < self.volatility_pause_until.get(symbol, 0):
+        if time.time() < self.volatility_pause_until.get(symbol, 0.0):
             return
 
         
         # Session and Execution Delay Filters
-        import datetime
         current_hour = datetime.datetime.now(datetime.timezone.utc).hour
         is_low_volume_session = not (12 <= current_hour <= 21)
         
         if self.has_keys and not Config.PAPER_TRADING:
-            open_time = ltf_df.iloc[-1]['time'] / 1000.0 if 'time' in ltf_df.columns else ltf_df.index[-1].timestamp()
+            if 'timestamp' in ltf_df.columns:
+                open_time = float(ltf_df.iloc[-1]['timestamp']) / 1000.0
+            elif 'time' in ltf_df.columns:
+                open_time = float(ltf_df.iloc[-1]['time']) / 1000.0
+            else:
+                ts_obj = pd.Timestamp(str(ltf_df.index[-1]))
+                open_time = float(ts_obj.timestamp()) if hasattr(ts_obj, 'timestamp') else 0.0
             tf_mins = int(Config.LTF_TIMEFRAME.replace('m', '').replace('h', '')) * (60 if 'h' in Config.LTF_TIMEFRAME else 1)
             close_time = open_time + (tf_mins * 60)
             delay = time.time() - close_time
@@ -565,16 +572,16 @@ class PrimeSignalBot:
 
 
         if symbol == Config.SYMBOL:
-            DashboardState.active_ob = metadata.get('reason', 'No OB/FVG')
-            DashboardState.active_ob_level = metadata.get('active_ob_level', 0.0)
-            DashboardState.active_ob_type = metadata.get('active_ob_type', 'NONE')
-            DashboardState.active_bullish_ob_level = metadata.get('active_bullish_ob_level', 0.0)
-            DashboardState.active_bearish_ob_level = metadata.get('active_bearish_ob_level', 0.0)
-            if self.ml_models[symbol] is not None:
+            DashboardState.active_ob = str(metadata.get('reason') or 'No OB/FVG')
+            DashboardState.active_ob_level = float(metadata.get('active_ob_level') or 0.0)
+            DashboardState.active_ob_type = str(metadata.get('active_ob_type') or 'NONE')
+            DashboardState.active_bullish_ob_level = float(metadata.get('active_bullish_ob_level') or 0.0)
+            DashboardState.active_bearish_ob_level = float(metadata.get('active_bearish_ob_level') or 0.0)
+            if self.ml_models[symbol].is_trained:
                 DashboardState.ml_confidence = self.ml_models[symbol].predict_bias(ltf_df)
                 nc_pred = self.ml_models[symbol].predict_next_candle(ltf_df)
-                DashboardState.next_candle_color = nc_pred['color']
-                DashboardState.next_candle_prob = nc_pred['confidence_pct']
+                DashboardState.next_candle_color = str(nc_pred.get('color', 'GREEN'))
+                DashboardState.next_candle_prob = float(nc_pred.get('confidence_pct', 50.0))
             else:
                 DashboardState.ml_confidence = 0.5
                 DashboardState.next_candle_color = "GREEN"
@@ -583,7 +590,8 @@ class PrimeSignalBot:
         
         if signal == "HOLD":
             # Log debug checks for rejection reason
-            debug = metadata.get('debug_checks', {})
+            debug_val = metadata.get('debug_checks')
+            debug = debug_val if isinstance(debug_val, dict) else {}
             reason_str = f"Trend: {debug.get('trend', 'FAIL')}, Zone: {debug.get('zone', 'FAIL')}, Trigger: {debug.get('trigger', 'FAIL')}, VWAP: {debug.get('vwap', 'FAIL')}, Vol: {debug.get('volatility', 'FAIL')}"
             print(f"[NO TRADE] [{symbol}] Reason: {metadata.get('reason')} | {reason_str}")
             return
@@ -591,7 +599,8 @@ class PrimeSignalBot:
         # Session Volume Block
         if getattr(Config, 'ENABLE_SESSION_FILTER', False) and not Config.PAPER_TRADING and is_low_volume_session:
             avg_vol = ltf_df['volume'].rolling(20).mean().iloc[-2] if len(ltf_df) > 20 else 0.0
-            vol_mult = 1.0 if metadata.get('score', 0) >= 3.5 else 1.2
+            score_val = float(metadata.get('score') or 0.0)
+            vol_mult = 1.0 if score_val >= 3.5 else 1.2
             if ltf_df['volume'].iloc[-1] < vol_mult * avg_vol:
                 add_log_message(f"[{symbol}] Trade skipped: Outside 12-22 UTC and volume not > {vol_mult}x average.")
                 return
@@ -599,13 +608,13 @@ class PrimeSignalBot:
         # 4H Bias logic
         htf_4h_df = self.pipeline.htf_4h_candles.get(symbol)
         if htf_4h_df is not None and len(htf_4h_df) > 50:
-            import pandas as pd
             if isinstance(htf_4h_df, list): htf_4h_df = pd.DataFrame(htf_4h_df, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
             ema_4h = htf_4h_df['close'].ewm(span=50, adjust=False).mean().iloc[-1]
+            cur_score = float(metadata.get('score') or 3.0)
             if signal == "BUY" and htf_4h_df['close'].iloc[-1] < ema_4h:
-                metadata['score'] = metadata.get('score', 3) - 0.5
+                metadata['score'] = cur_score - 0.5
             elif signal == "SELL" and htf_4h_df['close'].iloc[-1] > ema_4h:
-                metadata['score'] = metadata.get('score', 3) - 0.5
+                metadata['score'] = cur_score - 0.5
                 
         add_log_message(f"[{symbol}] Raw strategy signal: {signal} ({metadata.get('reason')})")
         
@@ -632,9 +641,13 @@ class PrimeSignalBot:
                         return
 
         # Funding Rate & Crowded Trade Sentiment Filter
+        fr: float = 0.0
+        spread: float = 0.0005
         if getattr(Config, 'ENABLE_FUNDING_RATE_FILTER', True):
             try:
-                fr = await self.execution.fetch_funding_rate(symbol)
+                fetched_fr = await self.execution.fetch_funding_rate(symbol)
+                if fetched_fr is not None:
+                    fr = float(fetched_fr)
                 max_fr = getattr(Config, 'MAX_FUNDING_RATE_PCT', 0.035) / 100.0 # e.g. 0.035% = 0.00035
                 if signal == "BUY" and fr > max_fr:
                     add_log_message(f"[{symbol}] Trade blocked: Extreme Bullish Funding Rate ({fr*100:+.4f}% > +{max_fr*100:.3f}%). Long liquidation trap protection.")
@@ -652,19 +665,19 @@ class PrimeSignalBot:
             return
 
         # Cluster Loss Cooldown
-        if time.time() < getattr(self, 'cluster_loss_pause_until', 0):
+        if time.time() < getattr(self, 'cluster_loss_pause_until', 0.0):
             add_log_message(f"[{symbol}] Trade skipped: Cluster loss cooldown active.")
             return
 
         # Symbol Post-Exit & Profit-Harvest Cooldown (Prevent immediate re-entry at local top/bottom)
-        if time.time() < self.tp_cooldown_until.get(symbol, 0):
+        if time.time() < self.tp_cooldown_until.get(symbol, 0.0):
             rem_m = max(1, int((self.tp_cooldown_until[symbol] - time.time()) / 60) + 1)
             add_log_message(f"[{symbol}] Trade skipped: Post-exit / TP-harvest cooldown active ({rem_m}m remaining to prevent re-entering exhausted structure).")
             return
 
         # Cooldown Check
         cooldown_secs = getattr(Config, 'COOLDOWN_MINUTES', 20) * 60
-        if time.time() - self.last_trade_time.get(symbol, 0) < cooldown_secs:
+        if time.time() - self.last_trade_time.get(symbol, 0.0) < cooldown_secs:
             rem_m = max(1, int((cooldown_secs - (time.time() - self.last_trade_time[symbol])) / 60) + 1)
             add_log_message(f"[{symbol}] Trade skipped due to cooldown ({rem_m}m remaining).")
             return
@@ -687,7 +700,7 @@ class PrimeSignalBot:
         # ML Confidence Scaler & Soft Session Filter
         prob = 1.0
         ml_confidence_weight = 0
-        if self.ml_models[symbol] is not None:
+        if self.ml_models[symbol].is_trained:
             prob = self.ml_models[symbol].predict_bias(ltf_df)
             if symbol == Config.SYMBOL:
                 DashboardState.ml_confidence = prob
@@ -719,7 +732,7 @@ class PrimeSignalBot:
                     metadata['tp2'] = metadata['take_profit']
             
         # Task 5: Smart Risk Allocation (Final Edge)
-        score = metadata.get('score', 3)
+        score = float(metadata.get('score') or 3.0)
         if score >= 4.5: trade_risk_pct = 0.0125
         elif score >= 3.5: trade_risk_pct = 0.01
         else: trade_risk_pct = 0.0075
@@ -818,8 +831,8 @@ class PrimeSignalBot:
             return
         entry_price = live_price  # Execute at live price
         
-        sl = metadata['stop_loss']
-        tp = metadata['take_profit']
+        sl = float(metadata['stop_loss']) if metadata.get('stop_loss') is not None else (entry_price * 0.98)
+        tp = float(metadata['take_profit']) if metadata.get('take_profit') is not None else (entry_price * 1.04)
         
         pos_size = self.risk.calculate_position_size(current_equity, entry_price, sl)
         
@@ -844,9 +857,9 @@ class PrimeSignalBot:
             'cvd': metadata.get('cvd', {}),
             'liquidation': metadata.get('liquidation', {}),
             'ml_confidence': prob,
-            'funding_rate': fr if 'fr' in locals() else 0.0,
+            'funding_rate': fr,
             'bb_squeeze': False,
-            'spread_pct': spread if 'spread' in locals() else 0.0005
+            'spread_pct': spread
         }
         debate_result = self.courtroom.conduct_debate(signal, metadata, market_context)
         if debate_result.get('verdict') != 'APPROVED':
@@ -880,19 +893,20 @@ class PrimeSignalBot:
                 self.partial_tp_taken[symbol] = False
                 self.tp2_taken[symbol] = False
                 r_amount = abs(sl - entry_price)
-                self.take_profit_1r[symbol] = metadata.get('tp1', entry_price + (1.0 * r_amount))
-                self.take_profit_2r[symbol] = metadata.get('tp2', entry_price + (2.5 * r_amount))
+                self.take_profit_1r[symbol] = float(metadata.get('tp1') or (entry_price + (1.0 * r_amount)))
+                self.take_profit_2r[symbol] = float(metadata.get('tp2') or (entry_price + (2.5 * r_amount)))
                 # Extended Runner Target at 4.0R (so runner target stays above SL & TP2)
-                self.take_profit[symbol] = metadata.get('tp3', entry_price + (4.0 * r_amount))
+                self.take_profit[symbol] = float(metadata.get('tp3') or (entry_price + (4.0 * r_amount)))
                 
                 self.highest_price_reached[symbol] = entry_price
                 self.position_size[symbol] = pos_size
                 self.original_position_size[symbol] = pos_size
                 self.realized_pnl[symbol] = 0.0
-                self.entry_time[symbol] = int(time.time() * 1000)
+                self.entry_time[symbol] = time.time() * 1000.0
                 self.last_trade_time[symbol] = time.time()
-                self.position_mode[symbol] = metadata.get('mode', 'STRICT')
-                zone_id = metadata.get('zone_id')
+                self.position_mode[symbol] = str(metadata.get('mode') or 'STRICT')
+                zone_id_raw = metadata.get('zone_id')
+                zone_id = str(zone_id_raw) if zone_id_raw is not None else None
                 self.last_zone_traded[symbol] = zone_id
                 if zone_id:
                     self.traded_zones_cache[f"{symbol}_{zone_id}"] = True
@@ -923,7 +937,7 @@ class PrimeSignalBot:
                     f"Confidence: {prob:.2f}\n"
                     f"Reason: {metadata.get('reason', 'N/A')}"
                 )
-                add_log_message(f"[{symbol}] " + msg_str.replace('\\n', ' | '))
+                add_log_message(f"[{symbol}] " + msg_str.replace('\n', ' | '))
                 await self.notifier.send_message(msg_str)
             else:
                 # FIX #4: Log order rejection with reason
@@ -954,19 +968,20 @@ class PrimeSignalBot:
                 self.partial_tp_taken[symbol] = False
                 self.tp2_taken[symbol] = False
                 r_amount = abs(sl - entry_price)
-                self.take_profit_1r[symbol] = metadata.get('tp1', entry_price - (1.0 * r_amount))
-                self.take_profit_2r[symbol] = metadata.get('tp2', entry_price - (2.5 * r_amount))
+                self.take_profit_1r[symbol] = float(metadata.get('tp1') or (entry_price - (1.0 * r_amount)))
+                self.take_profit_2r[symbol] = float(metadata.get('tp2') or (entry_price - (2.5 * r_amount)))
                 # Extended Runner Target at 4.0R (so runner target stays below SL & TP2)
-                self.take_profit[symbol] = metadata.get('tp3', entry_price - (4.0 * r_amount))
+                self.take_profit[symbol] = float(metadata.get('tp3') or (entry_price - (4.0 * r_amount)))
                 
                 self.lowest_price_reached[symbol] = entry_price
                 self.position_size[symbol] = pos_size
                 self.original_position_size[symbol] = pos_size
                 self.realized_pnl[symbol] = 0.0
-                self.entry_time[symbol] = int(time.time() * 1000)
+                self.entry_time[symbol] = time.time() * 1000.0
                 self.last_trade_time[symbol] = time.time()
-                self.position_mode[symbol] = metadata.get('mode', 'STRICT')
-                zone_id = metadata.get('zone_id')
+                self.position_mode[symbol] = str(metadata.get('mode') or 'STRICT')
+                zone_id_raw = metadata.get('zone_id')
+                zone_id = str(zone_id_raw) if zone_id_raw is not None else None
                 self.last_zone_traded[symbol] = zone_id
                 if zone_id:
                     self.traded_zones_cache[f"{symbol}_{zone_id}"] = True
@@ -1040,7 +1055,9 @@ class PrimeSignalBot:
                         # Concurrently evaluate candidates across 20 pairs
                         for sym in Config.SUPPORTED_SYMBOLS:
                             if not self.in_position[sym] and self.pipeline.ltf_candles.get(sym):
-                                asyncio.create_task(self.on_candle_close(sym))
+                                scan_task = asyncio.create_task(self.on_candle_close(sym))
+                                self._active_scan_tasks.add(scan_task)
+                                scan_task.add_done_callback(self._active_scan_tasks.discard)
 
                 for symbol in Config.SUPPORTED_SYMBOLS:
                     sym_price = self.pipeline.latest_prices.get(symbol, 0.0)
@@ -1736,13 +1753,13 @@ class PrimeSignalBot:
             # Task 5: Cluster Loss Tracking (Evaluates Total Trade Return = Realized TP1/TP2 Cash + Final Runner PnL)
             total_trade_pnl = self.realized_pnl.get(symbol, 0.0) + pnl_usdt
             is_loss = total_trade_pnl < -0.01
-            self.trade_history.append(is_loss)
+            self.trade_history.append(1 if is_loss else 0)
             if len(self.trade_history) > 6:
                 self.trade_history.pop(0)
                 
             if len(self.trade_history) >= 2 and all(self.trade_history[-2:]):
-                cooldown_secs = 900 if Config.PAPER_TRADING else 3600
-                cooldown_mins = cooldown_secs // 60
+                cooldown_secs = 900.0 if Config.PAPER_TRADING else 3600.0
+                cooldown_mins = int(cooldown_secs // 60)
                 cooldown_time = time.time() + cooldown_secs
                 self.cluster_loss_pause_until = cooldown_time
                 self.global_pause_until = cooldown_time  # Update global pause
@@ -1759,7 +1776,7 @@ class PrimeSignalBot:
             if pos_mode == 'RELAXED' and is_loss:
                 self.relaxed_losses += 1
                 if self.relaxed_losses >= 2:
-                    self.relaxed_disabled_until = time.time() + 7200
+                    self.relaxed_disabled_until = time.time() + 7200.0
                     add_log_message("🚨 [SAFETY] 2 relaxed losses. Relaxed mode disabled for 2 hours.")
                     self.relaxed_losses = 0
             elif not is_loss and pos_mode == 'RELAXED':
@@ -1774,11 +1791,11 @@ class PrimeSignalBot:
             had_tp = self.partial_tp_taken[symbol] or self.tp2_taken[symbol] or reason in ["TAKE_PROFIT_RUNNER", "TRAILING_STOP", "TP2_HIT"]
             if had_tp and pnl_usdt >= 0:
                 tp_cooldown_mins = getattr(Config, 'TP_EXIT_COOLDOWN_MINUTES', 25)
-                self.tp_cooldown_until[symbol] = now_exit + (tp_cooldown_mins * 60)
+                self.tp_cooldown_until[symbol] = now_exit + (tp_cooldown_mins * 60.0)
                 add_log_message(f"[{symbol}] 🎯 Profit secured from wave ({reason}). Harvest cooldown active for {tp_cooldown_mins}m to prevent chasing exhausted move.")
             else:
                 post_exit_mins = getattr(Config, 'POST_EXIT_COOLDOWN_MINUTES', 15)
-                self.tp_cooldown_until[symbol] = now_exit + (post_exit_mins * 60)
+                self.tp_cooldown_until[symbol] = now_exit + (post_exit_mins * 60.0)
                 add_log_message(f"[{symbol}] ⏱️ Position closed. Post-exit cooldown active for {post_exit_mins}m.")
 
             self.in_position[symbol] = False
@@ -1829,7 +1846,7 @@ class PrimeSignalBot:
         DashboardState.latest_price = self.pipeline.latest_prices.get(new_symbol, 0.0)
         DashboardState.chart_history = self.pipeline.ltf_candles[new_symbol][-100:] if self.pipeline.ltf_candles[new_symbol] else []
         
-        if self.ml_models[new_symbol] is not None and self.pipeline.ltf_candles[new_symbol]:
+        if self.ml_models[new_symbol].is_trained and self.pipeline.ltf_candles[new_symbol]:
             df = prepare_dataframe(self.pipeline.ltf_candles[new_symbol])
             DashboardState.ml_confidence = self.ml_models[new_symbol].predict_bias(df)
         else:
@@ -1851,9 +1868,8 @@ class PrimeSignalBot:
             )
             if ltf_ohlcv:
                 self.pipeline.ltf_candles[sym] = ltf_ohlcv
-                if self.ml_models[sym] is not None:
-                    df = prepare_dataframe(ltf_ohlcv)
-                    self.ml_models[sym].train(df)
+                df = prepare_dataframe(ltf_ohlcv)
+                self.ml_models[sym].train(df)
         
         await self.pipeline.restart_streams()
         sym = Config.SYMBOL

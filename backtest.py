@@ -70,10 +70,8 @@ async def main():
             'close': 'last',
             'volume': 'sum'
         }).dropna()
-        ltf_ohlcv = [
-            [int(ts.timestamp() * 1000), float(row['open']), float(row['high']), float(row['low']), float(row['close']), float(row['volume'])]
-            for ts, row in df_15m.iterrows()
-        ]
+        df_15m['timestamp'] = df_15m.index.astype('int64') // 1000000
+        ltf_ohlcv = df_15m[['timestamp', 'open', 'high', 'low', 'close', 'volume']].values.tolist()
         
     print(f"[DATA] Prepared {len(htf_ohlcv)} HTF ({Config.HTF_TIMEFRAME}) candles and {len(ltf_ohlcv)} LTF ({Config.LTF_TIMEFRAME}) candles.")
 
@@ -150,7 +148,7 @@ async def main():
     print("====================================================")
 
 if __name__ == "__main__":
-    if sys.platform == 'win32':
+    if sys.platform == 'win32' and sys.version_info < (3, 12):
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())
 

@@ -33,7 +33,7 @@ class RiskManager:
         with self._lock:
             self.reserved_risk_pct = max(0.0, self.reserved_risk_pct - risk_pct)
 
-    def calculate_position_size(self, account_equity, entry_price, stop_loss):
+    def calculate_position_size(self, account_equity: float, entry_price: float, stop_loss: float) -> float:
         """
         Calculates position size dynamically based on stop-loss distance and account risk percentage.
         """
@@ -85,7 +85,7 @@ class RiskManager:
             
         return round(position_size, 6)
 
-    def check_circuit_breaker(self, current_equity):
+    def check_circuit_breaker(self, current_equity: float) -> bool:
         """
         Implements daily max loss limits. Stops bot if drawdown limit is hit.
         """
@@ -116,19 +116,19 @@ class RiskManager:
             
         return True
 
-    def reset_daily_equity(self, current_equity):
+    def reset_daily_equity(self, current_equity: float):
         """Reset starting balance for the day (run at UTC midnight)."""
         self.daily_starting_equity = current_equity
         self.current_drawdown_pct = 0.0
         eq_val = current_equity if (current_equity is not None and not math.isnan(current_equity)) else 0.0
         print(f"[RISK] Daily equity checkpoint reset to {eq_val:.2f} USDT")
 
-    def update_trailing_stop(self, entry_price, extreme_price, stop_loss, curr_atr, position_side="LONG"):
+    def update_trailing_stop(self, entry_price: float, extreme_price: float, stop_loss: float, curr_atr: float, position_side: str = "LONG") -> float:
         """
         Calculates ATR-based trailing stop loss adjustments.
         """
         if stop_loss is None or curr_atr is None or extreme_price is None:
-            return stop_loss
+            return stop_loss if stop_loss is not None else 0.0
         if math.isnan(stop_loss) or math.isnan(curr_atr) or math.isnan(extreme_price):
             return stop_loss
 

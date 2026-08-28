@@ -76,8 +76,8 @@ def calculate_adx(df, period=14):
     high_diff = df['high'].diff()
     low_diff = -df['low'].diff()
     
-    plus_dm = np.where((high_diff > low_diff) & (high_diff > 0), high_diff, 0.0)
-    minus_dm = np.where((low_diff > high_diff) & (low_diff > 0), low_diff, 0.0)
+    plus_dm = high_diff.where((high_diff > low_diff) & (high_diff > 0), 0.0)
+    minus_dm = low_diff.where((low_diff > high_diff) & (low_diff > 0), 0.0)
     
     # Calculate True Range
     high_low = df['high'] - df['low']
@@ -86,8 +86,8 @@ def calculate_adx(df, period=14):
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     
     # Wilder's Smoothing: EMA with alpha=1/period
-    smoothed_plus_dm = pd.Series(plus_dm, index=df.index).ewm(alpha=1/period, adjust=False).mean()
-    smoothed_minus_dm = pd.Series(minus_dm, index=df.index).ewm(alpha=1/period, adjust=False).mean()
+    smoothed_plus_dm = plus_dm.ewm(alpha=1/period, adjust=False).mean()
+    smoothed_minus_dm = minus_dm.ewm(alpha=1/period, adjust=False).mean()
     smoothed_tr = tr.ewm(alpha=1/period, adjust=False).mean()
     
     plus_di = 100 * (smoothed_plus_dm / smoothed_tr.replace(0, 1e-9))

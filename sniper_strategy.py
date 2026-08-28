@@ -2,9 +2,8 @@ import json
 import os
 import pandas as pd
 import numpy as np
-from config import Config
 from strategies.indicators import prepare_dataframe, calculate_ema, calculate_rsi, calculate_atr, calculate_adx, calculate_vwap
-from strategies.smc import detect_fvgs, detect_order_blocks, detect_structure
+from strategies.smc import detect_fvgs, detect_order_blocks
 from ml.confirmation import MLSignalConfirmator
 
 def run_sniper_80pct_strategy():
@@ -22,10 +21,8 @@ def run_sniper_80pct_strategy():
         df_15m = df.resample('15min').agg({
             'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
         }).dropna()
-        ltf_ohlcv = [
-            [int(ts.timestamp() * 1000), float(row['open']), float(row['high']), float(row['low']), float(row['close']), float(row['volume'])]
-            for ts, row in df_15m.iterrows()
-        ]
+        df_15m['timestamp'] = df_15m.index.astype('int64') // 1000000
+        ltf_ohlcv = df_15m[['timestamp', 'open', 'high', 'low', 'close', 'volume']].values.tolist()
 
     htf_df = prepare_dataframe(htf_ohlcv)
     ltf_df = prepare_dataframe(ltf_ohlcv)
@@ -47,7 +44,7 @@ def run_sniper_80pct_strategy():
     htf_closes = htf_df['close'].values
     htf_ema50 = calculate_ema(htf_df, 50).values
     htf_ema200 = calculate_ema(htf_df, 200).values
-    htf_timestamps = htf_df.index.values
+    htf_timestamps = np.asarray(htf_df.index.values)
 
     ltf_rsi = calculate_rsi(test_ltf_df, 14).values
     ltf_atr = calculate_atr(test_ltf_df, 14).values
@@ -162,7 +159,7 @@ def run_sniper_80pct_strategy():
             if i - last_trade_bar < 8: # 2 hours cooldown between trades
                 continue
 
-            htf_idx = np.searchsorted(htf_timestamps, t_now) - 1
+            htf_idx = int(np.searchsorted(htf_timestamps, t_now)) - 1
             if htf_idx < 50: continue
             
             htf_c = htf_closes[htf_idx]
@@ -243,8 +240,8 @@ def run_sniper_80pct_strategy():
     print("\n" + "="*70)
     print("      PRIMESIGNAL 80% WIN RATE SNIPER STRATEGY REPORT         ")
     print("="*70)
-    wins = [t for t in trades if t['pnl'] > 0]
-    losses = [t for t in trades if t['pnl'] <= 0]
+    wins = [t for t in trades if float(t['pnl']) > 0]
+    losses = [t for t in trades if float(t['pnl']) <= 0]
     wr = len(wins) / len(trades) * 100 if trades else 0.0
 
     print(f"Total Trades Executed : {len(trades)}")
@@ -255,7 +252,7 @@ def run_sniper_80pct_strategy():
     print("-" * 70)
     print("Detailed Trade Log:")
     for idx, t in enumerate(trades, 1):
-        w_tag = "WIN  [+]" if t['pnl'] > 0 else "LOSS [-]"
+        w_tag = "WIN  [+]" if float(t['pnl']) > 0 else "LOSS [-]"
         print(f"#{idx:02d} | {t['time']} | {t['side']:<5} | PnL: {t['pnl']:>+7.2f} USDT | Exit: {t['reason']:<15} | {w_tag}")
     print("="*70)
 

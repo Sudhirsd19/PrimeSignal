@@ -57,7 +57,7 @@ def sniper_structure_simulate(symbol, htf_ohlcv, ltf_ohlcv, initial_balance=1000
     obs = detect_order_blocks(test_ltf)
     fvgs = detect_fvgs(test_ltf)
 
-    htf_timestamps = htf_df.index.values
+    htf_timestamps = np.asarray(htf_df.index.values)
     htf_closes = htf_df['close'].values
     htf_ema50 = calculate_ema(htf_df, 50).values
     htf_ema200 = calculate_ema(htf_df, 200).values
@@ -167,7 +167,7 @@ def sniper_structure_simulate(symbol, htf_ohlcv, ltf_ohlcv, initial_balance=1000
             if i - last_trade_bar < 4:
                 continue
 
-            htf_idx = np.searchsorted(htf_timestamps, t_now) - 1
+            htf_idx = int(np.searchsorted(htf_timestamps, t_now)) - 1
             if htf_idx < 50: continue
             
             htf_c = htf_closes[htf_idx]

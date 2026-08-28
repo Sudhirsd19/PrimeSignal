@@ -9,9 +9,9 @@ import numpy as np
 # Reconfigure stdout for utf-8 on Windows
 if sys.platform == 'win32':
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
-        sys.stderr.reconfigure(encoding='utf-8')
-    except AttributeError:
+        getattr(sys.stdout, 'reconfigure', lambda **kw: None)(encoding='utf-8')
+        getattr(sys.stderr, 'reconfigure', lambda **kw: None)(encoding='utf-8')
+    except (AttributeError, Exception):
         pass
 
 from config import Config
@@ -122,8 +122,10 @@ def simulate_1month_coin(symbol, htf_ohlcv, ltf_ohlcv, initial_balance=1000.0, t
     tp2 = 0.0
     p_size = 0.0
     partial_taken = False
+    pnl_tp1 = 0.0
     high_p = 0.0
     low_p = 999999.0
+    t_entry = None
     trades = []
     fee_rate = getattr(Config, 'FEE_RATE', 0.00075)
     last_trade_bar = -999
@@ -343,13 +345,13 @@ def simulate_1month_coin(symbol, htf_ohlcv, ltf_ohlcv, initial_balance=1000.0, t
             'reason': 'EOD_CLOSE'
         })
 
-    wins = [t for t in trades if t['pnl'] > 0]
-    losses = [t for t in trades if t['pnl'] <= 0]
+    wins = [t for t in trades if float(t['pnl']) > 0]
+    losses = [t for t in trades if float(t['pnl']) <= 0]
     wr = (len(wins) / len(trades) * 100.0) if trades else 0.0
     pnl = balance - initial_balance
 
-    gross_profit = sum([t['pnl'] for t in wins]) if wins else 0.0
-    gross_loss = abs(sum([t['pnl'] for t in losses])) if losses else 1e-9
+    gross_profit = sum([float(t['pnl']) for t in wins]) if wins else 0.0
+    gross_loss = abs(sum([float(t['pnl']) for t in losses])) if losses else 1e-9
     pf = gross_profit / gross_loss
 
     return {
