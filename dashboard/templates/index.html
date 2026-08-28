@@ -1769,8 +1769,8 @@
                                 const activeTargetP = pos.active_target || (stage === 1 ? target1P : (stage === 2 ? target2P : finalTargetP));
                                 const activeTargetName = pos.active_target_name || (stage === 1 ? "TP1 (1.2R)" : (stage === 2 ? "TP2 (2.2R)" : "Runner Target"));
                                 
-                                // Check if profit is locked
-                                const isProfitLocked = pos.profit_locked || (isLong ? slP >= entryP : (slP <= entryP && slP > 0));
+                                // Check if profit is genuine locked
+                                const isProfitLocked = pos.tp1_hit || (isLong ? (slP >= entryP && slP > 0) : (slP <= entryP && slP > 0 && entryP > 0));
                                 
                                 // Calculate Progress towards the currently active target stage
                                 let targetProgress = 0;
@@ -1817,7 +1817,7 @@
 
                                 // Lock profit button or locked indicator HTML
                                 let lockControlHTML = '';
-                                if (isProfitLocked || pos.tp1_hit) {
+                                if ((isProfitLocked || pos.tp1_hit) && (guarUsdt > 0.001 || pos.tp1_hit)) {
                                     lockControlHTML = `
                                         <div class="bg-gradient-to-r from-amber-500/15 via-emerald-500/15 to-amber-500/15 border border-amber-500/40 rounded-lg p-2.5 flex flex-col gap-1.5 shadow-[0_0_12px_rgba(245,158,11,0.2)]">
                                             <div class="flex justify-between items-center text-[10px] font-extrabold text-amber-300">
@@ -1830,7 +1830,7 @@
                                             </div>
                                         </div>
                                     `;
-                                } else if (pnlUsdt > 0) {
+                                } else if (pnlUsdt > 0.01) {
                                     lockControlHTML = `
                                         <button onclick="event.stopPropagation(); lockProfitForSymbol('${sym}')" class="w-full bg-gradient-to-r from-amber-500/20 to-emerald-500/20 hover:from-amber-500/40 hover:to-emerald-500/40 text-amber-300 border border-amber-500/40 font-extrabold py-1.5 px-2.5 rounded-lg text-[10px] flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm">
                                             <span>🔒</span> Lock Profit Now (Move SL to Breakeven)
