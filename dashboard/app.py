@@ -261,7 +261,31 @@ async def reset_account(req: Optional[ResetAccountRequest] = None):
         DashboardState.balance_base = 0.0
         DashboardState.active_positions.clear()
         DashboardState.in_position = False
+        DashboardState.trades.clear()
         return {"status": "success", "message": f"Dashboard balance reset to ${balance:,.2f} USDT."}
+
+@app.post("/api/clear_analytics", dependencies=[Depends(verify_dashboard_key)])
+async def clear_analytics():
+    """Clears all in-memory and disk trade history logs for fresh analytics tracking."""
+    DashboardState.trades.clear()
+    if bot_instance is not None:
+        bot_instance.trade_history.clear()
+        if hasattr(bot_instance, 'trades_today'):
+            bot_instance.trades_today = 0
+            
+    # Truncate on-disk log files if they exist
+    for fpath in [
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'trade_logs.jsonl'),
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs', 'trade_decisions.jsonl')
+    ]:
+        try:
+            if os.path.exists(fpath):
+                with open(fpath, 'w', encoding='utf-8') as f:
+                    pass
+        except Exception:
+            pass
+            
+    return {"status": "success", "message": "All historical trade logs and analytics have been cleared."}
 
 class TestTradeRequest(BaseModel):
     symbol: str | None = None
