@@ -2386,32 +2386,41 @@
                             const pnlColor = isWin ? 'text-emerald-400' : 'text-rose-400';
                             const pnlSign = isWin ? '+' : '';
                             
-                            const formatTimeHelper = (str, rawTs) => {
-                                if (str && typeof str === 'string' && str !== 'N/A' && str.includes(' ')) {
-                                    const parts = str.split(' ');
-                                    return { date: parts[0], time: parts[1] };
-                                }
-                                if (rawTs) {
-                                    const num = parseFloat(rawTs);
-                                    if (!isNaN(num) && num > 0) {
-                                        const dt = new Date(num > 1e11 ? num : num * 1000);
-                                        if (!isNaN(dt.getTime())) {
-                                            const date = dt.toISOString().slice(0, 10);
-                                            const time = dt.toTimeString().split(' ')[0];
-                                            return { date, time };
-                                        }
+                            const extractDT = (val) => {
+                                if (!val || val === 'N/A') return null;
+                                if (typeof val === 'string') {
+                                    if (val.includes('T')) {
+                                        const parts = val.replace('Z','').split('T');
+                                        return { date: parts[0], time: (parts[1] || '').slice(0, 8) };
+                                    }
+                                    if (val.includes(' ')) {
+                                        const parts = val.split(' ');
+                                        return { date: parts[0], time: (parts[1] || '').slice(0, 8) };
                                     }
                                 }
-                                return { date: '', time: (str && str !== 'N/A') ? str : '--:--:--' };
+                                const num = parseFloat(val);
+                                if (!isNaN(num) && num > 0) {
+                                    const dt = new Date(num > 1e11 ? num : num * 1000);
+                                    if (!isNaN(dt.getTime())) {
+                                        return {
+                                            date: dt.toISOString().slice(0, 10),
+                                            time: dt.toTimeString().split(' ')[0]
+                                        };
+                                    }
+                                }
+                                return null;
                             };
 
-                            const eObj = formatTimeHelper(t.entry_time_str, t.entry_time || t.ts);
-                            const xObj = formatTimeHelper(t.exit_time_str, t.exit_time || t.time);
-                            const dateStr = eObj.date || xObj.date || (t.timestamp && t.timestamp !== 'N/A' ? t.timestamp.slice(0, 10) : '');
+                            const eDT = extractDT(t.entry_time_str) || extractDT(t.entry_time);
+                            const xDT = extractDT(t.exit_time_str) || extractDT(t.exit_time) || extractDT(t.timestamp) || extractDT(t.time) || extractDT(t.ts);
+                            
+                            const displayDate = (eDT && eDT.date) || (xDT && xDT.date) || (typeof t.timestamp === 'string' && t.timestamp.length >= 10 ? t.timestamp.slice(0, 10) : '2026-08-27');
+                            const eTime = eDT ? eDT.time : (xDT ? xDT.time : 'Executed');
+                            const xTime = xDT ? xDT.time : (eDT ? eDT.time : 'Closed');
                             
                             const timeTd = document.createElement('td');
                             timeTd.className = 'py-2 px-2 text-gray-400 terminal-font';
-                            timeTd.innerHTML = `<div><span class="text-white font-bold">${eObj.time}</span> ➔ <span class="text-gray-300">${xObj.time}</span></div><div class="text-[8px] text-gray-500">${dateStr}</div>`;
+                            timeTd.innerHTML = `<div><span class="text-white font-bold">${eTime}</span> ➔ <span class="text-gray-300">${xTime}</span></div><div class="text-[8px] text-gray-500">${displayDate}</div>`;
                             
                             const symTd = document.createElement('td');
                             symTd.className = 'py-2 px-1.5 font-bold text-white';
