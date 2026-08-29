@@ -85,6 +85,7 @@ class PrimeSignalBot:
         if not self.has_keys or Config.PAPER_TRADING:
             DashboardState.balance_usdt = self._dry_run_balance_usdt
             DashboardState.balance_base = 0.0
+            self.risk.reset_daily_equity(self._dry_run_balance_usdt)
             currency_symbol = "₹" if DashboardState.balance_currency == "INR" else "$"
             print(f"[INIT] ✅ Paper-trading mode: Virtual balance initialized to {currency_symbol}{self._dry_run_balance_usdt:,.2f} {DashboardState.balance_currency}")
 
