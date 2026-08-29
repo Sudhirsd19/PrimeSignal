@@ -70,7 +70,8 @@ async def verify_dashboard_key(key: Optional[str] = Depends(_api_key_header)):
 # Global Memory State Store
 class DashboardState:
     latest_price = 0.0
-    balance_usdt = 10000.0
+    balance_currency = getattr(Config, 'PAPER_CURRENCY', 'INR')
+    balance_usdt = float(getattr(Config, 'PAPER_STARTING_BALANCE', 2000.0 if getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' else 10000.0))
     balance_base = 0.0
     
     in_position = False
@@ -107,8 +108,8 @@ class DashboardState:
         "id": "DCX-VIRTUAL-8849"
     }
     coindcx_balances = [
-        {"currency": "USDT", "available": 10000.0, "locked": 0.0},
-        {"currency": "INR", "available": 850000.0, "locked": 0.0},
+        {"currency": "INR", "available": float(getattr(Config, 'PAPER_STARTING_BALANCE', 2000.0)), "locked": 0.0},
+        {"currency": "USDT", "available": round(float(getattr(Config, 'PAPER_STARTING_BALANCE', 2000.0)) / 85.0, 2), "locked": 0.0},
         {"currency": "BTC", "available": 0.0, "locked": 0.0}
     ]
     
@@ -701,7 +702,7 @@ def _build_state_payload():
         "ltf_timeframe": Config.LTF_TIMEFRAME,
         "htf_timeframe": Config.HTF_TIMEFRAME,
         "paper_trading": Config.PAPER_TRADING,
-        "balance_currency": "USDT" if (Config.PAPER_TRADING or not Config.COINDCX_TRADE_INR) else "INR",
+        "balance_currency": getattr(Config, 'PAPER_CURRENCY', 'INR' if Config.COINDCX_TRADE_INR else 'USDT'),
         "trades": DashboardState.trades[-5:],  # Last 5 trades
         "trades_today": bot_instance.trades_today if bot_instance else 0,
         "max_daily_trades": getattr(Config, 'MAX_DAILY_TRADES', 6),

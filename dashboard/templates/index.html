@@ -2059,8 +2059,9 @@
         function updateTodayPnLBadge(trades) {
             const badge = document.getElementById('today-pnl-badge');
             if (!badge) return;
+            const curUnit = (latestStateRef && latestStateRef.balance_currency === 'INR') ? '₹' : '$';
             if (!trades || trades.length === 0) {
-                badge.innerText = "Today: $0.00 | 0W 0L";
+                badge.innerText = `Today: ${curUnit}0.00 | 0W 0L`;
                 badge.className = "text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-slate-500/20 text-slate-400 border border-slate-500/30";
                 return;
             }
@@ -2083,7 +2084,7 @@
                 ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30 shadow-[0_0_8px_rgba(16,185,129,0.2)]" 
                 : "bg-rose-500/15 text-rose-400 border-rose-500/30 shadow-[0_0_8px_rgba(244,63,94,0.2)]";
             
-            badge.innerText = `Today: ${sign}$${todayPnL.toFixed(2)} | ${wins}W ${losses}L (${winRate}%)`;
+            badge.innerText = `Today: ${sign}${curUnit}${todayPnL.toFixed(2)} | ${wins}W ${losses}L (${winRate}%)`;
             badge.className = `text-[10px] font-extrabold px-2 py-0.5 rounded-full border ${colorClass}`;
         }
 

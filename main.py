@@ -78,12 +78,15 @@ class PrimeSignalBot:
         self.traded_zones_cache = {}
 
         # Dry-run virtual balance (used for paper trading & dry-run simulation)
-        self._dry_run_balance_usdt = 10000.0   # starting paper balance
+        starting_bal = getattr(Config, 'PAPER_STARTING_BALANCE', 2000.0 if getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' else 10000.0)
+        self._dry_run_balance_usdt = float(starting_bal)   # starting paper balance
         
+        DashboardState.balance_currency = getattr(Config, 'PAPER_CURRENCY', 'INR')
         if not self.has_keys or Config.PAPER_TRADING:
             DashboardState.balance_usdt = self._dry_run_balance_usdt
             DashboardState.balance_base = 0.0
-            print("[INIT] ✅ Paper-trading mode: Virtual balance initialized to $10,000 USDT")
+            currency_symbol = "₹" if DashboardState.balance_currency == "INR" else "$"
+            print(f"[INIT] ✅ Paper-trading mode: Virtual balance initialized to {currency_symbol}{self._dry_run_balance_usdt:,.2f} {DashboardState.balance_currency}")
 
         # Per-symbol locks to prevent concurrent candle processing on the same symbol
         self._candle_locks = {sym: asyncio.Lock() for sym in Config.SUPPORTED_SYMBOLS}
@@ -178,7 +181,7 @@ class PrimeSignalBot:
             self.entry_time = safe_load('entry_time', 0)
             self.highest_price_reached = safe_load('highest_price_reached', 0.0)
             self.lowest_price_reached = safe_load('lowest_price_reached', 999999.0)
-            self._dry_run_balance_usdt = state.get('_dry_run_balance_usdt', 10000.0)
+            self._dry_run_balance_usdt = state.get('_dry_run_balance_usdt', getattr(Config, 'PAPER_STARTING_BALANCE', 2000.0))
             self.take_profit_1r = safe_load('take_profit_1r', 0.0)
             self.take_profit_2r = safe_load('take_profit_2r', 0.0)
             self.partial_tp_taken = safe_load('partial_tp_taken', False)
@@ -498,7 +501,7 @@ class PrimeSignalBot:
             DashboardState.signal_light = "RED"
             DashboardState.signal_light_reason = f"🚨 SLEEP MODE ACTIVE: Daily loss limit hit ({self.risk.current_drawdown_pct:.2f}%). Trading suspended until 00:00 UTC."
             add_log_message(f"🚨 SLEEP MODE / CIRCUIT BREAKER TRIGGERED: Daily loss limit reached ({self.risk.current_drawdown_pct:.2f}%). All entries suspended.")
-            await self.notifier.send_message(f"🚨 *SLEEP MODE ACTIVATED*\\nDaily loss circuit breaker triggered ({self.risk.current_drawdown_pct:.2f}%). All new trades suspended until 00:00 UTC.")
+            await self.notifier.send_message(f"🚨 *SLEEP MODE ACTIVATED*\nDaily loss circuit breaker triggered ({self.risk.current_drawdown_pct:.2f}%). All new trades suspended until 00:00 UTC.")
             return
 
         DashboardState.daily_drawdown_pct = self.risk.current_drawdown_pct
@@ -882,6 +885,8 @@ class PrimeSignalBot:
                     pos_size = self._dry_run_balance_usdt / entry_price
                     self._dry_run_balance_usdt = 0.0
                     order = {'id': 'MOCK_BUY_ORDER_ID', 'price': entry_price, 'status': 'filled'}
+                else:
+                    add_log_message(f"[{symbol}] ⚠️ Paper trading wallet balance depleted (${self._dry_run_balance_usdt:.2f} USDT). Reset wallet to continue.")
 
             if order:
                 self.in_position[symbol] = True
@@ -957,6 +962,8 @@ class PrimeSignalBot:
                     pos_size = self._dry_run_balance_usdt / entry_price
                     self._dry_run_balance_usdt = 0.0
                     order = {'id': 'MOCK_SELL_ORDER_ID', 'price': entry_price, 'status': 'filled'}
+                else:
+                    add_log_message(f"[{symbol}] ⚠️ Paper trading wallet balance depleted (${self._dry_run_balance_usdt:.2f} USDT). Reset wallet to continue.")
                 
             if order:
                 self.in_position[symbol] = True
@@ -1011,24 +1018,11 @@ class PrimeSignalBot:
                     f"Confidence: {prob:.2f}\n"
                     f"Reason: {metadata.get('reason', 'N/A')}"
                 )
-                add_log_message(f"[{symbol}] " + msg_str.replace('\\n', ' | '))
+                add_log_message(f"[{symbol}] " + msg_str.replace('\n', ' | '))
                 await self.notifier.send_message(msg_str)
             else:
                 add_log_message(f"[{symbol}] ❌ SELL order REJECTED (check execution logs)")
                 await self.notifier.send_message(f"⚠️ SELL REJECTED {symbol}: Order failed to execute. Check logs.")
-
-    async def change_bot_symbol(self, new_symbol: str):
-        """Switches the primary active symbol in the dashboard dynamically."""
-        if new_symbol and new_symbol in Config.SUPPORTED_SYMBOLS:
-            Config.SYMBOL = new_symbol
-            DashboardState.symbol = new_symbol
-            DashboardState.in_position = self.in_position.get(new_symbol, False)
-            DashboardState.position_side = self.position_side.get(new_symbol, "HOLD")
-            DashboardState.entry_price = self.entry_price.get(new_symbol, 0.0)
-            DashboardState.stop_loss = self.stop_loss.get(new_symbol, 0.0)
-            DashboardState.take_profit = self.take_profit.get(new_symbol, 0.0)
-            add_log_message(f"🔄 Active dashboard symbol switched to: {new_symbol}")
-            print(f"[BOT] Switched active symbol to {new_symbol}")
 
     async def run_live_risk_monitor(self):
         while True:
@@ -1483,23 +1477,23 @@ class PrimeSignalBot:
                                     if self.take_profit_1r[symbol] < self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = self.take_profit_1r[symbol]
                                         if symbol == Config.SYMBOL: DashboardState.stop_loss = self.take_profit_1r[symbol]
-                                        
-                                        orig_sz = self.original_position_size.get(symbol, self.position_size[symbol] / 0.20) or (self.position_size[symbol] / 0.20)
-                                        runner_guar = max(0.0, self.position_size[symbol] * (self.entry_price[symbol] - self.stop_loss[symbol]))
-                                        guar_pnl_usdt = self.realized_pnl[symbol] + runner_guar
-                                        orig_val = orig_sz * self.entry_price[symbol]
-                                        guar_pnl_pct = (guar_pnl_usdt / orig_val * 100.0) if orig_val > 0 else 0.0
-                                        
-                                        add_log_message(f"[{symbol}] 🚀 TP2 Hit! SL locked at TP1 level ({self.stop_loss[symbol]:.4f}). Trailing Runner active.")
-                                        await self.notifier.send_message(
-                                            f"🚀 *DEEP PROFIT LOCKED ({symbol})*\n"
-                                            f"🎯 TP2 Hit! 30% profit booked (+{tp2_pnl_usdt:.2f} USDT).\n"
-                                            f"🔒 Total Guaranteed Deep Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
-                                            f"🎯 New Active Target: Runner Target (3.5R) @ {self.take_profit[symbol]:.4f}"
-                                        )
-                                        self.save_state()
-                                    else:
-                                        add_log_message(f"[{symbol}] ⚠️ TP2 order REJECTED by exchange. State NOT updated.")
+                                    
+                                    orig_sz = self.original_position_size.get(symbol, self.position_size[symbol] / 0.20) or (self.position_size[symbol] / 0.20)
+                                    runner_guar = max(0.0, self.position_size[symbol] * (self.entry_price[symbol] - self.stop_loss[symbol]))
+                                    guar_pnl_usdt = self.realized_pnl[symbol] + runner_guar
+                                    orig_val = orig_sz * self.entry_price[symbol]
+                                    guar_pnl_pct = (guar_pnl_usdt / orig_val * 100.0) if orig_val > 0 else 0.0
+                                    
+                                    add_log_message(f"[{symbol}] 🚀 TP2 Hit! SL locked at TP1 level ({self.stop_loss[symbol]:.4f}). Trailing Runner active.")
+                                    await self.notifier.send_message(
+                                        f"🚀 *DEEP PROFIT LOCKED ({symbol})*\n"
+                                        f"🎯 TP2 Hit! 30% profit booked (+{tp2_pnl_usdt:.2f} USDT).\n"
+                                        f"🔒 Total Guaranteed Deep Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
+                                        f"🎯 New Active Target: Runner Target (3.5R) @ {self.take_profit[symbol]:.4f}"
+                                    )
+                                    self.save_state()
+                                else:
+                                    add_log_message(f"[{symbol}] ⚠️ TP2 order REJECTED by exchange. State NOT updated.")
 
                             if self.partial_tp_taken[symbol]:
                                 new_sl = self.risk.update_trailing_stop(self.entry_price[symbol], self.lowest_price_reached[symbol], self.stop_loss[symbol], curr_atr, "SHORT")

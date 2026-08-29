@@ -18,7 +18,8 @@ class CoinDCXClient:
     async def _get_session(self):
         """Lazily create and reuse a single aiohttp session."""
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
+            self._session = aiohttp.ClientSession(connector=connector)
         return self._session
 
     async def close(self):
@@ -35,23 +36,31 @@ class CoinDCXClient:
             url = f"{self.base_url}/exchange/v1/markets_details"
             session = await self._get_session()
             async with session.get(url) as response:
-                    if response.status == 200:
-                        markets = await response.json()
-                        for m in markets:
-                            name = m.get('coindcx_name')
-                            if name:
-                                self.markets_info[name] = {
-                                    'min_quantity': float(m.get('min_quantity') or 0.0),
-                                    'min_notional': float(m.get('min_notional') or 0.0),
-                                    'precision': int(m.get('target_currency_precision') or 6),
-                                    'pair': m.get('pair')
-                                }
-                        self.initialized = True
-                        print(f"[CoinDCX] Loaded market details for {len(self.markets_info)} pairs.")
-                        return True
-                    else:
-                        print(f"[CoinDCX] ERROR: Failed to load market details. Status: {response.status}")
-                        return False
+                if response.status == 200:
+                    markets = await response.json()
+                    for m in markets:
+                        name = m.get('coindcx_name')
+                        pair = m.get('pair')
+                        details = {
+                            'min_quantity': float(m.get('min_quantity') or 0.0),
+                            'min_notional': float(m.get('min_notional') or 0.0),
+                            'precision': int(m.get('target_currency_precision') or 6),
+                            'pair': pair
+                        }
+                        if name:
+                            self.markets_info[name] = details
+                            norm_name = name.replace('-', '').replace('_', '').upper()
+                            self.markets_info[norm_name] = details
+                        if pair:
+                            self.markets_info[pair] = details
+                            norm_pair = pair.replace('-', '').replace('_', '').replace('/', '').upper()
+                            self.markets_info[norm_pair] = details
+                    self.initialized = True
+                    print(f"[CoinDCX] Loaded market details for {len(self.markets_info)} pair mappings.")
+                    return True
+                else:
+                    print(f"[CoinDCX] ERROR: Failed to load market details. Status: {response.status}")
+                    return False
         except Exception as e:
             print(f"[CoinDCX] ERROR initializing market details: {e}")
             return False

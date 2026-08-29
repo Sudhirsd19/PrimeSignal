@@ -108,6 +108,8 @@ class Config:
     # Test Mode config
     TEST_MODE = os.getenv("TEST_MODE", "False").lower() in ("true", "1", "yes")
     PAPER_TRADING = os.getenv("PAPER_TRADING", "True").lower() in ("true", "1", "yes")
+    PAPER_CURRENCY = os.getenv("PAPER_CURRENCY", "INR" if os.getenv("COINDCX_TRADE_INR", "True").lower() in ("true", "1", "yes") else "USDT").upper()
+    PAPER_STARTING_BALANCE = float(os.getenv("PAPER_STARTING_BALANCE", "2000.0" if os.getenv("PAPER_CURRENCY", "INR").upper() == "INR" else "10000.0"))
     
     # Telegram notifier settings
     TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
