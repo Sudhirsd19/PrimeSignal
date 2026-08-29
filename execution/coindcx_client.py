@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+import math
 import hmac
 import hashlib
 import aiohttp
@@ -220,9 +221,92 @@ class CoinDCXClient:
                         print(f"[CoinDCX] ERROR placing order: {response.status} - {err_text}")
                         return None
             except Exception as e:
-                print(f"[CoinDCX] Order execution error (attempt {attempt+1}): {e}")
+                print(f"[CoinDCX] Order execution exception on attempt {attempt+1}: {e}")
+                # GAP-01 FIX: Reconcile exchange order state before blindly retrying to prevent duplicate fills
+                print(f"[CoinDCX TIMEOUT] Verifying exchange state for {market_name} {side} ({amount}) before retry...")
+                existing_order = await self._reconcile_ambiguous_order(market_name, side, amount, created_after_ts=payload["timestamp"] - 5000)
+                if existing_order:
+                    print(f"[CoinDCX IDEMPOTENCY] ✅ Discovered existing order {existing_order['id']} on exchange after timeout! Adopting without duplicate submission.")
+                    return existing_order
+                    
                 if attempt < 2:
                     await asyncio.sleep(1.0 * (2 ** attempt))
+        return None
+
+    async def fetch_active_orders(self, market: str | None = None) -> list | None:
+        """Fetches list of active/open orders from CoinDCX."""
+        url = f"{self.base_url}/exchange/v1/orders/active_orders"
+        payload = {"timestamp": int(time.time() * 1000)}
+        if market:
+            payload["market"] = market
+        payload_str, headers = self._sign(payload)
+        try:
+            session = await self._get_session()
+            async with session.post(url, data=payload_str, headers=headers, timeout=10.0) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data.get('orders', []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                return None
+        except Exception as e:
+            print(f"[CoinDCX] Error fetching active orders: {e}")
+            return None
+
+    async def fetch_recent_trades(self, market: str | None = None) -> list | None:
+        """Fetches recent trade execution history from CoinDCX."""
+        url = f"{self.base_url}/exchange/v1/orders/trade_history"
+        payload = {"timestamp": int(time.time() * 1000)}
+        if market:
+            payload["market"] = market
+        payload_str, headers = self._sign(payload)
+        try:
+            session = await self._get_session()
+            async with session.post(url, data=payload_str, headers=headers, timeout=10.0) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data if isinstance(data, list) else data.get('trades', [])
+                return None
+        except Exception as e:
+            print(f"[CoinDCX] Error fetching trade history: {e}")
+            return None
+
+    async def _reconcile_ambiguous_order(self, market: str, side: str, amount: float, created_after_ts: int) -> dict | None:
+        """
+        Reconciles ambiguous order state after network timeout.
+        Queries active orders and recent trade history to find if an order matching
+        the market, side, and quantity was executed around the timestamp.
+        """
+        try:
+            # 1. Check active orders
+            active_orders = await self.fetch_active_orders(market=market)
+            for ord in (active_orders or []):
+                ord_side = (ord.get('side') or '').lower()
+                ord_qty = float(ord.get('total_quantity') or ord.get('quantity') or 0.0)
+                ord_ts = int(ord.get('created_at') or ord.get('timestamp') or 0)
+                if ord_side == side.lower() and abs(ord_qty - amount) <= 1e-5:
+                    if ord_ts >= (created_after_ts - 10000):
+                        return {
+                            'id': ord.get('id'),
+                            'price': float(ord.get('avg_price') or ord.get('price_per_unit') or 0.0),
+                            'status': (ord.get('status') or 'open').lower(),
+                            'amount': ord_qty
+                        }
+            
+            # 2. Check recent trade history (for immediate market fills)
+            recent_trades = await self.fetch_recent_trades(market=market)
+            for tr in (recent_trades or []):
+                tr_side = (tr.get('side') or '').lower()
+                tr_qty = float(tr.get('quantity') or tr.get('total_quantity') or 0.0)
+                tr_ts = int(tr.get('created_at') or tr.get('timestamp') or 0)
+                if tr_side == side.lower() and abs(tr_qty - amount) <= 1e-5:
+                    if tr_ts >= (created_after_ts - 10000):
+                        return {
+                            'id': tr.get('order_id') or tr.get('id'),
+                            'price': float(tr.get('price') or tr.get('avg_price') or 0.0),
+                            'status': 'filled',
+                            'amount': tr_qty
+                        }
+        except Exception as e:
+            print(f"[CoinDCX RECONCILE] Error checking ambiguous order state: {e}")
         return None
 
     async def fetch_user_info(self):
@@ -322,7 +406,12 @@ class CoinDCXClient:
                         if attempt < 2:
                             await asyncio.sleep(1.0 * (2 ** attempt))
             except Exception as e:
-                print(f"[CoinDCX Native SL] Exception: {e}")
+                print(f"[CoinDCX Native SL] Exception on attempt {attempt+1}: {e}")
+                print(f"[CoinDCX Native SL TIMEOUT] Verifying exchange state for {market_name} Stop Loss before retry...")
+                existing_sl = await self._reconcile_ambiguous_order(market_name, side, amount, created_after_ts=payload["timestamp"] - 5000)
+                if existing_sl:
+                    print(f"[CoinDCX Native SL] ✅ Discovered existing Stop Loss order {existing_sl['id']} on exchange after timeout! Adopting.")
+                    return existing_sl
                 if attempt < 2:
                     await asyncio.sleep(1.0 * (2 ** attempt))
         return None

@@ -201,6 +201,59 @@ def test_chaos_simulation_1000_cycles():
         ctx.transition_to(OrderState.CLOSED, reason="Final target hit")
         assert not machine.is_active('BTC/USDT')
 
+async def test_coindcx_ambiguous_timeout_reconciliation():
+    """GAP-01 TEST: Verifies that CoinDCX timeout reconciles active orders to prevent duplicate execution."""
+    from execution.coindcx_client import CoinDCXClient
+    client = CoinDCXClient("test_key", "test_secret")
+    client.initialized = True
+    client.markets_info = {'BTCINR': {'precision': 6, 'min_quantity': 0.00001}}
+    
+    # Mock active order discovery on exchange
+    mock_order = {'id': 'DISCOVERED_ORDER_101', 'avg_price': 85000.0, 'status': 'open', 'total_quantity': 0.05, 'side': 'buy', 'created_at': int(time.time()*1000)}
+    client.fetch_active_orders = AsyncMock(return_value=[mock_order])
+    
+    # Mock post to simulate timeout exception on first attempt
+    call_count = 0
+    class MockTimeoutContext:
+        async def __aenter__(self):
+            nonlocal call_count
+            call_count += 1
+            raise asyncio.TimeoutError("CoinDCX network timeout simulated")
+        async def __aexit__(self, exc_type, exc, tb):
+            pass
+            
+    def mock_post(*args, **kwargs):
+        return MockTimeoutContext()
+        
+    session_mock = MagicMock()
+    session_mock.post = mock_post
+    client._get_session = AsyncMock(return_value=session_mock)
+    
+    # Execute order - should catch timeout, query exchange, discover matching order, and adopt it without retry attempt 2!
+    res = await client.place_order(side='buy', order_type='market', amount=0.05, symbol='BTC/INR')
+    assert res is not None
+    assert res['id'] == 'DISCOVERED_ORDER_101'
+    assert call_count == 1  # Only 1 POST made; no duplicate economic order!
+
+async def test_startup_reconciliation_blocks_candle_processing():
+    """GAP-02 TEST: Verifies that candle signals arriving before startup reconciliation completes are strictly blocked."""
+    from main import PrimeSignalBot
+    bot = PrimeSignalBot()
+    bot.reconciliation.initial_reconciliation_done = False  # Still in startup sync
+    
+    # Simulate candle arrival
+    dummy_candles = [[time.time()*1000 - (i*900000), 85000, 85500, 84800, 85200, 100] for i in range(100, 0, -1)]
+    bot.pipeline.ltf_candles['BTC/USDT'] = dummy_candles
+    bot.pipeline.htf_candles['BTC/USDT'] = dummy_candles
+    
+    # Trigger candle close
+    await bot._on_candle_close_impl('BTC/USDT')
+    
+    # Context must remain IDLE (no trade executed while reconciliation is pending)
+    ctx = bot.order_state_machine.get_context('BTC/USDT')
+    assert ctx.state == OrderState.IDLE
+    assert not bot.in_position['BTC/USDT']
+
 async def main():
     print("="*80)
     print("  RUNNING PRIMESIGNAL INSTITUTIONAL FAULT-INJECTION & CHAOS TEST SUITE")
@@ -209,22 +262,27 @@ async def main():
     results = []
     
     # 1. State Machine & Crash Recovery
-    print("\n[SECTION 1/4] State Machine, Persistence & Hash-Chain Ledger...")
+    print("\n[SECTION 1/5] State Machine, Persistence & Hash-Chain Ledger...")
     results.append(run_sync_test(test_order_state_machine_transitions_and_serialization))
     results.append(run_sync_test(test_immutable_ledger_cryptographic_hash_chain))
     
     # 2. Pre-Trade Validation & Fail-Closed Security
-    print("\n[SECTION 2/4] Pre-Trade Validation & Fail-Closed Security...")
+    print("\n[SECTION 2/5] Pre-Trade Validation & Fail-Closed Security...")
     results.append(run_sync_test(test_exchange_validator_rules))
     results.append(await run_async_test(test_fail_closed_live_mode_security))
     
     # 3. Native SL Protection & Continuous Broker Reconciliation
-    print("\n[SECTION 3/4] Native SL Protection & Continuous Broker Reconciliation...")
+    print("\n[SECTION 3/5] Native SL Protection & Continuous Broker Reconciliation...")
     results.append(await run_async_test(test_native_sl_failure_triggers_emergency_flatten))
     results.append(await run_async_test(test_continuous_broker_reconciliation_orphan_and_ghost))
     
-    # 4. Chaos Invariant Simulation (1,000 randomized cycles)
-    print("\n[SECTION 4/4] Chaos Invariant Stress Testing (1,000 Randomized Cycles)...")
+    # 4. GAP-01 & GAP-02 Specific Invariant Tests
+    print("\n[SECTION 4/5] GAP Closure: CoinDCX Timeout Reconciliation & Startup Guard...")
+    results.append(await run_async_test(test_coindcx_ambiguous_timeout_reconciliation))
+    results.append(await run_async_test(test_startup_reconciliation_blocks_candle_processing))
+    
+    # 5. Chaos Invariant Simulation (1,000 randomized cycles)
+    print("\n[SECTION 5/5] Chaos Invariant Stress Testing (1,000 Randomized Cycles)...")
     results.append(run_sync_test(test_chaos_simulation_1000_cycles))
     
     print("\n" + "="*80)

@@ -495,6 +495,16 @@ class PrimeSignalBot:
         if time.time() < self.global_pause_until:
             return
             
+        # GAP-02 INVARIANT: Block new candle signal evaluation until startup broker reconciliation has completed
+        if not self.reconciliation.initial_reconciliation_done:
+            add_log_message(f"[{symbol}] ⏸️ Trade skipped: Startup broker reconciliation in progress. Engine locked.")
+            return
+
+        # SAFE_MODE INVARIANT: Block new entries if reconciliation detected state divergence / consecutive errors
+        if self.reconciliation.safe_mode_active:
+            add_log_message(f"[{symbol}] 🚨 Trade skipped: Reconciliation SAFE MODE active (reconciling broker state).")
+            return
+            
         # Macro Economic News Blackout Window Filter (CPI/FOMC Volatility Protection)
         is_news, news_reason = self.is_macro_news_blackout()
         if is_news:

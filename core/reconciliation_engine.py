@@ -13,18 +13,33 @@ class ReconciliationEngine:
         self.bot = bot_instance
         self.check_interval: float = check_interval
         self.is_running: bool = False
+        self.initial_reconciliation_done: bool = False
         self.last_reconcile_time: float = 0.0
         self.safe_mode_active: bool = False
         self.reconcile_errors: int = 0
         self.task: Optional[asyncio.Task] = None
 
     async def start(self):
-        """Starts the continuous reconciliation loop as an async task."""
+        """Starts the reconciliation engine. Performs initial sync SYNCHRONOUSLY before starting continuous loop."""
         if self.is_running:
             return
         self.is_running = True
+        print(f"[RECONCILIATION] 🔄 Performing initial startup broker state reconciliation...")
+        try:
+            if not self.bot.has_keys or Config.PAPER_TRADING:
+                await self._reconcile_paper_state()
+            else:
+                await self._reconcile_live_broker_state()
+            self.initial_reconciliation_done = True
+            self.last_reconcile_time = time.time()
+            print(f"[RECONCILIATION] ✅ Initial startup broker reconciliation COMPLETED. Trading engine UNBLOCKED.")
+        except Exception as e:
+            self.reconcile_errors += 1
+            print(f"[RECONCILIATION ERROR] Startup reconciliation failure: {e}")
+            self.safe_mode_active = True
+            
         self.task = asyncio.create_task(self._reconciliation_loop())
-        print(f"[RECONCILIATION] 🔄 Broker Reconciliation Engine started (Interval: {self.check_interval}s)")
+        print(f"[RECONCILIATION] 🔄 Continuous Broker Reconciliation loop active (Interval: {self.check_interval}s)")
 
     async def stop(self):
         """Stops the reconciliation loop."""
