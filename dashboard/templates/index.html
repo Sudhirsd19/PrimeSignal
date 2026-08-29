@@ -1685,28 +1685,33 @@
                         const dcxTbody = document.getElementById('sidebar-dcx-balances-tbody');
                         if (dcxTbody) {
                             if (state.coindcx_balances && state.coindcx_balances.length > 0) {
-                                dcxTbody.innerHTML = '';
-                                state.coindcx_balances.forEach(bal => {
-                                    const tr = document.createElement('tr');
-                                    tr.className = "hover:bg-[#1f2937]/30 transition-colors text-[11px]";
-                                    
-                                    const assetTd = document.createElement('td');
-                                    assetTd.className = "py-1 font-bold text-white";
-                                    assetTd.innerText = bal.currency;
-                                    
-                                    const availTd = document.createElement('td');
-                                    availTd.className = "py-1 text-right terminal-font text-emerald-400 font-semibold";
-                                    availTd.innerText = bal.available.toFixed(bal.currency === 'INR' || bal.currency === 'USDT' ? 2 : 5);
-                                    
-                                    const lockTd = document.createElement('td');
-                                    lockTd.className = "py-1 text-right terminal-font text-gray-500";
-                                    lockTd.innerText = bal.locked.toFixed(bal.currency === 'INR' || bal.currency === 'USDT' ? 2 : 5);
-                                    
-                                    tr.appendChild(assetTd);
-                                    tr.appendChild(availTd);
-                                    tr.appendChild(lockTd);
-                                    dcxTbody.appendChild(tr);
-                                });
+                                const nonZeroBalances = state.coindcx_balances.filter(bal => (parseFloat(bal.available) > 0.00001 || parseFloat(bal.locked) > 0.00001));
+                                if (nonZeroBalances.length > 0) {
+                                    dcxTbody.innerHTML = '';
+                                    nonZeroBalances.forEach(bal => {
+                                        const tr = document.createElement('tr');
+                                        tr.className = "hover:bg-[#1f2937]/30 transition-colors text-[11px]";
+                                        
+                                        const assetTd = document.createElement('td');
+                                        assetTd.className = "py-1 font-bold text-white";
+                                        assetTd.innerText = bal.currency;
+                                        
+                                        const availTd = document.createElement('td');
+                                        availTd.className = "py-1 text-right terminal-font text-emerald-400 font-semibold";
+                                        availTd.innerText = bal.available.toFixed(bal.currency === 'INR' || bal.currency === 'USDT' ? 2 : 5);
+                                        
+                                        const lockTd = document.createElement('td');
+                                        lockTd.className = "py-1 text-right terminal-font text-gray-500";
+                                        lockTd.innerText = bal.locked.toFixed(bal.currency === 'INR' || bal.currency === 'USDT' ? 2 : 5);
+                                        
+                                        tr.appendChild(assetTd);
+                                        tr.appendChild(availTd);
+                                        tr.appendChild(lockTd);
+                                        dcxTbody.appendChild(tr);
+                                    });
+                                } else {
+                                    dcxTbody.innerHTML = '<tr><td class="py-2 text-gray-500 text-center text-[10px]" colspan="3">No active holdings</td></tr>';
+                                }
                             } else {
                                 dcxTbody.innerHTML = '<tr><td class="py-2 text-gray-500 text-center text-[10px]" colspan="3">No balance loaded</td></tr>';
                             }

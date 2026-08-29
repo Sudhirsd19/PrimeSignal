@@ -44,10 +44,13 @@ class RiskManager:
         if account_equity <= 0 or entry_price <= 0:
             return 0.0
 
-        # 1. Calculate USDT budget to risk (Normalize and cap max dollar risk at $25.0 USDT to prevent outsized altcoin losses)
+        # 1. Calculate budget to risk (Normalize and cap max risk relative to currency)
         base_risk = account_equity * (Config.RISK_PCT / 100.0)
-        max_single_trade_risk = float(os.getenv("MAX_SINGLE_TRADE_RISK_USDT", "25.0"))
-        usdt_risk = min(base_risk, max_single_trade_risk) if account_equity >= 1000.0 else base_risk
+        is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+        curr_mult = 85.0 if is_inr else 1.0
+        max_single_trade_risk = float(os.getenv("MAX_SINGLE_TRADE_RISK_USDT", "25.0")) * curr_mult
+        threshold_equity = 1000.0 * curr_mult
+        trade_risk = min(base_risk, max_single_trade_risk) if account_equity >= threshold_equity else base_risk
 
         # 2. Calculate stop distance
         stop_distance = abs(entry_price - stop_loss)
@@ -59,7 +62,7 @@ class RiskManager:
             return Config.TRADE_AMOUNT
             
         # 3. Calculate position size
-        position_size = usdt_risk / stop_distance
+        position_size = trade_risk / stop_distance
         
         # 4. Limit check: Position cost in USDT must be <= total equity * max_allocation * leverage
         is_futures = getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures'

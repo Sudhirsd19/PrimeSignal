@@ -198,8 +198,8 @@ class RealTimeDataPipeline:
                                         if backfilled:
                                             self.ltf_candles[symbol] = backfilled
                                     except Exception as e:
-                                        print(f"[DATA] ⛔ Backfill failed on {symbol}: {e}. Freezing signal evaluation until continuity restored.")
-                                        return # Failsafe: abort execution to prevent trading on degraded data
+                                        print(f"[DATA] ⛔ Backfill failed on {symbol}: {e}. Skipping this candle to maintain continuous stream.")
+                                        continue
                                 
                                 self._update_candle_cache(self.ltf_candles[symbol], candle, is_closed)
                                 if is_closed:

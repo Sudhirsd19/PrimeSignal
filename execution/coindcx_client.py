@@ -81,6 +81,19 @@ class CoinDCXClient:
         }
         return payload_str, headers
 
+    async def execute_with_retry(self, func, *args, retries: int = 3, delay: float = 1.0, **kwargs):
+        """Exponential backoff retry handler for CoinDCX API calls."""
+        for attempt in range(retries):
+            try:
+                res = await func(*args, **kwargs)
+                if res is not None:
+                    return res
+            except Exception as e:
+                print(f"[CoinDCX Retry] Attempt {attempt+1}/{retries} failed: {e}")
+            if attempt < retries - 1:
+                await asyncio.sleep(delay * (2 ** attempt))
+        return None
+
     async def fetch_balance(self):
         """Fetches account balances from CoinDCX and formats them into a CCXT-compatible dict."""
         if not self.initialized:
@@ -90,41 +103,43 @@ class CoinDCXClient:
         payload = {"timestamp": int(time.time() * 1000)}
         payload_str, headers = self._sign(payload)
 
-        try:
-            session = await self._get_session()
-            async with session.post(url, data=payload_str, headers=headers) as response:
+        for attempt in range(3):
+            try:
+                session = await self._get_session()
+                async with session.post(url, data=payload_str, headers=headers, timeout=10.0) as response:
                     if response.status == 200:
                         balances = await response.json()
-                        
-                        # Format to CCXT style: {'total': {currency: amount}, 'free': {currency: amount}, ...}
                         formatted_balances = {'total': {}, 'free': {}, 'used': {}}
                         for item in balances:
                             curr = item.get('currency', '').upper()
                             balance = float(item.get('balance') or 0.0)
                             locked = float(item.get('locked_balance') or 0.0)
-                            
                             formatted_balances['total'][curr] = balance
                             formatted_balances['free'][curr] = balance - locked
                             formatted_balances['used'][curr] = locked
-                            
                         return formatted_balances
+                    elif response.status == 429:
+                        print(f"[CoinDCX] Rate limit hit (429). Retrying in {attempt+1}s...")
+                        await asyncio.sleep(1.0 * (2 ** attempt))
                     else:
                         err_text = await response.text()
                         print(f"[CoinDCX] ERROR fetching balances: {response.status} - {err_text}")
                         return None
-        except Exception as e:
-            print(f"[CoinDCX] ERROR calling balances endpoint: {e}")
-            return None
+            except Exception as e:
+                print(f"[CoinDCX] Balance fetch error (attempt {attempt+1}): {e}")
+                if attempt < 2:
+                    await asyncio.sleep(1.0 * (2 ** attempt))
+        return None
 
     async def fetch_ticker_data(self, coindcx_symbol: str):
         """Fetches public ticker data for a single symbol to get bid, ask, and index price."""
         url = f"{self.base_url}/exchange/ticker"
-        try:
-            session = await self._get_session()
-            async with session.get(url) as response:
+        for attempt in range(3):
+            try:
+                session = await self._get_session()
+                async with session.get(url, timeout=10.0) as response:
                     if response.status == 200:
                         tickers = await response.json()
-                        # Tickers is a list of dicts. Find the one matching coindcx_symbol
                         target = next((t for t in tickers if t.get('market') == coindcx_symbol or t.get('pair') == coindcx_symbol), None)
                         if target:
                             return {
@@ -134,17 +149,18 @@ class CoinDCXClient:
                                 'volume': float(target.get('volume') or 0.0),
                             }
                         else:
-                            print(f"[CoinDCX] Ticker symbol {coindcx_symbol} not found in public feed.")
                             return None
+                    elif response.status == 429:
+                        await asyncio.sleep(1.0 * (2 ** attempt))
                     else:
-                        print(f"[CoinDCX] ERROR fetching ticker data: {response.status}")
                         return None
-        except Exception as e:
-            print(f"[CoinDCX] ERROR calling public ticker: {e}")
-            return None
+            except Exception as e:
+                if attempt < 2:
+                    await asyncio.sleep(1.0 * (2 ** attempt))
+        return None
 
     async def place_order(self, side: str, order_type: str, amount: float, price: float | None = None, symbol: str | None = None):
-        """Places a spot order on CoinDCX."""
+        """Places a spot order on CoinDCX with automatic retry and precision truncation."""
         if not self.initialized:
             await self.initialize()
 
@@ -155,22 +171,20 @@ class CoinDCXClient:
         # CoinDCX expected market code (e.g. BTCINR)
         market_name = symbol.replace('/', '').upper()
         
-        # Apply precision rounding using CoinDCX markets_details info
+        # Apply strict precision truncation (floor) to prevent insufficient balance errors
         m_info = self.markets_info.get(market_name)
         if m_info:
             precision = m_info['precision']
-            amount = round(amount, precision)
+            multiplier = 10 ** precision
+            amount = math.floor(amount * multiplier) / multiplier
             min_q = m_info['min_quantity']
             if amount < min_q:
                 print(f"[CoinDCX] Order rejected: Amount {amount} is below CoinDCX minimum {min_q} for {market_name}")
                 return None
         else:
-            # Fallback to standard spot rounding
-            amount = round(amount, 6)
+            amount = math.floor(amount * 1000000.0) / 1000000.0
 
         url = f"{self.base_url}/exchange/v1/orders/create"
-        
-        # Build payload
         payload = {
             "side": side.lower(),
             "order_type": "market_order" if order_type.lower() == "market" else "limit_order",
@@ -184,10 +198,11 @@ class CoinDCXClient:
 
         payload_str, headers = self._sign(payload)
 
-        try:
-            print(f"[CoinDCX] Sending spot order: {payload}")
-            session = await self._get_session()
-            async with session.post(url, data=payload_str, headers=headers) as response:
+        for attempt in range(3):
+            try:
+                print(f"[CoinDCX] Sending spot order (attempt {attempt+1}): {payload}")
+                session = await self._get_session()
+                async with session.post(url, data=payload_str, headers=headers, timeout=12.0) as response:
                     if response.status == 200:
                         res = await response.json()
                         print(f"[CoinDCX] Order placed successfully! ID: {res.get('id')}")
@@ -197,13 +212,18 @@ class CoinDCXClient:
                             'status': res.get('status', '').lower(),
                             'amount': float(res.get('total_quantity') or amount)
                         }
+                    elif response.status == 429:
+                        print(f"[CoinDCX] Order rate-limited (429). Retrying in {attempt+1}s...")
+                        await asyncio.sleep(1.0 * (2 ** attempt))
                     else:
                         err_text = await response.text()
                         print(f"[CoinDCX] ERROR placing order: {response.status} - {err_text}")
                         return None
-        except Exception as e:
-            print(f"[CoinDCX] ERROR executing place_order call: {e}")
-            return None
+            except Exception as e:
+                print(f"[CoinDCX] Order execution error (attempt {attempt+1}): {e}")
+                if attempt < 2:
+                    await asyncio.sleep(1.0 * (2 ** attempt))
+        return None
 
     async def fetch_user_info(self):
         """Fetches user profile information from CoinDCX."""

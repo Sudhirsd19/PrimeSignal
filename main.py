@@ -377,10 +377,10 @@ class PrimeSignalBot:
                 if raw_bal and 'total' in raw_bal:
                     bal_list: list[dict[str, float | str]] = []
                     for curr, tot in raw_bal['total'].items():
-                        if tot > 0:
-                            free = (raw_bal.get('free') or {}).get(curr, tot) or 0.0
-                            used = (raw_bal.get('used') or {}).get(curr, 0.0) or 0.0
-                            bal_list.append({"currency": str(curr), "available": float(free), "locked": float(used)})
+                        free = float((raw_bal.get('free') or {}).get(curr, 0.0) or 0.0)
+                        used = float((raw_bal.get('used') or {}).get(curr, 0.0) or 0.0)
+                        if (free + used) > 0.00001:
+                            bal_list.append({"currency": str(curr), "available": free, "locked": used})
                     if bal_list:
                         DashboardState.coindcx_balances = bal_list
             except Exception as e:
@@ -878,16 +878,19 @@ class PrimeSignalBot:
             if self.has_keys and not Config.PAPER_TRADING:
                 order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol)
             else:
+                is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+                min_paper_cost = 50.0 if is_inr else 1.0
+                cur_sym = "₹" if is_inr else "$"
                 position_cost = pos_size * entry_price
                 if position_cost <= self._dry_run_balance_usdt:
                     self._dry_run_balance_usdt -= position_cost
                     order = {'id': 'MOCK_BUY_ORDER_ID', 'price': entry_price, 'status': 'filled'}
-                elif self._dry_run_balance_usdt > 0:
+                elif self._dry_run_balance_usdt >= min_paper_cost:
                     pos_size = self._dry_run_balance_usdt / entry_price
                     self._dry_run_balance_usdt = 0.0
                     order = {'id': 'MOCK_BUY_ORDER_ID', 'price': entry_price, 'status': 'filled'}
                 else:
-                    add_log_message(f"[{symbol}] ⚠️ Paper trading wallet balance depleted (${self._dry_run_balance_usdt:.2f} USDT). Reset wallet to continue.")
+                    add_log_message(f"[{symbol}] ⚠️ Paper trading wallet balance depleted ({cur_sym}{self._dry_run_balance_usdt:.2f}). Reset wallet to continue.")
 
             if order:
                 self.in_position[symbol] = True
@@ -955,16 +958,19 @@ class PrimeSignalBot:
             if self.has_keys and not Config.PAPER_TRADING:
                 order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol)
             else:
+                is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+                min_paper_cost = 50.0 if is_inr else 1.0
+                cur_sym = "₹" if is_inr else "$"
                 collateral = pos_size * entry_price
                 if collateral <= self._dry_run_balance_usdt:
                     self._dry_run_balance_usdt -= collateral
                     order = {'id': 'MOCK_SELL_ORDER_ID', 'price': entry_price, 'status': 'filled'}
-                elif self._dry_run_balance_usdt > 0:
+                elif self._dry_run_balance_usdt >= min_paper_cost:
                     pos_size = self._dry_run_balance_usdt / entry_price
                     self._dry_run_balance_usdt = 0.0
                     order = {'id': 'MOCK_SELL_ORDER_ID', 'price': entry_price, 'status': 'filled'}
                 else:
-                    add_log_message(f"[{symbol}] ⚠️ Paper trading wallet balance depleted (${self._dry_run_balance_usdt:.2f} USDT). Reset wallet to continue.")
+                    add_log_message(f"[{symbol}] ⚠️ Paper trading wallet balance depleted ({cur_sym}{self._dry_run_balance_usdt:.2f}). Reset wallet to continue.")
                 
             if order:
                 self.in_position[symbol] = True
