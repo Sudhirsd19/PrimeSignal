@@ -180,19 +180,20 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                         metadata['reason'] = f"BB Volatility Squeeze (BW Percentile {bw_percentile:.1f}% <= {bb_thresh}%)"
                         return "HOLD", metadata
         
-        curr_price = ltf_closes.iloc[-2]
-        curr_rsi   = ltf_rsi.iloc[-2]
-        prev_rsi   = ltf_rsi.iloc[-3]
-        curr_atr   = ltf_atr.iloc[-2]
-        curr_vwap  = ltf_vwap.iloc[-2]
-        prev_vwap  = ltf_vwap.iloc[-3]
+        target_idx = -1
+        curr_price = ltf_closes.iloc[target_idx]
+        curr_rsi   = ltf_rsi.iloc[target_idx]
+        prev_rsi   = ltf_rsi.iloc[target_idx - 1]
+        curr_atr   = ltf_atr.iloc[target_idx]
+        curr_vwap  = ltf_vwap.iloc[target_idx]
+        prev_vwap  = ltf_vwap.iloc[target_idx - 1]
         
-        curr_ema_50 = calculate_ema(ltf_df, 50).iloc[-2]
+        curr_ema_50 = calculate_ema(ltf_df, 50).iloc[target_idx]
 
-        prev_short = ema_short.iloc[-3]
-        prev_long  = ema_long.iloc[-3]
-        curr_short = ema_short.iloc[-2]
-        curr_long  = ema_long.iloc[-2]
+        prev_short = ema_short.iloc[target_idx - 1]
+        prev_long  = ema_long.iloc[target_idx - 1]
+        curr_short = ema_short.iloc[target_idx]
+        curr_long  = ema_long.iloc[target_idx]
 
         metadata['ltf_rsi']  = curr_rsi
         metadata['ltf_vwap'] = curr_vwap
@@ -309,14 +310,14 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             zone_top = 0.0
             zone_ts = None
             
-            last_10 = ltf_df.iloc[-12:-2]
+            last_10 = ltf_df.iloc[-11:-1]
             swing_low = last_10['low'].min()
             swing_high = last_10['high'].max()
             swing_range = (swing_high - swing_low) / swing_low
-            trigger_low = ltf_df.iloc[-2]['low']
-            trigger_close = ltf_df.iloc[-2]['close']
-            trigger_open = ltf_df.iloc[-2]['open']
-            trigger_high = ltf_df.iloc[-2]['high']
+            trigger_low = ltf_df.iloc[target_idx]['low']
+            trigger_close = ltf_df.iloc[target_idx]['close']
+            trigger_open = ltf_df.iloc[target_idx]['open']
+            trigger_high = ltf_df.iloc[target_idx]['high']
             candle_range = trigger_high - trigger_low
             
             liq_sweep = False
@@ -324,7 +325,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 if trigger_low < swing_low and trigger_close > swing_low:
                     lower_wick = min(trigger_open, trigger_close) - trigger_low
                     if candle_range > 0 and (lower_wick / candle_range) >= 0.3:
-                        avg_body = abs(ltf_df['close'] - ltf_df['open']).rolling(14).mean().iloc[-2]
+                        avg_body = abs(ltf_df['close'] - ltf_df['open']).rolling(14).mean().iloc[target_idx]
                         if abs(trigger_close - trigger_open) > 1.2 * avg_body:
                             liq_sweep = True
 
@@ -498,14 +499,14 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             zone_top = 0.0
             zone_ts = None
             
-            last_10 = ltf_df.iloc[-12:-2]
+            last_10 = ltf_df.iloc[-11:-1]
             swing_low = last_10['low'].min()
             swing_high = last_10['high'].max()
             swing_range = (swing_high - swing_low) / swing_low
-            trigger_low = ltf_df.iloc[-2]['low']
-            trigger_close = ltf_df.iloc[-2]['close']
-            trigger_open = ltf_df.iloc[-2]['open']
-            trigger_high = ltf_df.iloc[-2]['high']
+            trigger_low = ltf_df.iloc[target_idx]['low']
+            trigger_close = ltf_df.iloc[target_idx]['close']
+            trigger_open = ltf_df.iloc[target_idx]['open']
+            trigger_high = ltf_df.iloc[target_idx]['high']
             candle_range = trigger_high - trigger_low
             
             liq_sweep = False
@@ -513,7 +514,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 if trigger_high > swing_high and trigger_close < swing_high:
                     upper_wick = trigger_high - max(trigger_open, trigger_close)
                     if candle_range > 0 and (upper_wick / candle_range) >= 0.3:
-                        avg_body = abs(ltf_df['close'] - ltf_df['open']).rolling(14).mean().iloc[-2]
+                        avg_body = abs(ltf_df['close'] - ltf_df['open']).rolling(14).mean().iloc[target_idx]
                         if abs(trigger_close - trigger_open) > 1.2 * avg_body:
                             liq_sweep = True
 
