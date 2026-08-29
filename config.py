@@ -76,7 +76,7 @@ class Config:
     # Strategy settings
     HTF_TIMEFRAME = os.getenv("HTF_TIMEFRAME", "1h")
     LTF_TIMEFRAME = os.getenv("LTF_TIMEFRAME", "15m")
-    ADX_MIN_THRESHOLD = float(os.getenv("ADX_MIN_THRESHOLD", "24.0"))
+    ADX_MIN_THRESHOLD = float(os.getenv("ADX_MIN_THRESHOLD", "18.0"))
     SHORT_EMA = int(os.getenv("SHORT_EMA", "9"))
     LONG_EMA = int(os.getenv("LONG_EMA", "21"))
     TREND_EMA = int(os.getenv("TREND_EMA", "200"))
