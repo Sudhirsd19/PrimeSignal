@@ -137,6 +137,14 @@ async def change_symbol(req: SymbolRequest):
 
 @app.post("/api/set_mode", dependencies=[Depends(verify_dashboard_key)])
 async def set_mode(req: ModeRequest):
+    # FAIL-CLOSED SECURITY INVARIANT:
+    # If DASHBOARD_SECRET is not configured, LIVE trading is strictly prohibited to prevent accidental funds exposure.
+    if not req.paper_trading and not _DASHBOARD_SECRET:
+        return {
+            "status": "error",
+            "message": "SECURITY BLOCKED: Cannot switch to LIVE REAL MONEY mode without DASHBOARD_SECRET configured in .env."
+        }
+
     Config.PAPER_TRADING = req.paper_trading
     
     # If bot is active, trigger mode switch side-effects
@@ -167,6 +175,31 @@ async def set_mode(req: ModeRequest):
     mode_name = "PAPER TRADING" if req.paper_trading else "REAL MONEY"
     add_log_message(f"Trading mode switched to {mode_name}")
     return {"status": "success", "message": f"Switched to {mode_name}"}
+
+@app.post("/api/emergency_flatten", dependencies=[Depends(verify_dashboard_key)])
+async def emergency_flatten():
+    """Emergency Kill Switch: Instantly flattens all open positions and activates Safe Mode."""
+    if bot_instance is None:
+        return {"status": "error", "message": "Bot instance is not initialized."}
+    
+    add_log_message("🚨 EMERGENCY FLATTEN TRIGGERED VIA DASHBOARD! Closing all open positions...")
+    results = {}
+    for sym in Config.SUPPORTED_SYMBOLS:
+        if bot_instance.in_position.get(sym):
+            pos_side = bot_instance.position_side.get(sym, 'LONG')
+            pos_size = bot_instance.position_size.get(sym, 0.0)
+            try:
+                res = await bot_instance.execution.emergency_flatten_position(sym, pos_side, pos_size, reason="USER_KILL_SWITCH")
+                results[sym] = "FLATTENED" if res else "FAILED"
+                bot_instance.in_position[sym] = False
+                ctx = bot_instance.order_state_machine.get_context(sym)
+                ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason="Manual Dashboard Kill Switch")
+            except Exception as e:
+                results[sym] = f"ERROR: {e}"
+                
+    DashboardState.signal_light = "RED"
+    DashboardState.signal_light_reason = "🚨 EMERGENCY KILL SWITCH EXECUTED: All positions flattened."
+    return {"status": "success", "message": "Emergency flatten executed.", "details": results}
 
 @app.post("/api/set_timeframe", dependencies=[Depends(verify_dashboard_key)])
 async def set_timeframe(req: TimeframeRequest):

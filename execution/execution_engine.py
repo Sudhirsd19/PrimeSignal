@@ -332,3 +332,106 @@ class ExecutionEngine:
         if self.coindcx_client:
             return await self.coindcx_client.fetch_user_info()
         return None
+
+    async def place_native_stop_loss(self, symbol: str, side: str, amount: float, stop_price: float, candle_ts: float = 0.0) -> dict | None:
+        """
+        Submits an exchange-native protective Stop Loss order.
+        For LONG positions, places a SELL STOP_MARKET / STOP_LOSS.
+        For SHORT positions, places a BUY STOP_MARKET / STOP_LOSS.
+        """
+        if self.coindcx_client:
+            coindcx_symbol = symbol
+            if Config.COINDCX_TRADE_INR:
+                target = symbol.split('/')[0]
+                coindcx_symbol = f"{target}/INR"
+            return await self.coindcx_client.place_stop_loss(
+                side=side,
+                amount=amount,
+                stop_price=stop_price,
+                symbol=coindcx_symbol
+            )
+
+        # CCXT / Binance implementation
+        try:
+            if not self.trade_client.markets:
+                await self.trade_client.load_markets()
+            amount_prec = self.trade_client.amount_to_precision(symbol, amount)
+            amount = float(amount_prec) if amount_prec is not None else float(amount)
+            price_prec = self.trade_client.price_to_precision(symbol, stop_price)
+            stop_price = float(price_prec) if price_prec is not None else float(stop_price)
+
+            import hashlib
+            signal_ts = int(candle_ts) if candle_ts else 0
+            order_intent = f"PS_SL_{symbol.replace('/', '')}_{side.upper()}_{round(amount, 6)}_{round(stop_price, 4)}_{signal_ts}"
+            client_order_id = f"PS_SL_{hashlib.sha256(order_intent.encode()).hexdigest()[:8].upper()}"
+
+            params: dict[str, Any] = {
+                'stopPrice': stop_price,
+                'clientOrderId': client_order_id
+            }
+
+            if Config.EXCHANGE_TYPE == 'futures':
+                params['reduceOnly'] = True
+                order_type = 'STOP_MARKET'
+            else:
+                params['stopLimitPrice'] = stop_price * (0.995 if side.lower() == 'sell' else 1.005)
+                order_type = 'STOP_LOSS_LIMIT'
+
+            print(f"[NATIVE SL] Submitting {order_type} {side.upper()} order for {amount} {symbol} @ {stop_price}...")
+            sl_order = await self.execute_with_retry(
+                self.trade_client.create_order,
+                symbol, order_type.lower(), side.lower(), amount, stop_price, params
+            )
+            if sl_order and sl_order.get('id'):
+                print(f"[NATIVE SL] ✅ Active on exchange! ID: {sl_order['id']}, Stop: {stop_price}")
+                return sl_order
+        except Exception as e:
+            print(f"[NATIVE SL ERROR] Failed to place exchange stop loss: {e}")
+        return None
+
+    async def verify_order_active(self, symbol: str, order_id: str) -> bool:
+        """Verifies if an order is actively resting on the exchange."""
+        if not order_id:
+            return False
+        if self.coindcx_client:
+            status_data = await self.coindcx_client.fetch_order_status(str(order_id))
+            return status_data is not None and status_data.get('status') in ('open', 'active', 'untriggered')
+
+        try:
+            order = await self.execute_with_retry(self.trade_client.fetch_order, order_id, symbol)
+            if order and order.get('status') in ('open', 'untriggered', 'pending'):
+                return True
+        except Exception as e:
+            print(f"[ORDER VERIFY] Error checking order {order_id}: {e}")
+        return False
+
+    async def cancel_order_safe(self, symbol: str, order_id: str) -> bool:
+        """Safely cancels an order without throwing unhandled exceptions."""
+        if not order_id:
+            return True
+        if self.coindcx_client:
+            return await self.coindcx_client.cancel_order(str(order_id))
+
+        try:
+            await self.execute_with_retry(self.trade_client.cancel_order, order_id, symbol)
+            print(f"[EXECUTION] Successfully cancelled order {order_id}")
+            return True
+        except ccxt.OrderNotFound:
+            return True
+        except Exception as e:
+            print(f"[EXECUTION] Warning cancelling order {order_id}: {e}")
+            return False
+
+    async def emergency_flatten_position(self, symbol: str, side: str, amount: float, reason: str = "EMERGENCY") -> dict | None:
+        """Force-closes a position immediately at market to avoid unprotected risk."""
+        print(f"[EMERGENCY FLATTEN] 🚨 Flattening {side.upper()} {amount} {symbol} | Reason: {reason}")
+        exit_side = 'sell' if side.upper() in ('BUY', 'LONG') else 'buy'
+        return await self.place_order(
+            side=exit_side,
+            order_type='market',
+            amount=amount,
+            symbol=symbol,
+            is_exit_order=True,
+            order_role="EMERGENCY"
+        )
+

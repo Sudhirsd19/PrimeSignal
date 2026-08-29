@@ -275,6 +275,80 @@ class CoinDCXClient:
             print(f"[CoinDCX] Error fetching order status: {e}")
             return None
 
+    async def place_stop_loss(self, side: str, amount: float, stop_price: float, symbol: str) -> dict | None:
+        """Places a conditional stop-loss / trigger order on CoinDCX."""
+        if not self.initialized:
+            await self.initialize()
+        
+        market_name = symbol.replace('/', '').upper()
+        m_info = self.markets_info.get(market_name)
+        if m_info:
+            precision = m_info['precision']
+            multiplier = 10 ** precision
+            amount = math.floor(amount * multiplier) / multiplier
+        else:
+            amount = math.floor(amount * 1000000.0) / 1000000.0
+
+        url = f"{self.base_url}/exchange/v1/orders/create"
+        # CoinDCX conditional / stop limit order format
+        payload = {
+            "side": side.lower(),
+            "order_type": "stop_limit",
+            "market": market_name,
+            "total_quantity": amount,
+            "price_per_unit": stop_price,
+            "stop_price": stop_price,
+            "timestamp": int(time.time() * 1000)
+        }
+        payload_str, headers = self._sign(payload)
+
+        for attempt in range(3):
+            try:
+                print(f"[CoinDCX Native SL] Placing Stop Loss @ {stop_price} ({payload})")
+                session = await self._get_session()
+                async with session.post(url, data=payload_str, headers=headers, timeout=10.0) as response:
+                    if response.status == 200:
+                        res = await response.json()
+                        print(f"[CoinDCX Native SL] ✅ SL Order Placed Successfully! ID: {res.get('id')}")
+                        return {
+                            'id': res.get('id'),
+                            'stop_price': stop_price,
+                            'status': res.get('status', 'open').lower(),
+                            'amount': amount
+                        }
+                    else:
+                        err_text = await response.text()
+                        print(f"[CoinDCX Native SL] Error: {response.status} - {err_text}")
+                        if attempt < 2:
+                            await asyncio.sleep(1.0 * (2 ** attempt))
+            except Exception as e:
+                print(f"[CoinDCX Native SL] Exception: {e}")
+                if attempt < 2:
+                    await asyncio.sleep(1.0 * (2 ** attempt))
+        return None
+
+    async def cancel_order(self, order_id: str) -> bool:
+        """Cancels an active order on CoinDCX."""
+        url = f"{self.base_url}/exchange/v1/orders/cancel"
+        payload = {
+            "id": order_id,
+            "timestamp": int(time.time() * 1000)
+        }
+        payload_str, headers = self._sign(payload)
+        try:
+            session = await self._get_session()
+            async with session.post(url, data=payload_str, headers=headers, timeout=10.0) as response:
+                if response.status == 200:
+                    print(f"[CoinDCX] Cancelled order {order_id}")
+                    return True
+                else:
+                    err_text = await response.text()
+                    print(f"[CoinDCX] Error cancelling order {order_id}: {err_text}")
+                    return False
+        except Exception as e:
+            print(f"[CoinDCX] Exception cancelling order: {e}")
+            return False
+
     async def wait_for_fill(self, order_id: str, timeout: float = 30.0) -> dict | None:
         """Polls CoinDCX order status until filled, cancelled, or timeout."""
         start = time.time()
