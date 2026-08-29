@@ -60,9 +60,10 @@ class AdversarialDebateCourtroom:
 
         # ML model confirmation
         ml_conf = market_context.get('ml_confidence', 0.5)
-        if (is_buy and ml_conf >= 0.60) or (not is_buy and (1.0 - ml_conf) >= 0.60):
+        dir_conf = market_context.get('directional_ml_confidence', (ml_conf if is_buy else (1.0 - ml_conf)))
+        if dir_conf >= 0.60:
             advocate_score += 15
-            advocate_points.append(f"Machine Learning bias confirms direction with {ml_conf*100:.1f}% confidence (+15pts)")
+            advocate_points.append(f"Machine Learning bias confirms direction with {dir_conf*100:.1f}% confidence (+15pts)")
 
         # Strategy Multi-Factor Technical Score
         strat_score = metadata.get('score', 0)

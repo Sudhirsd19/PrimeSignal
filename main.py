@@ -726,39 +726,70 @@ class PrimeSignalBot:
         entry_price = ltf_df['close'].iloc[-1]
         add_log_message(f"[{symbol}] Entry price set: {entry_price:.4f}")
 
-        # ML Confidence Scaler & Soft Session Filter
+        # ML Confidence Scaler & Soft Session Filter (Direction-Aware)
+        raw_prob = 0.5
         prob = 1.0
         ml_confidence_weight = 0
         if self.ml_models[symbol].is_trained:
-            prob = self.ml_models[symbol].predict_bias(ltf_df)
+            raw_prob = self.ml_models[symbol].predict_bias(ltf_df)
+            prob = raw_prob if signal == "BUY" else (1.0 - raw_prob)
             if symbol == Config.SYMBOL:
                 DashboardState.ml_confidence = prob
-            add_log_message(f"[{symbol}] ML confidence score: {prob:.2f}")
+            add_log_message(f"[{symbol}] ML confidence score: {prob:.2f} (raw bullish: {raw_prob:.2f})")
 
-            # Task 7: ML TP Logic - now entry_price is defined
+            # Task 7: ML TP Logic - Strictly ordered 3-Stage Targets
             risk_usdt = abs(metadata.get('stop_loss', entry_price) - entry_price)
+            fee_adj = entry_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
             if prob > 0.65:
-                metadata['tp2'] = entry_price + (2.5 * risk_usdt) if signal == "BUY" else entry_price - (2.5 * risk_usdt)
+                tp2_mult = 2.5
                 ml_confidence_weight = 1
             elif prob < 0.55:
-                metadata['tp2'] = entry_price + (1.5 * risk_usdt) if signal == "BUY" else entry_price - (1.5 * risk_usdt)
+                tp2_mult = 1.8
                 ml_confidence_weight = -1
             else:
-                metadata['tp2'] = entry_price + (2.0 * risk_usdt) if signal == "BUY" else entry_price - (2.0 * risk_usdt)
+                tp2_mult = 2.2
+
+            if signal == "BUY":
+                metadata['tp1'] = entry_price + (1.0 * risk_usdt) + fee_adj
+                metadata['tp2'] = entry_price + (tp2_mult * risk_usdt) + fee_adj
+                metadata['tp3'] = entry_price + (4.0 * risk_usdt) + fee_adj
+                metadata['take_profit_1r'] = metadata['tp1']
+                metadata['take_profit'] = metadata['tp3']
+            elif signal == "SELL":
+                metadata['tp1'] = entry_price - (1.0 * risk_usdt) - fee_adj
+                metadata['tp2'] = entry_price - (tp2_mult * risk_usdt) - fee_adj
+                metadata['tp3'] = entry_price - (4.0 * risk_usdt) - fee_adj
+                metadata['take_profit_1r'] = metadata['tp1']
+                metadata['take_profit'] = metadata['tp3']
+        else:
+            risk_usdt = abs(metadata.get('stop_loss', entry_price) - entry_price)
+            fee_adj = entry_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
+            if signal == "BUY":
+                metadata['tp1'] = entry_price + (1.0 * risk_usdt) + fee_adj
+                metadata['tp2'] = entry_price + (2.2 * risk_usdt) + fee_adj
+                metadata['tp3'] = entry_price + (4.0 * risk_usdt) + fee_adj
+                metadata['take_profit_1r'] = metadata['tp1']
+                metadata['take_profit'] = metadata['tp3']
+            elif signal == "SELL":
+                metadata['tp1'] = entry_price - (1.0 * risk_usdt) - fee_adj
+                metadata['tp2'] = entry_price - (2.2 * risk_usdt) - fee_adj
+                metadata['tp3'] = entry_price - (4.0 * risk_usdt) - fee_adj
+                metadata['take_profit_1r'] = metadata['tp1']
+                metadata['take_profit'] = metadata['tp3']
+
         if is_low_volume_session:
             avg_vol = ltf_df['volume'].rolling(14).mean().iloc[-1] if len(ltf_df) > 14 else 0.0
             if ltf_df['volume'].iloc[-1] < 0.6 * avg_vol:
                 prob *= 0.5
                 add_log_message(f"[{symbol}] Low volume session filter triggered, confidence reduced to {prob:.2f}")
                 
-                # Override TP2 to 1.5R instead of 2R
+                # Override TP2 to 1.5R instead of 2.2R in low volume
                 risk_usdt = abs(metadata.get('stop_loss', entry_price) - entry_price)
+                fee_adj = entry_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
                 if signal == "BUY":
-                    metadata['take_profit'] = entry_price + (1.5 * risk_usdt)
-                    metadata['tp2'] = metadata['take_profit']
+                    metadata['tp2'] = entry_price + (1.5 * risk_usdt) + fee_adj
                 elif signal == "SELL":
-                    metadata['take_profit'] = entry_price - (1.5 * risk_usdt)
-                    metadata['tp2'] = metadata['take_profit']
+                    metadata['tp2'] = entry_price - (1.5 * risk_usdt) - fee_adj
             
         # Task 5: Smart Risk Allocation (Final Edge)
         score = float(metadata.get('score') or 3.0)
@@ -890,7 +921,8 @@ class PrimeSignalBot:
         market_context = {
             'cvd': metadata.get('cvd', {}),
             'liquidation': metadata.get('liquidation', {}),
-            'ml_confidence': prob,
+            'ml_confidence': raw_prob,
+            'directional_ml_confidence': prob,
             'funding_rate': fr,
             'bb_squeeze': False,
             'spread_pct': spread
@@ -962,9 +994,10 @@ class PrimeSignalBot:
                 self.partial_tp_taken[symbol] = False
                 self.tp2_taken[symbol] = False
                 r_amount = abs(sl - fill_price)
-                self.take_profit_1r[symbol] = float(metadata.get('tp1') or (fill_price + (1.0 * r_amount)))
-                self.take_profit_2r[symbol] = float(metadata.get('tp2') or (fill_price + (2.5 * r_amount)))
-                self.take_profit[symbol] = float(metadata.get('tp3') or (fill_price + (4.0 * r_amount)))
+                fee_adj = fill_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
+                self.take_profit_1r[symbol] = float(metadata.get('tp1') or (fill_price + (1.0 * r_amount) + fee_adj))
+                self.take_profit_2r[symbol] = float(metadata.get('tp2') or (fill_price + (2.2 * r_amount) + fee_adj))
+                self.take_profit[symbol] = float(metadata.get('tp3') or (fill_price + (4.0 * r_amount) + fee_adj))
                 
                 self.highest_price_reached[symbol] = fill_price
                 self.position_size[symbol] = filled_amount
@@ -1015,7 +1048,7 @@ class PrimeSignalBot:
                     f"Entry: {fill_price:.4f}\n"
                     f"Stop Loss: {sl:.4f} (NATIVE PROTECTED)\n"
                     f"TP1 (1.0R - 50%): {self.take_profit_1r[symbol]:.4f}\n"
-                    f"TP2 (2.5R - 30%): {self.take_profit_2r[symbol]:.4f}\n"
+                    f"TP2 (2.2R - 30%): {self.take_profit_2r[symbol]:.4f}\n"
                     f"Runner (4.0R - 20%): {self.take_profit[symbol]:.4f}\n"
                     f"Position Size: {filled_amount:.6f}\n"
                     f"Confidence: {prob:.2f}\n"
@@ -1080,9 +1113,10 @@ class PrimeSignalBot:
                 self.partial_tp_taken[symbol] = False
                 self.tp2_taken[symbol] = False
                 r_amount = abs(sl - fill_price)
-                self.take_profit_1r[symbol] = float(metadata.get('tp1') or (fill_price - (1.0 * r_amount)))
-                self.take_profit_2r[symbol] = float(metadata.get('tp2') or (fill_price - (2.5 * r_amount)))
-                self.take_profit[symbol] = float(metadata.get('tp3') or (fill_price - (4.0 * r_amount)))
+                fee_adj = fill_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
+                self.take_profit_1r[symbol] = float(metadata.get('tp1') or (fill_price - (1.0 * r_amount) - fee_adj))
+                self.take_profit_2r[symbol] = float(metadata.get('tp2') or (fill_price - (2.2 * r_amount) - fee_adj))
+                self.take_profit[symbol] = float(metadata.get('tp3') or (fill_price - (4.0 * r_amount) - fee_adj))
                 
                 self.lowest_price_reached[symbol] = fill_price
                 self.position_size[symbol] = filled_amount
@@ -1132,7 +1166,7 @@ class PrimeSignalBot:
                     f"Entry: {fill_price:.4f}\n"
                     f"Stop Loss: {sl:.4f} (NATIVE PROTECTED)\n"
                     f"TP1 (1.0R - 50%): {self.take_profit_1r[symbol]:.4f}\n"
-                    f"TP2 (2.5R - 30%): {self.take_profit_2r[symbol]:.4f}\n"
+                    f"TP2 (2.2R - 30%): {self.take_profit_2r[symbol]:.4f}\n"
                     f"Runner (4.0R - 20%): {self.take_profit[symbol]:.4f}\n"
                     f"Position Size: {filled_amount:.6f}\n"
                     f"Confidence: {prob:.2f}\n"
