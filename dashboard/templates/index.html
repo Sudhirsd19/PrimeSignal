@@ -279,6 +279,18 @@
             <div class="space-y-2.5">
                 <h3 class="text-xs font-bold text-gray-400 uppercase tracking-wider">⚙️ System Settings</h3>
                 
+                <!-- 0. Trading Currency Switcher (INR vs USDT) -->
+                <div class="flex justify-between items-center bg-[#171e2e] border border-[#1f2937] p-3 rounded-xl">
+                    <div>
+                        <span class="text-xs font-bold text-gray-300">Trading Currency</span>
+                        <p class="text-[10px] text-gray-500" id="sidebar-currency-hint">Active: ₹ INR (₹2,000 Starting)</p>
+                    </div>
+                    <div class="flex bg-[#111827] p-0.5 rounded-lg border border-[#374151] gap-1">
+                        <button onclick="setTradingCurrency('INR')" id="btn-curr-inr" class="px-2.5 py-1 rounded text-[11px] font-extrabold bg-emerald-500 text-white shadow-sm transition-all cursor-pointer">₹ INR</button>
+                        <button onclick="setTradingCurrency('USDT')" id="btn-curr-usdt" class="px-2.5 py-1 rounded text-[11px] font-extrabold text-gray-400 hover:text-white transition-all cursor-pointer">$ USDT</button>
+                    </div>
+                </div>
+
                 <!-- 1. Theme Switcher (Dark / Light) -->
                 <div class="flex justify-between items-center bg-[#171e2e] border border-[#1f2937] p-3 rounded-xl">
                     <div class="flex items-center gap-2">
@@ -319,8 +331,8 @@
 
         <!-- Sidebar Footer Action -->
         <div class="pt-4 border-t border-[#1f2937] space-y-2 mt-4">
-            <button onclick="resetPaperAccount()" class="w-full py-2 px-3 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer">
-                <span>🔄</span> Reset Virtual Wallet ($10,000)
+            <button onclick="resetPaperAccount()" id="sidebar-reset-btn" class="w-full py-2 px-3 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer">
+                <span>🔄</span> Reset Virtual Wallet (₹2,000 INR)
             </button>
             <button onclick="emergencyCloseAllPositions()" class="w-full py-2 px-3 rounded-lg bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-500/30 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer">
                 <span>🚨</span> Emergency Close All Positions
@@ -1664,6 +1676,11 @@
                             if (sbId) sbId.innerText = p.id || "unknown";
                         }
 
+                        // Currency UI sync
+                        if (state.balance_currency) {
+                            updateCurrencyUI(state.balance_currency);
+                        }
+
                         // CoinDCX Balances updates (in Sidebar Drawer)
                         const dcxTbody = document.getElementById('sidebar-dcx-balances-tbody');
                         if (dcxTbody) {
@@ -2558,8 +2575,51 @@
             }
         }
 
+        async function setTradingCurrency(curr) {
+            try {
+                const apiKey = localStorage.getItem('dashboard_api_key') || '';
+                const response = await fetch('/api/change_currency', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': apiKey
+                    },
+                    body: JSON.stringify({ currency: curr })
+                });
+                const data = await response.json();
+                if (data.status === 'success') {
+                    updateCurrencyUI(curr);
+                } else {
+                    alert("Failed to switch currency: " + data.message);
+                }
+            } catch (err) {
+                console.error("Error setting currency:", err);
+            }
+        }
+
+        function updateCurrencyUI(curr) {
+            const btnInr = document.getElementById('btn-curr-inr');
+            const btnUsdt = document.getElementById('btn-curr-usdt');
+            const hint = document.getElementById('sidebar-currency-hint');
+            const resetBtn = document.getElementById('sidebar-reset-btn');
+            if (curr === 'INR') {
+                if (btnInr) btnInr.className = "px-2.5 py-1 rounded text-[11px] font-extrabold bg-emerald-500 text-white shadow-sm transition-all cursor-pointer";
+                if (btnUsdt) btnUsdt.className = "px-2.5 py-1 rounded text-[11px] font-extrabold text-gray-400 hover:text-white transition-all cursor-pointer";
+                if (hint) hint.innerText = "Active: ₹ INR (₹2,000 Starting)";
+                if (resetBtn) resetBtn.innerHTML = "<span>🔄</span> Reset Virtual Wallet (₹2,000 INR)";
+            } else {
+                if (btnInr) btnInr.className = "px-2.5 py-1 rounded text-[11px] font-extrabold text-gray-400 hover:text-white transition-all cursor-pointer";
+                if (btnUsdt) btnUsdt.className = "px-2.5 py-1 rounded text-[11px] font-extrabold bg-blue-500 text-white shadow-sm transition-all cursor-pointer";
+                if (hint) hint.innerText = "Active: $ USDT ($10,000 Starting)";
+                if (resetBtn) resetBtn.innerHTML = "<span>🔄</span> Reset Virtual Wallet ($10,000 USDT)";
+            }
+        }
+
         async function resetPaperAccount() {
-            if (confirm("Reset paper trading balance to $10,000 USDT and close all active positions for fresh trading?")) {
+            const curCurr = (latestStateRef && latestStateRef.balance_currency) ? latestStateRef.balance_currency : 'INR';
+            const curAmount = curCurr === 'INR' ? "₹2,000.00 INR" : "$10,000.00 USDT";
+            const targetVal = curCurr === 'INR' ? 2000.0 : 10000.0;
+            if (confirm(`Reset paper trading balance to ${curAmount} and close all active positions for fresh trading?`)) {
                 try {
                     const apiKey = localStorage.getItem('dashboard_api_key') || '';
                     const response = await fetch('/api/reset_account', {
@@ -2568,7 +2628,7 @@
                             'Content-Type': 'application/json',
                             'X-API-Key': apiKey
                         },
-                        body: JSON.stringify({ target_balance: 10000.0 })
+                        body: JSON.stringify({ target_balance: targetVal })
                     });
                     const data = await response.json();
                     if (data.status === 'success') {

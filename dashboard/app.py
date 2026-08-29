@@ -248,22 +248,55 @@ async def lock_profit(req: LockProfitRequest):
     else:
         return {"status": "error", "message": msg}
 
+class ChangeCurrencyRequest(BaseModel):
+    currency: str
+
+@app.post("/api/change_currency", dependencies=[Depends(verify_dashboard_key)])
+async def change_currency(req: ChangeCurrencyRequest):
+    curr = req.currency.strip().upper()
+    if curr not in ["INR", "USDT"]:
+        return {"status": "error", "message": "Supported currencies are INR or USDT"}
+    
+    Config.PAPER_CURRENCY = curr
+    DashboardState.balance_currency = curr
+    if curr == "INR":
+        Config.COINDCX_TRADE_INR = True
+        if Config.PAPER_TRADING:
+            Config.PAPER_STARTING_BALANCE = 2000.0
+            DashboardState.balance_usdt = 2000.0
+            if bot_instance:
+                bot_instance._dry_run_balance_usdt = 2000.0
+                bot_instance.save_state()
+    else:
+        Config.COINDCX_TRADE_INR = False
+        if Config.PAPER_TRADING:
+            Config.PAPER_STARTING_BALANCE = 10000.0
+            DashboardState.balance_usdt = 10000.0
+            if bot_instance:
+                bot_instance._dry_run_balance_usdt = 10000.0
+                bot_instance.save_state()
+    
+    add_log_message(f"💱 Currency switched to {curr} ({'₹2,000 INR' if curr == 'INR' else '$10,000 USDT'} active)")
+    return {"status": "success", "currency": curr, "balance": DashboardState.balance_usdt}
+
 class ResetAccountRequest(BaseModel):
     target_balance: float = 10000.0
 
 @app.post("/api/reset_account", dependencies=[Depends(verify_dashboard_key)])
 async def reset_account(req: Optional[ResetAccountRequest] = None):
-    balance = req.target_balance if req else 10000.0
+    balance = req.target_balance if req else (2000.0 if Config.PAPER_CURRENCY == 'INR' else 10000.0)
+    cur_symbol = "₹" if Config.PAPER_CURRENCY == 'INR' else "$"
+    cur_name = Config.PAPER_CURRENCY
     if bot_instance is not None:
         bot_instance.reset_account_state(balance)
-        return {"status": "success", "message": f"Account reset to ${balance:,.2f} USDT. All positions cleared."}
+        return {"status": "success", "message": f"Account reset to {cur_symbol}{balance:,.2f} {cur_name}. All positions cleared."}
     else:
         DashboardState.balance_usdt = balance
         DashboardState.balance_base = 0.0
         DashboardState.active_positions.clear()
         DashboardState.in_position = False
         DashboardState.trades.clear()
-        return {"status": "success", "message": f"Dashboard balance reset to ${balance:,.2f} USDT."}
+        return {"status": "success", "message": f"Dashboard balance reset to {cur_symbol}{balance:,.2f} {cur_name}."}
 
 @app.post("/api/clear_analytics", dependencies=[Depends(verify_dashboard_key)])
 async def clear_analytics():
