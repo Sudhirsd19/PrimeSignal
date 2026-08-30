@@ -165,6 +165,66 @@ class CoinDCXClient:
                     await asyncio.sleep(1.0 * (2 ** attempt))
         return None
 
+    async def fetch_usdt_inr_rate(self, side: str = "BUY") -> float | None:
+        """
+        Dynamically fetches live executable USDT/INR rate from CoinDCX ticker.
+        Applies conservative worst-side pricing:
+        - For BUY/LONG: uses 'ask' (higher cost in INR per USDT).
+        - For SELL/SHORT: uses 'bid' (lower realized INR per USDT).
+        Enforces strict sanity bounds [70.0, 120.0] and 30s cache TTL.
+        Returns None if rate is unavailable, invalid, or out of bounds (fail-closed).
+        """
+        now = time.time()
+        if hasattr(self, '_usdt_inr_cache') and self._usdt_inr_cache:
+            cache_ts, cache_data = self._usdt_inr_cache
+            if (now - cache_ts) < 30.0:
+                return self._select_side_rate(cache_data, side)
+
+        url = f"{self.base_url}/exchange/ticker"
+        for attempt in range(2):
+            try:
+                session = await self._get_session()
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5.0)) as response:
+                    if response.status == 200:
+                        tickers = await response.json()
+                        target = next(
+                            (t for t in tickers if t.get('market') in ('USDTINR', 'I-USDT_INR', 'B-USDT_INR') or t.get('pair') in ('USDTINR', 'I-USDT_INR', 'B-USDT_INR', 'USDT/INR')),
+                            None
+                        )
+                        if target:
+                            last_p = float(target.get('last_price') or 0.0)
+                            bid_p = float(target.get('bid') or 0.0)
+                            ask_p = float(target.get('ask') or 0.0)
+                            data = {'last': last_p, 'bid': bid_p, 'ask': ask_p}
+                            rate = self._select_side_rate(data, side)
+                            if rate is not None and 70.0 <= rate <= 120.0:
+                                self._usdt_inr_cache = (now, data)
+                                return rate
+                    elif response.status == 429:
+                        await asyncio.sleep(0.5 * (2 ** attempt))
+            except Exception as e:
+                print(f"[CoinDCX FX] Ticker fetch error (attempt {attempt+1}): {e}")
+
+        # Grace period for temporary network glitch: allow cache up to 60s
+        if hasattr(self, '_usdt_inr_cache') and self._usdt_inr_cache:
+            cache_ts, cache_data = self._usdt_inr_cache
+            if (now - cache_ts) < 60.0:
+                return self._select_side_rate(cache_data, side)
+
+        return None
+
+    def _select_side_rate(self, data: dict, side: str) -> float | None:
+        last_p = float(data.get('last') or 0.0)
+        bid_p = float(data.get('bid') or 0.0)
+        ask_p = float(data.get('ask') or 0.0)
+        if str(side).upper() in ('BUY', 'LONG'):
+            rate = ask_p if ask_p > 0 else last_p
+        else:
+            rate = bid_p if bid_p > 0 else last_p
+        if rate is not None and 70.0 <= rate <= 120.0:
+            return rate
+        return None
+
     async def place_order(
         self,
         side: str,

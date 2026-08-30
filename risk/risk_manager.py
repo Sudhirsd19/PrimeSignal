@@ -165,11 +165,11 @@ class RiskManager:
 
         # 2. Calculate stop distance in Account Equity currency
         stop_distance = abs(entry_price_equity_curr - stop_loss_equity_curr)
-        if stop_distance <= 0 or math.isnan(stop_distance):
-            print(f"⚠️ RISK MANAGER WARNING: Stop distance is zero or negative ({stop_distance})")
+        if stop_distance <= 0 or math.isnan(stop_distance) or math.isinf(stop_distance):
+            print(f"⚠️ RISK MANAGER WARNING: Stop distance is non-positive or invalid ({stop_distance})")
             print(f"   Entry Price: {entry_price}, Stop Loss: {stop_loss}")
-            print(f"   Falling back to default trade size: {Config.TRADE_AMOUNT}")
-            return Config.TRADE_AMOUNT
+            print(f"   Failing closed: returning 0.0 position size")
+            return 0.0
             
         # 3. Calculate position size in base asset units
         position_size = trade_risk / stop_distance

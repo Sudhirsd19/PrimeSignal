@@ -728,8 +728,14 @@ class ExecutionEngine:
             order_role="EMERGENCY"
         )
 
+    async def fetch_usdt_inr_rate(self, side: str = "BUY") -> float | None:
+        """Dynamic FX rate provider delegating to CoinDCXClient."""
+        if self.coindcx_client:
+            return await self.coindcx_client.fetch_usdt_inr_rate(side=side)
+        return None
+
     async def reconcile_intent_on_exchange(self, intent: dict[str, Any]) -> Optional[ExecutionResult]:
-        """Queries exchange to reconcile an in-flight or ambiguous intent."""
+        """Queries exchange to authoritatively reconcile an in-flight or ambiguous intent."""
         symbol = intent.get('symbol')
         side = intent.get('side', 'buy')
         qty = float(intent.get('requested_qty', 0.0))
@@ -737,7 +743,7 @@ class ExecutionEngine:
         intent_id = intent.get('intent_id')
         venue = intent.get('venue', 'BINANCE')
 
-        if self.coindcx_client:
+        if str(venue).upper() == 'COINDCX' and self.coindcx_client:
             return await self.coindcx_client._reconcile_ambiguous_order(
                 symbol or 'BTCINR', side, qty,
                 created_after_ts=int((intent.get('created_at', time.time()) - 30) * 1000),
@@ -745,22 +751,74 @@ class ExecutionEngine:
                 intent_id=intent_id
             )
 
-        # Binance reconciliation by clientOrderId or open orders
+        # Binance reconciliation by targeted clientOrderId, open orders, and broader history
         try:
             if not self.trade_client or not symbol:
-                return None
+                return ExecutionResult(
+                    state=ExecutionState.EXECUTION_UNKNOWN,
+                    requested_qty=qty,
+                    client_order_id=client_order_id,
+                    intent_id=intent_id,
+                    venue=venue,
+                    error="trade_client or symbol not initialized"
+                )
+
+            # 1. Targeted lookup by clientOrderId if supported
+            if client_order_id and hasattr(self.trade_client, 'fetch_order'):
+                try:
+                    if inspect.iscoroutinefunction(self.trade_client.fetch_order):
+                        order = await self.trade_client.fetch_order(
+                            id=None,
+                            symbol=symbol,
+                            params={'origClientOrderId': client_order_id}
+                        )
+                    else:
+                        order = self.trade_client.fetch_order(
+                            id=None,
+                            symbol=symbol,
+                            params={'origClientOrderId': client_order_id}
+                        )
+                    if order and isinstance(order, dict):
+                        return ExecutionResult.from_exchange(
+                            order, requested_qty=qty, client_order_id=client_order_id,
+                            intent_id=intent_id, venue=venue
+                        )
+                except ccxt.OrderNotFound:
+                    return ExecutionResult(
+                        state=ExecutionState.REJECTED,
+                        requested_qty=qty,
+                        client_order_id=client_order_id,
+                        intent_id=intent_id,
+                        venue=venue,
+                        error="Authoritatively verified absent on exchange (OrderNotFound)"
+                    )
+                except Exception as e:
+                    # Targeted query failed; fall through to order list inspection
+                    pass
+
+            # 2. Check open orders
             open_orders = await self.execute_with_retry(self.trade_client.fetch_open_orders, symbol)
             for o in (open_orders or []):
                 o_cid = o.get('clientOrderId') or (o.get('info') or {}).get('clientOrderId')
                 if o_cid and client_order_id and str(o_cid) == str(client_order_id):
                     return ExecutionResult.from_exchange(o, requested_qty=qty, client_order_id=client_order_id, intent_id=intent_id, venue=venue)
             
-            # Check recently closed/filled orders
-            closed_orders = await self.execute_with_retry(self.trade_client.fetch_closed_orders, symbol, limit=20)
+            # 3. Check closed/filled orders (100 limit)
+            closed_orders = await self.execute_with_retry(self.trade_client.fetch_closed_orders, symbol, limit=100)
             for o in (closed_orders or []):
                 o_cid = o.get('clientOrderId') or (o.get('info') or {}).get('clientOrderId')
                 if o_cid and client_order_id and str(o_cid) == str(client_order_id):
                     return ExecutionResult.from_exchange(o, requested_qty=qty, client_order_id=client_order_id, intent_id=intent_id, venue=venue)
+
+            # If not authoritatively absent via OrderNotFound and not found in order lists, quarantine in EXECUTION_UNKNOWN
+            return ExecutionResult(
+                state=ExecutionState.EXECUTION_UNKNOWN,
+                requested_qty=qty,
+                client_order_id=client_order_id,
+                intent_id=intent_id,
+                venue=venue,
+                error="Intent could not be authoritatively verified on exchange; quarantined in SAFE MODE"
+            )
         except Exception as e:
             print(f"[RECONCILE INTENT] Error querying exchange for intent {intent_id}: {e}")
             return ExecutionResult(
@@ -771,8 +829,6 @@ class ExecutionEngine:
                 venue=venue,
                 error=str(e)
             )
-
-        return None
 
     async def replay_and_resolve_unresolved_intents(self) -> dict[str, ExecutionResult]:
         """
@@ -816,10 +872,11 @@ class ExecutionEngine:
                 discovered.intent_id = intent_id
                 discovered.client_order_id = client_order_id
                 discovered.venue = venue
-                print(f"[REPLAY] Intent {intent_id} ({client_order_id}) remains UNKNOWN due to exchange query error.")
+                print(f"[REPLAY] Intent {intent_id} ({client_order_id}) remains UNKNOWN due to exchange query error; quarantined.")
+                self.intent_journal.result(discovered)
                 resolutions[intent_id] = discovered
             else:
-                print(f"[REPLAY] Intent {intent_id} ({client_order_id}) NOT FOUND on exchange. Marking REJECTED.")
+                print(f"[REPLAY] Intent {intent_id} ({client_order_id}) verified absent on exchange. Marking REJECTED.")
                 rejected_res = ExecutionResult(
                     state=ExecutionState.REJECTED,
                     requested_qty=qty,

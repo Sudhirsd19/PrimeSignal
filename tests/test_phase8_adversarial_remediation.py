@@ -362,26 +362,28 @@ class TestPhase8AdversarialRemediation(unittest.IsolatedAsyncioTestCase):
         """Verify unauthenticated connection to /ws is rejected with code 1008."""
         from fastapi.testclient import TestClient
         import dashboard.app as dash_app
-        dash_app._DASHBOARD_SECRET = "TEST_SECRET_123"
         client = TestClient(dash_app.app)
         
-        with self.assertRaises(Exception):
-            with client.websocket_connect("/ws") as websocket:
-                websocket.receive_text()
+        with patch.dict(os.environ, {"DASHBOARD_SECRET": "TEST_SECRET_123"}):
+            dash_app._DASHBOARD_SECRET = "TEST_SECRET_123"
+            with self.assertRaises(Exception):
+                with client.websocket_connect("/ws") as websocket:
+                    websocket.receive_text()
 
     def test_aud_p2_01_websocket_auth_success(self):
         """Verify authenticated connection with valid token query param succeeds."""
         from fastapi.testclient import TestClient
         import dashboard.app as dash_app
-        dash_app._DASHBOARD_SECRET = "TEST_SECRET_123"
         client = TestClient(dash_app.app)
         
-        with client.websocket_connect("/ws?token=TEST_SECRET_123") as websocket:
-            initial_state = websocket.receive_text()
-            self.assertIn("latest_price", initial_state)
-            websocket.send_text("ping")
-            resp = websocket.receive_text()
-            self.assertEqual(resp, "pong")
+        with patch.dict(os.environ, {"DASHBOARD_SECRET": "TEST_SECRET_123"}):
+            dash_app._DASHBOARD_SECRET = "TEST_SECRET_123"
+            with client.websocket_connect("/ws?token=TEST_SECRET_123") as websocket:
+                initial_state = websocket.receive_text()
+                self.assertIn("latest_price", initial_state)
+                websocket.send_text("ping")
+                resp = websocket.receive_text()
+                self.assertEqual(resp, "pong")
 
     # ──────────────────────────────────────────────────────────────────────────
     # AUD-P1-03: COINDCX LIVE INR ACCOUNT EQUITY SYNC

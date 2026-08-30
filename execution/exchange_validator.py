@@ -35,34 +35,24 @@ class ExchangeValidator:
         else:
             price_equity_curr = price
             
-        # 1. Minimum Notional Check in Account Equity Currency
         min_notional = 100.0 if is_inr else 10.0
-        notional_value = amount * price_equity_curr
-        if notional_value < min_notional:
-            # Check if equity allows scaling up to min notional
-            if current_equity >= min_notional * 1.1:
-                amount = (min_notional * 1.05) / price_equity_curr
-                notional_value = amount * price_equity_curr
-            else:
-                return False, amount, f"Notional value ({notional_value:.2f}) below minimum ({min_notional:.2f})"
-
-        # 2. Maximum Allocation Check (35% Equity Cap)
         max_trade_val = current_equity * getattr(Config, 'MAX_TRADE_ALLOCATION_PCT', 0.35)
         if current_equity >= min_notional and max_trade_val < min_notional:
             max_trade_val = min(current_equity * 0.95, min_notional * 1.1)
-            
-        if notional_value > max_trade_val:
-            amount = (max_trade_val * 0.999) / price_equity_curr
 
-        # 3. Market Precision / Lot Size Validation
+        raw_notional = amount * price_equity_curr
+        if raw_notional > max_trade_val:
+            amount = (max_trade_val * 0.999) / price_equity_curr
+        elif raw_notional < min_notional and current_equity >= min_notional * 1.1:
+            amount = (min_notional * 1.05) / price_equity_curr
+
+        # 1. Market Precision / Lot Size Validation
         if markets_info and symbol in markets_info:
             market = markets_info[symbol]
             limits = market.get('limits', {})
             min_qty = limits.get('amount', {}).get('min', 0.0) or 0.0
             max_qty = limits.get('amount', {}).get('max', 999999.0) or 999999.0
             
-            if amount < min_qty:
-                return False, amount, f"Quantity {amount} below exchange minimum {min_qty} for {symbol}"
             if amount > max_qty:
                 amount = max_qty
                 
@@ -70,13 +60,27 @@ class ExchangeValidator:
             if precision is not None and isinstance(precision, int):
                 multiplier = 10 ** precision
                 amount = math.floor(amount * multiplier) / multiplier
-            elif precision is not None and isinstance(precision, float):
+            elif precision is not None and isinstance(precision, float) and precision > 0:
                 amount = math.floor(amount / precision) * precision
+
+            if amount < min_qty:
+                return False, amount, f"Quantity {amount} below exchange minimum {min_qty} for {symbol}"
         else:
             # Fallback safe floor truncation to 6 decimals
             amount = math.floor(amount * 1000000.0) / 1000000.0
 
         if amount <= 0:
             return False, 0.0, "Quantity reduced to zero after precision truncation."
+
+        # 2. Calculate FINAL Executable Notional in Account Equity Currency
+        final_notional_value = amount * price_equity_curr
+
+        # 3. Minimum Notional Check against FINAL Executable Notional
+        if final_notional_value < min_notional:
+            return False, amount, f"Notional value ({final_notional_value:.2f}) below minimum ({min_notional:.2f})"
+
+        # 4. Maximum Allocation Check against FINAL Executable Notional
+        if final_notional_value > (max_trade_val * 1.001):
+            return False, amount, f"Final notional ({final_notional_value:.2f}) exceeds max allocation ({max_trade_val:.2f})"
 
         return True, amount, "VALID"

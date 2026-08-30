@@ -800,12 +800,21 @@
         }
 
         // Auto-set dashboard API key from server-injected value
-        (function() {
-            const serverKey = "{{ dashboard_api_key | default('', true) }}";
-            if (serverKey) {
-                localStorage.setItem('dashboard_api_key', serverKey);
-            }
-        })();
+        window.DASHBOARD_API_KEY = "{{ dashboard_secret | default(dashboard_api_key | default('', true), true) }}";
+        if (window.DASHBOARD_API_KEY) {
+            localStorage.setItem('dashboard_api_key', window.DASHBOARD_API_KEY);
+        }
+
+        function getDashboardApiKey() {
+            return localStorage.getItem('dashboard_api_key') || window.DASHBOARD_API_KEY || '';
+        }
+
+        function getApiHeaders() {
+            return {
+                'Content-Type': 'application/json',
+                'X-API-Key': getDashboardApiKey()
+            };
+        }
 
         let chart = null;
         let candleSeries = null;
@@ -1137,7 +1146,10 @@
 
         // --- 2. WEBSOCKET CONNECTION ---
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
+        function getWsUrl() {
+            const apiKey = getDashboardApiKey();
+            return apiKey ? `${wsProtocol}//${window.location.host}/ws?token=${encodeURIComponent(apiKey)}` : `${wsProtocol}//${window.location.host}/ws`;
+        }
         
         let ws;
         let historyLoaded = false;
@@ -1245,7 +1257,7 @@
             }
             
             try {
-                ws = new WebSocket(wsUrl);
+                ws = new WebSocket(getWsUrl());
                 
                 ws.onopen = () => {
                     console.log("WebSocket connected!");
@@ -2156,10 +2168,7 @@
                 try {
                     const response = await fetch('/api/change_symbol', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
-                        },
+                        headers: getApiHeaders(),
                         body: JSON.stringify({ symbol: newSymbol })
                     });
                     if (!response.ok) {
@@ -2228,10 +2237,7 @@
             try {
                 const response = await fetch('/api/set_timeframe', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
-                    },
+                    headers: getApiHeaders(),
                     body: JSON.stringify({ timeframe: tf })
                 });
                 if (response.ok) {
@@ -2257,10 +2263,7 @@
             try {
                 const response = await fetch('/api/set_mode', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
-                    },
+                    headers: getApiHeaders(),
                     body: JSON.stringify({ paper_trading: nextMode })
                 });
                 if (!response.ok) {
@@ -2325,10 +2328,7 @@
             try {
                 const response = await fetch('/api/clear_analytics', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
-                    }
+                    headers: getApiHeaders()
                 });
                 const data = await response.json();
                 if (data.status === 'success') {
@@ -2347,9 +2347,7 @@
         async function loadAnalytics() {
             try {
                 const response = await fetch('/api/analytics', {
-                    headers: {
-                        'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
-                    }
+                    headers: getApiHeaders()
                 });
                 const data = await response.json();
                 
@@ -2516,10 +2514,7 @@
                 const tslActive = sidebarTsl ? sidebarTsl.checked : true;
                 await fetch('/api/update_risk_settings', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
-                    },
+                    headers: getApiHeaders(),
                     body: JSON.stringify({
                         tsl_enabled: tslActive,
                         tsl_multiplier: 2.0,
@@ -2531,31 +2526,33 @@
             }
         }
         
+        async function emergencyCloseAllPositions() {
+            if (confirm("🚨 EMERGENCY: Immediately close ALL active positions?")) {
+                try {
+                    const response = await fetch('/api/emergency_stop', {
+                        method: 'POST',
+                        headers: getApiHeaders()
+                    });
+                    const data = await response.json();
+                    if (response.ok && data.status === 'success') {
+                        alert("🚨 EMERGENCY CLOSE SUCCESSFUL: " + (data.message || "All positions closed."));
+                        if (typeof loadAnalytics === 'function') {
+                            await loadAnalytics();
+                        }
+                    } else {
+                        const errMsg = data.detail || data.message || `Server returned ${response.status} (${response.statusText})`;
+                        alert("Error: " + errMsg);
+                    }
+                } catch (err) {
+                    console.error("Emergency stop error:", err);
+                    alert("Failed to trigger emergency stop: " + err.message);
+                }
+            }
+        }
+
         const btnEmergency = document.getElementById('btn-emergency-close');
         if (btnEmergency) {
-            btnEmergency.addEventListener('click', async () => {
-                if(confirm("Are you sure you want to execute an emergency close on ALL active positions?")) {
-                    try {
-                        const apiKey = localStorage.getItem('dashboard_api_key') || '';
-                        const response = await fetch('/api/emergency_stop', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'X-API-Key': apiKey
-                            }
-                        });
-                        const data = await response.json();
-                        if(data.status === 'success') {
-                            alert("🚨 EMERGENCY CLOSE SUCCESSFUL: " + data.message);
-                        } else {
-                            alert("Error: " + data.message);
-                        }
-                    } catch (err) {
-                        console.error(err);
-                        alert("Failed to trigger emergency stop.");
-                    }
-                }
-            });
+            btnEmergency.addEventListener('click', emergencyCloseAllPositions);
         }
         
         async function lockProfitForSymbol(sym) {
@@ -2563,10 +2560,7 @@
             try {
                 const response = await fetch('/api/lock_profit', {
                     method: 'POST',
-                    headers: { 
-                        'Content-Type': 'application/json',
-                        'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
-                    },
+                    headers: getApiHeaders(),
                     body: JSON.stringify({ symbol: sym })
                 });
                 const res = await response.json();
@@ -2582,13 +2576,9 @@
 
         async function setTradingCurrency(curr) {
             try {
-                const apiKey = localStorage.getItem('dashboard_api_key') || '';
                 const response = await fetch('/api/change_currency', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-Key': apiKey
-                    },
+                    headers: getApiHeaders(),
                     body: JSON.stringify({ currency: curr })
                 });
                 const data = await response.json();
@@ -2626,13 +2616,9 @@
             const targetVal = curCurr === 'INR' ? 2000.0 : 10000.0;
             if (confirm(`Reset paper trading balance to ${curAmount} and close all active positions for fresh trading?`)) {
                 try {
-                    const apiKey = localStorage.getItem('dashboard_api_key') || '';
                     const response = await fetch('/api/reset_account', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-API-Key': apiKey
-                        },
+                        headers: getApiHeaders(),
                         body: JSON.stringify({ target_balance: targetVal })
                     });
                     const data = await response.json();
@@ -2728,10 +2714,7 @@
             try {
                 await fetch('/api/update_risk_settings', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-Key': localStorage.getItem('dashboard_api_key') || ''
-                    },
+                    headers: getApiHeaders(),
                     body: JSON.stringify({
                         max_daily_trades: newMax
                     })
@@ -2743,13 +2726,6 @@
 
         function syncTsl(checked) {
             updateRiskSettings();
-        }
-
-        async function emergencyCloseAllPositions() {
-            if (confirm("🚨 EMERGENCY: Immediately close ALL active positions?")) {
-                const btn = document.getElementById('btn-emergency-close');
-                if (btn) btn.click();
-            }
         }
 
         updateAudioIcon();

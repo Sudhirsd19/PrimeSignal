@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import os
 import threading
 import sys
@@ -19,6 +20,7 @@ if sys.platform == 'win32':
 
 from config import Config
 from execution.execution_engine import ExecutionEngine
+from execution.execution_result import ExecutionResult, ExecutionState
 from execution.exchange_validator import ExchangeValidator
 from core.data_pipeline import RealTimeDataPipeline
 from core.order_state_machine import OrderStateMachine, OrderState, PositionContext
@@ -47,6 +49,21 @@ class PrimeSignalBot:
         if isinstance(order, dict):
             return str(order.get('status', '')).upper() in ('FILLED', 'PARTIALLY_FILLED')
         return order.is_fill_confirmed
+
+    def _is_active_sl_order(self, order) -> bool:
+        if order is None:
+            return False
+        if isinstance(order, dict):
+            oid = order.get('id') or order.get('orderId')
+            status = str(order.get('status', '')).upper()
+            return bool(oid) and status not in ('REJECTED', 'FAILED', 'CANCELLED', 'CANCELED')
+        if hasattr(order, 'is_order_accepted'):
+            return bool(order.is_order_accepted)
+        if hasattr(order, 'has_exchange_order'):
+            return bool(order.has_exchange_order and getattr(order, 'state', None) not in (
+                ExecutionState.REJECTED, ExecutionState.NOT_SUBMITTED, ExecutionState.EXECUTION_UNKNOWN
+            ))
+        return False
 
     def __init__(self):
         self.has_keys = Config.validate()
@@ -219,16 +236,14 @@ class PrimeSignalBot:
                     import sys
                     sys.exit(f"[CRASH_BOUNDARY] SAFE HALT: {e}")
 
-            # If file existed on disk (or cloud doc existed) but state is None, non-dict, or falsy -> FAIL HALT
-            if (file_exists or state is not None) and (not isinstance(state, dict) or not state):
+            if not isinstance(state, dict) or not state:
+                if not file_exists and state is None:
+                    # Genuinely first run or clean startup: state file does not exist on disk
+                    self._load_trade_logs()
+                    return
                 print(f"[STATE] FATAL: bot_state.json exists but contains non-dict or empty payload ({state!r}).")
                 import sys
                 sys.exit("[CRASH_BOUNDARY] SAFE HALT: bot_state.json has empty/invalid schema. Aborting to prevent silent state reset.")
-
-            if not file_exists and state is None:
-                # Genuinely first run or clean startup: state file does not exist on disk
-                self._load_trade_logs()
-                return
 
             mandatory_keys = ['in_position', 'position_side', 'position_size', 'entry_price', 'stop_loss']
             missing_keys = [k for k in mandatory_keys if k not in state]
@@ -246,45 +261,45 @@ class PrimeSignalBot:
 
             try:
                 # Helper to safely load dict state, falling back to default if new symbols were added
-                def safe_load(key, default_val):
-                    loaded_dict = state.get(key, {})
+                def safe_load(key: str, default_val: object) -> dict[str, object]:
+                    loaded_dict = state.get(key, {}) if isinstance(state, dict) else {}
                     if not isinstance(loaded_dict, dict):
                         return {sym: default_val for sym in Config.SUPPORTED_SYMBOLS}
                     return {sym: loaded_dict.get(sym, default_val) for sym in Config.SUPPORTED_SYMBOLS}
 
-                self.in_position = safe_load('in_position', False)
-                self.position_side = safe_load('position_side', 'HOLD')
-                self.entry_price = safe_load('entry_price', 0.0)
-                self.stop_loss = safe_load('stop_loss', 0.0)
-                self.take_profit = safe_load('take_profit', 0.0)
-                self.position_size = safe_load('position_size', 0.0)
-                self.entry_time = safe_load('entry_time', 0)
-                self.highest_price_reached = safe_load('highest_price_reached', 0.0)
-                self.lowest_price_reached = safe_load('lowest_price_reached', 999999.0)
-                self._dry_run_balance_usdt = state.get('_dry_run_balance_usdt', getattr(Config, 'PAPER_STARTING_BALANCE', 2000.0))
-                self.take_profit_1r = safe_load('take_profit_1r', 0.0)
-                self.take_profit_2r = safe_load('take_profit_2r', 0.0)
-                self.partial_tp_taken = safe_load('partial_tp_taken', False)
-                self.tp2_taken = safe_load('tp2_taken', False)
-                self.realized_pnl = safe_load('realized_pnl', 0.0)
-                self.original_position_size = safe_load('original_position_size', 0.0)
-                self.last_exit_time = safe_load('last_exit_time', 0)
-                self.tp_cooldown_until = safe_load('tp_cooldown_until', 0)
-                self.position_mode = safe_load('position_mode', 'STRICT')
-                self.last_trade_time = safe_load('last_trade_time', 0)
+                self.in_position = {k: bool(v) for k, v in safe_load('in_position', False).items()}
+                self.position_side = {k: str(v) for k, v in safe_load('position_side', 'HOLD').items()}
+                self.entry_price = {k: float(v or 0.0) for k, v in safe_load('entry_price', 0.0).items()}
+                self.stop_loss = {k: float(v or 0.0) for k, v in safe_load('stop_loss', 0.0).items()}
+                self.take_profit = {k: float(v or 0.0) for k, v in safe_load('take_profit', 0.0).items()}
+                self.position_size = {k: float(v or 0.0) for k, v in safe_load('position_size', 0.0).items()}
+                self.entry_time = {k: float(v or 0.0) for k, v in safe_load('entry_time', 0.0).items()}
+                self.highest_price_reached = {k: float(v or 0.0) for k, v in safe_load('highest_price_reached', 0.0).items()}
+                self.lowest_price_reached = {k: float(v or 999999.0) for k, v in safe_load('lowest_price_reached', 999999.0).items()}
+                self._dry_run_balance_usdt = float(state.get('_dry_run_balance_usdt', getattr(Config, 'PAPER_STARTING_BALANCE', 2000.0)))
+                self.take_profit_1r = {k: float(v or 0.0) for k, v in safe_load('take_profit_1r', 0.0).items()}
+                self.take_profit_2r = {k: float(v or 0.0) for k, v in safe_load('take_profit_2r', 0.0).items()}
+                self.partial_tp_taken = {k: bool(v) for k, v in safe_load('partial_tp_taken', False).items()}
+                self.tp2_taken = {k: bool(v) for k, v in safe_load('tp2_taken', False).items()}
+                self.realized_pnl = {k: float(v or 0.0) for k, v in safe_load('realized_pnl', 0.0).items()}
+                self.original_position_size = {k: float(v or 0.0) for k, v in safe_load('original_position_size', 0.0).items()}
+                self.last_exit_time = {k: float(v or 0.0) for k, v in safe_load('last_exit_time', 0.0).items()}
+                self.tp_cooldown_until = {k: float(v or 0.0) for k, v in safe_load('tp_cooldown_until', 0.0).items()}
+                self.position_mode = {k: str(v) for k, v in safe_load('position_mode', 'STRICT').items()}
+                self.last_trade_time = {k: float(v or 0.0) for k, v in safe_load('last_trade_time', 0.0).items()}
                 self.last_zone_traded = safe_load('last_zone_traded', None)
                 
                 # Restore closed trades history
-                saved_trades = state.get('closed_trades', [])
+                saved_trades = state.get('closed_trades', []) if isinstance(state, dict) else []
                 if saved_trades:
                     DashboardState.trades = list(saved_trades)
                     
                 # Restore Order State Machine contexts
-                if 'order_state_machine' in state:
+                if isinstance(state, dict) and 'order_state_machine' in state:
                     self.order_state_machine.load_all(state['order_state_machine'])
 
                 # Restore Durable Risk Reservations
-                if hasattr(self, 'risk') and 'active_risk_reservations' in state:
+                if hasattr(self, 'risk') and isinstance(state, dict) and 'active_risk_reservations' in state:
                     self.risk.load_reservations(state['active_risk_reservations'])
                 
                 # Sync any additional logs from data/trade_logs.jsonl
@@ -525,14 +540,22 @@ class PrimeSignalBot:
 
     def calculate_total_equity(self):
         current_equity = self._dry_run_balance_usdt
+        is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+        rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
+        if rate <= 0:
+            rate = 85.0
+
         for sym in Config.SUPPORTED_SYMBOLS:
             if self.in_position[sym] and self.position_size[sym] and self.position_size[sym] > 1e-7:
                 live_price = self.pipeline.latest_prices.get(sym, self.entry_price[sym])
+                live_p_adj = live_price * rate if is_inr else live_price
+                entry_p_adj = self.entry_price[sym] * rate if is_inr else self.entry_price[sym]
+                
                 if self.position_side[sym] == "LONG":
-                    current_equity += self.position_size[sym] * live_price
+                    current_equity += self.position_size[sym] * live_p_adj
                 elif self.position_side[sym] == "SHORT":
-                    unrealized_pnl = self.position_size[sym] * (self.entry_price[sym] - live_price)
-                    current_equity += (self.position_size[sym] * self.entry_price[sym]) + unrealized_pnl
+                    unrealized_pnl = self.position_size[sym] * (entry_p_adj - live_p_adj)
+                    current_equity += (self.position_size[sym] * entry_p_adj) + unrealized_pnl
         return current_equity
 
     def is_macro_news_blackout(self):
@@ -1009,9 +1032,24 @@ class PrimeSignalBot:
             sl = float(metadata['stop_loss']) if metadata.get('stop_loss') is not None else (entry_price * 0.98)
             tp = float(metadata['take_profit']) if metadata.get('take_profit') is not None else (entry_price * 1.04)
             
-            is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
-            quote_curr = "USDT" if "/" in symbol and symbol.endswith("USDT") else ("INR" if is_inr else "USDT")
-            conversion_rate = float(getattr(Config, 'USDT_INR_RATE', 85.0))
+            is_inr = getattr(Config, 'COINDCX_TRADE_INR', False) if not Config.PAPER_TRADING else (getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR')
+            quote_curr = "INR" if is_inr else "USDT"
+            conversion_rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
+            if is_inr and not Config.PAPER_TRADING and hasattr(self.execution, 'fetch_usdt_inr_rate'):
+                if inspect.iscoroutinefunction(self.execution.fetch_usdt_inr_rate):
+                    dynamic_rate = await self.execution.fetch_usdt_inr_rate(side=signal)
+                else:
+                    dynamic_rate = self.execution.fetch_usdt_inr_rate(side=signal)
+                    if inspect.isawaitable(dynamic_rate):
+                        dynamic_rate = await dynamic_rate
+                try:
+                    dynamic_rate_val = float(dynamic_rate) if dynamic_rate is not None else None
+                except (TypeError, ValueError):
+                    dynamic_rate_val = None
+                if dynamic_rate_val is None or dynamic_rate_val <= 0:
+                    add_log_message(f"[{symbol}] Trade blocked: Live CoinDCX USDT/INR FX rate unavailable or invalid (fail-closed).")
+                    return
+                conversion_rate = dynamic_rate_val
 
             pos_size = self.risk.calculate_position_size(
                 account_equity=current_equity,
@@ -1084,12 +1122,12 @@ class PrimeSignalBot:
                 else:
                     min_paper_cost = 50.0 if is_inr else 1.0
                     cur_sym = "₹" if is_inr else "$"
-                    position_cost = pos_size * entry_price
-                    if position_cost <= self._dry_run_balance_usdt:
-                        self._dry_run_balance_usdt -= position_cost
+                    entry_cost_equity_curr = pos_size * entry_price * (conversion_rate if is_inr else 1.0)
+                    if entry_cost_equity_curr <= self._dry_run_balance_usdt:
+                        self._dry_run_balance_usdt -= entry_cost_equity_curr
                         order = {'id': f'MOCK_BUY_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
                     elif self._dry_run_balance_usdt >= min_paper_cost:
-                        pos_size = self._dry_run_balance_usdt / entry_price
+                        pos_size = self._dry_run_balance_usdt / (entry_price * (conversion_rate if is_inr else 1.0))
                         self._dry_run_balance_usdt = 0.0
                         order = {'id': f'MOCK_BUY_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
                     else:
@@ -1107,8 +1145,8 @@ class PrimeSignalBot:
                     if self.has_keys and not Config.PAPER_TRADING:
                         ctx.transition_to(OrderState.SL_PLACEMENT_PENDING, reason="Submitting native SL to exchange")
                         sl_order = await self.execution.place_native_stop_loss(symbol, 'sell', filled_amount, sl)
-                        if sl_order and sl_order.get('id'):
-                            ctx.native_sl_order_id = str(sl_order['id'])
+                        if self._is_active_sl_order(sl_order):
+                            ctx.native_sl_order_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
                             ctx.transition_to(OrderState.PROTECTED, reason=f"Native SL confirmed on exchange @ {sl}")
                             add_log_message(f"[{symbol}] 🛡️ NATIVE STOP LOSS ACTIVE on exchange (ID: {ctx.native_sl_order_id}, Price: {sl:.4f})")
                         else:
@@ -1233,12 +1271,12 @@ class PrimeSignalBot:
                 else:
                     min_paper_cost = 50.0 if is_inr else 1.0
                     cur_sym = "₹" if is_inr else "$"
-                    collateral = pos_size * entry_price
-                    if collateral <= self._dry_run_balance_usdt:
-                        self._dry_run_balance_usdt -= collateral
+                    collateral_equity_curr = pos_size * entry_price * (conversion_rate if is_inr else 1.0)
+                    if collateral_equity_curr <= self._dry_run_balance_usdt:
+                        self._dry_run_balance_usdt -= collateral_equity_curr
                         order = {'id': f'MOCK_SELL_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
                     elif self._dry_run_balance_usdt >= min_paper_cost:
-                        pos_size = self._dry_run_balance_usdt / entry_price
+                        pos_size = self._dry_run_balance_usdt / (entry_price * (conversion_rate if is_inr else 1.0))
                         self._dry_run_balance_usdt = 0.0
                         order = {'id': f'MOCK_SELL_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
                     else:
@@ -1256,8 +1294,8 @@ class PrimeSignalBot:
                     if self.has_keys and not Config.PAPER_TRADING:
                         ctx.transition_to(OrderState.SL_PLACEMENT_PENDING, reason="Submitting native SL to exchange")
                         sl_order = await self.execution.place_native_stop_loss(symbol, 'buy', filled_amount, sl)
-                        if sl_order and sl_order.get('id'):
-                            ctx.native_sl_order_id = str(sl_order['id'])
+                        if self._is_active_sl_order(sl_order):
+                            ctx.native_sl_order_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
                             ctx.transition_to(OrderState.PROTECTED, reason=f"Native SL confirmed on exchange @ {sl}")
                             add_log_message(f"[{symbol}] 🛡️ NATIVE STOP LOSS ACTIVE on exchange (ID: {ctx.native_sl_order_id}, Price: {sl:.4f})")
                         else:
@@ -1485,7 +1523,9 @@ class PrimeSignalBot:
                                     tp1_order = await self.execution.place_order('sell', 'market', tp1_size, symbol=symbol, is_exit_order=True)
                                     tp1_success = self._is_truthy_fill(tp1_order)
                                 else:
-                                    self._dry_run_balance_usdt += tp1_size * curr_price
+                                    is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+                                    rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
+                                    self._dry_run_balance_usdt += tp1_size * curr_price * (rate if is_inr else 1.0)
                                     tp1_success = True
                                 if tp1_success:
                                     if self.has_keys and not Config.PAPER_TRADING:
@@ -1573,7 +1613,9 @@ class PrimeSignalBot:
                                     tp2_order = await self.execution.place_order('sell', 'market', tp2_size, symbol=symbol, is_exit_order=True)
                                     tp2_success = self._is_truthy_fill(tp2_order)
                                 else:
-                                    self._dry_run_balance_usdt += tp2_size * curr_price
+                                    is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+                                    rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
+                                    self._dry_run_balance_usdt += tp2_size * curr_price * (rate if is_inr else 1.0)
                                     tp2_success = True
                                 if tp2_success:
                                     if self.has_keys and not Config.PAPER_TRADING:
@@ -1720,7 +1762,10 @@ class PrimeSignalBot:
                                     tp1_order = await self.execution.place_order('buy', 'market', tp1_size, symbol=symbol, is_exit_order=True)
                                     tp1_success = self._is_truthy_fill(tp1_order)
                                 else:
-                                    self._dry_run_balance_usdt += tp1_size * (self.entry_price[symbol] - curr_price) + (tp1_size * self.entry_price[symbol])
+                                    is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+                                    rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
+                                    tp1_proceeds_usdt = tp1_size * (self.entry_price[symbol] - curr_price) + (tp1_size * self.entry_price[symbol])
+                                    self._dry_run_balance_usdt += tp1_proceeds_usdt * (rate if is_inr else 1.0)
                                     tp1_success = True
                                 if tp1_success:
                                     if self.has_keys and not Config.PAPER_TRADING:
@@ -1808,7 +1853,10 @@ class PrimeSignalBot:
                                     tp2_order = await self.execution.place_order('buy', 'market', tp2_size, symbol=symbol, is_exit_order=True)
                                     tp2_success = self._is_truthy_fill(tp2_order)
                                 else:
-                                    self._dry_run_balance_usdt += tp2_size * (self.entry_price[symbol] - curr_price) + (tp2_size * self.entry_price[symbol])
+                                    is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+                                    rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
+                                    tp2_proceeds_usdt = tp2_size * (self.entry_price[symbol] - curr_price) + (tp2_size * self.entry_price[symbol])
+                                    self._dry_run_balance_usdt += tp2_proceeds_usdt * (rate if is_inr else 1.0)
                                     tp2_success = True
                                 if tp2_success:
                                     if self.has_keys and not Config.PAPER_TRADING:
@@ -2097,8 +2145,8 @@ class PrimeSignalBot:
         # It's cancelled. Safe to place new one.
         try:
             new_sl = await self.execution.place_native_stop_loss(symbol, side, size, stop_price)
-            if new_sl and new_sl.get('id'):
-                new_sl_id = str(new_sl['id'])
+            if self._is_active_sl_order(new_sl):
+                new_sl_id = str(new_sl['id']) if isinstance(new_sl, dict) else str(new_sl.exchange_order_id)
                 # Verify the replacement is active!
                 new_status = await self.execution.verify_order_active(symbol, new_sl_id)
                 if new_status == 'ACTIVE':
@@ -2161,16 +2209,18 @@ class PrimeSignalBot:
                     await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
                     ctx.native_sl_order_id = None
 
+                is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+                rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
                 if self.position_side[symbol] == "LONG":
                     pnl_pct = (exit_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
                     pnl_usdt = actual_exit * (exit_price - self.entry_price[symbol])
                     if not self.has_keys or Config.PAPER_TRADING:
-                        self._dry_run_balance_usdt += actual_exit * exit_price
+                        self._dry_run_balance_usdt += actual_exit * exit_price * (rate if is_inr else 1.0)
                 else:
                     pnl_pct = (self.entry_price[symbol] - exit_price) / self.entry_price[symbol] * 100.0
                     pnl_usdt = actual_exit * (self.entry_price[symbol] - exit_price)
                     if not self.has_keys or Config.PAPER_TRADING:
-                        self._dry_run_balance_usdt += (actual_exit * self.entry_price[symbol]) + pnl_usdt
+                        self._dry_run_balance_usdt += ((actual_exit * self.entry_price[symbol]) + pnl_usdt) * (rate if is_inr else 1.0)
                     
                 entry_ts = self.entry_time.get(symbol, int(time.time() * 1000))
                 exit_ts = int(time.time() * 1000)
@@ -2418,6 +2468,31 @@ class PrimeSignalBot:
         msg = f"🔒 Profit locked for {symbol}! Stop Loss moved to ${self.stop_loss[symbol]:,.4f}"
         add_log_message(f"[{symbol}] {msg}")
         return True, msg
+
+    async def emergency_close_all(self) -> tuple[int, str]:
+        """
+        Emergency Kill Switch: Instantly flattens all open positions across all supported symbols.
+        Handles both live and paper trading, updates state machines, ledger, logs, and dashboard.
+        """
+        symbols_to_close = [sym for sym in Config.SUPPORTED_SYMBOLS if self.in_position.get(sym, False)]
+        if not symbols_to_close:
+            add_log_message("🚨 Emergency close requested, but no open positions were found.")
+            return 0, "No open positions to close."
+
+        add_log_message(f"🚨 EMERGENCY CLOSE ALL TRIGGERED! Closing {len(symbols_to_close)} active position(s)...")
+        closed_count = 0
+        for sym in symbols_to_close:
+            try:
+                await self.exit_position(sym, "USER_EMERGENCY_CLOSE")
+                if not self.in_position.get(sym, False):
+                    closed_count += 1
+            except Exception as e:
+                add_log_message(f"[{sym}] ⚠️ Error closing position during emergency close: {e}")
+
+        self.save_state()
+        msg = f"Successfully closed {closed_count} of {len(symbols_to_close)} position(s)."
+        add_log_message(f"🚨 EMERGENCY CLOSE ALL COMPLETED: {msg}")
+        return closed_count, msg
 
     async def shutdown(self):
         add_log_message("Shutting down exchange sessions gracefully...")

@@ -276,18 +276,20 @@ for i in range(10000):
         """Verifies dashboard API key security and hard-blocking of test trade in LIVE mode."""
         # 1. Missing DASHBOARD_SECRET -> 500
         dash_app._DASHBOARD_SECRET = ""
-        with self.assertRaises(dash_app.HTTPException) as cm:
-            await dash_app.verify_dashboard_key("any_key")
-        self.assertEqual(cm.exception.status_code, 500)
+        with patch.dict(os.environ, {"DASHBOARD_SECRET": ""}):
+            with self.assertRaises(dash_app.HTTPException) as cm:
+                await dash_app.verify_dashboard_key("any_key")
+            self.assertEqual(cm.exception.status_code, 500)
 
         # 2. Valid secret set
         dash_app._DASHBOARD_SECRET = "INSTITUTIONAL_SECRET_777"
-        with self.assertRaises(dash_app.HTTPException) as cm:
-            await dash_app.verify_dashboard_key("WRONG_KEY")
-        self.assertEqual(cm.exception.status_code, 403)
+        with patch.dict(os.environ, {"DASHBOARD_SECRET": "INSTITUTIONAL_SECRET_777"}):
+            with self.assertRaises(dash_app.HTTPException) as cm:
+                await dash_app.verify_dashboard_key("WRONG_KEY")
+            self.assertEqual(cm.exception.status_code, 403)
 
-        # Valid key succeeds without exception
-        await dash_app.verify_dashboard_key("INSTITUTIONAL_SECRET_777")
+            # Valid key succeeds without exception
+            await dash_app.verify_dashboard_key("INSTITUTIONAL_SECRET_777")
 
         # 3. Test trade in LIVE mode (Config.PAPER_TRADING = False) MUST be rejected
         Config.PAPER_TRADING = False

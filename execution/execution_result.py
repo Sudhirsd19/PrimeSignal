@@ -109,10 +109,21 @@ class ExecutionResult:
             raise KeyError(key)
         return value
 
+    @property
+    def is_order_accepted(self) -> bool:
+        """Returns True if the order was acknowledged by the exchange with an exchange order id in a valid non-error state."""
+        return self.has_exchange_order and self.state in (
+            ExecutionState.ACCEPTED,
+            ExecutionState.FILLED,
+            ExecutionState.PARTIALLY_FILLED,
+        )
+
     def __bool__(self) -> bool:
-        # Compatibility for legacy callers: only confirmed fills are truthy.
-        # ACCEPTED/UNKNOWN/CANCEL_UNKNOWN must never enter a success branch.
-        return self.is_fill_confirmed
+        # Truthy when the order was successfully executed (fill confirmed) or accepted on exchange with an order ID.
+        # Unknown, rejected, already cancelled, or unsubmitted outcomes evaluate to False.
+        if self.is_unknown or self.state in (ExecutionState.NOT_SUBMITTED, ExecutionState.REJECTED):
+            return False
+        return self.is_fill_confirmed or self.is_order_accepted
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -150,7 +161,7 @@ class ExecutionResult:
         if not isinstance(order, dict):
             return cls(
                 state=ExecutionState.EXECUTION_UNKNOWN,
-                requested_qty=float(requested_qty or 0.0),
+                requested_qty=requested_qty or 0.0,
                 client_order_id=client_order_id,
                 intent_id=intent_id,
                 venue=venue,
@@ -158,7 +169,7 @@ class ExecutionResult:
             )
 
         status = str(order.get("status") or "").lower()
-        requested = _first_number(order, ("requested_qty", "amount", "total_quantity"), float(requested_qty or 0.0))
+        requested = _first_number(order, ("requested_qty", "amount", "total_quantity"), requested_qty or 0.0)
         filled = _first_number(order, ("filled", "filled_quantity", "executedQty", "deal_quantity", "quantity"), 0.0)
         remaining = _first_number(order, ("remaining", "remaining_quantity"), max(0.0, requested - filled))
         if status in ("filled", "closed", "completed") and filled <= 0.0:
@@ -252,7 +263,7 @@ class ExecutionIntentJournal:
             "account_mode": account_mode,
             "symbol": symbol,
             "side": side,
-            "requested_qty": float(requested_qty),
+            "requested_qty": requested_qty,
             "order_role": order_role,
             "price": price,
             "created_at": time.time(),

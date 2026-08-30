@@ -27,6 +27,7 @@ class TestPhase3ExecutionQuantity(unittest.IsolatedAsyncioTestCase):
         self.bot.execution.verify_order_active = AsyncMock(return_value="ACTIVE")
         self.bot.execution.fetch_ticker_data = AsyncMock(return_value={'bid': 100.0, 'ask': 100.01, 'quoteVolume': 100000000})
         self.bot.execution.fetch_all_tickers = AsyncMock(return_value={})
+        self.bot.execution.fetch_usdt_inr_rate = AsyncMock(return_value=85.0)
         
         # Strategy & ML mocks
         self.bot.strategy = MagicMock()

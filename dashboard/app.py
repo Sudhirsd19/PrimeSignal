@@ -65,9 +65,10 @@ _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 async def verify_dashboard_key(key: Optional[str] = Depends(_api_key_header)):
     """Enforces auth for all environments. Fails closed if missing."""
-    if not _DASHBOARD_SECRET:
+    secret = os.getenv("DASHBOARD_SECRET", _DASHBOARD_SECRET)
+    if not secret:
         raise HTTPException(status_code=500, detail="CRITICAL: Dashboard secret must be set.")
-    if key != _DASHBOARD_SECRET:
+    if not key or not secrets.compare_digest(key, secret):
         raise HTTPException(status_code=403, detail="Invalid dashboard API key. Set X-API-Key header.")
 
 # Global Memory State Store
@@ -125,7 +126,10 @@ class DashboardState:
 @app.get("/", response_class=HTMLResponse)
 async def get_dashboard(request: Request):
     """Renders the main terminal dashboard page."""
-    return templates.TemplateResponse(request, "index.html", {})
+    secret = os.getenv("DASHBOARD_SECRET", _DASHBOARD_SECRET)
+    return templates.TemplateResponse(request, "index.html", {
+        "dashboard_secret": secret
+    })
 
 @app.post("/api/change_symbol", dependencies=[Depends(verify_dashboard_key)])
 async def change_symbol(req: SymbolRequest):
@@ -184,23 +188,10 @@ async def emergency_flatten():
         return {"status": "error", "message": "Bot instance is not initialized."}
     
     add_log_message("🚨 EMERGENCY FLATTEN TRIGGERED VIA DASHBOARD! Closing all open positions...")
-    results = {}
-    for sym in Config.SUPPORTED_SYMBOLS:
-        if bot_instance.in_position.get(sym):
-            pos_side = bot_instance.position_side.get(sym, 'LONG')
-            pos_size = bot_instance.position_size.get(sym, 0.0)
-            try:
-                res = await bot_instance.execution.emergency_flatten_position(sym, pos_side, pos_size, reason="USER_KILL_SWITCH")
-                results[sym] = "FLATTENED" if res else "FAILED"
-                bot_instance.in_position[sym] = False
-                ctx = bot_instance.order_state_machine.get_context(sym)
-                ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason="Manual Dashboard Kill Switch")
-            except Exception as e:
-                results[sym] = f"ERROR: {e}"
-                
+    closed_count, msg = await bot_instance.emergency_close_all()
     DashboardState.signal_light = "RED"
     DashboardState.signal_light_reason = "🚨 EMERGENCY KILL SWITCH EXECUTED: All positions flattened."
-    return {"status": "success", "message": "Emergency flatten executed.", "details": results}
+    return {"status": "success", "message": msg, "closed_count": closed_count}
 
 @app.post("/api/set_timeframe", dependencies=[Depends(verify_dashboard_key)])
 async def set_timeframe(req: TimeframeRequest):
@@ -671,10 +662,11 @@ async def get_trades():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    # AUD-P2-01 Fix: Enforce dashboard authentication before accepting financial stream
+    # AUD-P9-05: Enforce fail-closed dashboard authentication before accepting financial stream
+    secret = os.getenv("DASHBOARD_SECRET", _DASHBOARD_SECRET)
     token = websocket.query_params.get("token") or websocket.query_params.get("key") or websocket.headers.get("x-api-key")
-    if _DASHBOARD_SECRET and token != _DASHBOARD_SECRET:
-        await websocket.close(code=1008, reason="Unauthorized: Invalid or missing dashboard API key")
+    if not secret or not token or not secrets.compare_digest(token, secret):
+        await websocket.close(code=1008, reason="Unauthorized: Missing or invalid dashboard API key")
         return
     await websocket.accept()
     DashboardState.active_websockets.add(websocket)
@@ -746,6 +738,11 @@ def _build_state_payload():
             break
     if not found_coin and base_coin not in ('USDT', 'INR'):
         coindcx_bals.append({'currency': base_coin, 'available': round(float(held_qty), 6), 'locked': 0.0})
+
+    # Dynamic real-time calculation of portfolio equity
+    if bot_instance and hasattr(bot_instance, 'calculate_total_equity'):
+        if not bot_instance.has_keys or Config.PAPER_TRADING:
+            DashboardState.balance_usdt = round(bot_instance.calculate_total_equity(), 2)
 
     return {
         "latest_price": live_p,

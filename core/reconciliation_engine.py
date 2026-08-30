@@ -19,8 +19,23 @@ class ReconciliationEngine:
         self.last_reconcile_time: float = 0.0
         self.safe_mode_active: bool = False
         self.reconcile_errors: int = 0
-        self.task: Optional[asyncio.Task] = None
         self._lock: Optional[asyncio.Lock] = None
+        self.task: Optional[asyncio.Task] = None
+
+    def _is_active_sl_order(self, sl_order: Any) -> bool:
+        if sl_order is None:
+            return False
+        if isinstance(sl_order, dict):
+            oid = sl_order.get('id') or sl_order.get('orderId')
+            st = str(sl_order.get('status', '')).upper()
+            return bool(oid) and st not in ('REJECTED', 'FAILED', 'CANCELLED', 'CANCELED')
+        if hasattr(sl_order, 'is_order_accepted'):
+            return bool(sl_order.is_order_accepted)
+        if hasattr(sl_order, 'has_exchange_order'):
+            return bool(sl_order.has_exchange_order and getattr(sl_order, 'state', None) not in (
+                ExecutionState.REJECTED, ExecutionState.NOT_SUBMITTED, ExecutionState.EXECUTION_UNKNOWN
+            ))
+        return False
 
     async def start(self):
         """Starts the reconciliation engine. Performs initial sync SYNCHRONOUSLY before starting continuous loop."""
@@ -372,8 +387,8 @@ class ReconciliationEngine:
                             try:
                                 sl_side = 'sell' if self.bot.position_side[symbol] == 'LONG' else 'buy'
                                 sl_order = await exec_engine.place_native_stop_loss(symbol, sl_side, contracts, sl_price)
-                                if sl_order and sl_order.get('id'):
-                                    ctx.native_sl_order_id = str(sl_order['id'])
+                                if self._is_active_sl_order(sl_order):
+                                    ctx.native_sl_order_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
                                     ctx.transition_to(OrderState.PROTECTED, reason='Adopted position with confirmed Native SL')
                                     print(f'[RECONCILIATION] ✅ Native SL placed for adopted position {symbol} @ {sl_price}')
                                 else:
@@ -410,8 +425,8 @@ class ReconciliationEngine:
                                     self.bot.stop_loss[symbol] = sl_price
                                 try:
                                     sl_order = await exec_engine.place_native_stop_loss(symbol, sl_side, contracts, sl_price)
-                                    if sl_order and sl_order.get('id'):
-                                        ctx.native_sl_order_id = str(sl_order['id'])
+                                    if self._is_active_sl_order(sl_order):
+                                        ctx.native_sl_order_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
                                         if ctx.state not in (OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING):
                                             ctx.transition_to(OrderState.PROTECTED, reason='Reconciled and placed replacement Native SL')
                                         print(f'[RECONCILIATION] [OK] Native SL successfully placed for {symbol} @ {sl_price}')
@@ -499,8 +514,8 @@ class ReconciliationEngine:
                                 ctx.native_sl_order_id = None
                                 print(f'[RECONCILIATION] SL missing but not filled. Manual cancel or rejected? Re-protecting.')
                                 sl_order = await exec_engine.place_native_stop_loss(symbol, 'sell', self.bot.position_size[symbol], self.bot.stop_loss[symbol])
-                                if sl_order and sl_order.get('id'):
-                                    ctx.native_sl_order_id = str(sl_order['id'])
+                                if self._is_active_sl_order(sl_order):
+                                    ctx.native_sl_order_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
                                     ctx.transition_to(OrderState.PROTECTED, reason='SL re-protected')
                             else:
                                 if ctx.state not in (OrderState.PROTECTED, OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.PARTIALLY_FILLED):

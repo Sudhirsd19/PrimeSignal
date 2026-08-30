@@ -7,6 +7,7 @@ import time
 import tempfile
 import subprocess
 from pathlib import Path
+import ccxt
 
 from config import Config
 
@@ -183,6 +184,7 @@ time.sleep(10) # Wait to be killed
         bot.execution.coindcx_client = None
         bot.execution.intent_journal = ExecutionIntentJournal(path=self.journal_file)
         bot.execution.trade_client.load_markets = AsyncMock()
+        bot.execution.trade_client.fetch_order = AsyncMock(side_effect=ccxt.OrderNotFound("Order not found"))
         bot.execution.trade_client.fetch_open_orders = AsyncMock(return_value=[])
         bot.execution.trade_client.fetch_closed_orders = AsyncMock(return_value=[])
         bot.execution.trade_client.fetch_positions = AsyncMock(return_value=[])
