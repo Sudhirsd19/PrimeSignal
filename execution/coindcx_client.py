@@ -375,12 +375,25 @@ class CoinDCXClient:
 
         url = f"{self.base_url}/exchange/v1/orders/create"
         # CoinDCX conditional / stop limit order format
+        # Directional buffer for stop-limit execution (LOGIC-007 fix):
+        # Long exit (sell): Limit price placed 0.5% below stop trigger
+        # Short exit (buy): Limit price placed 0.5% above stop trigger
+        sl_buffer_pct = 0.005
+        if side.lower() == 'sell':
+            limit_price = stop_price * (1.0 - sl_buffer_pct)
+        else:
+            limit_price = stop_price * (1.0 + sl_buffer_pct)
+        
+        # Round limit price to appropriate precision based on price magnitude
+        price_dec = 2 if stop_price >= 100 else (4 if stop_price >= 1 else 8)
+        limit_price = round(limit_price, price_dec)
+
         payload = {
             "side": side.lower(),
             "order_type": "stop_limit",
             "market": market_name,
             "total_quantity": amount,
-            "price_per_unit": stop_price,
+            "price_per_unit": limit_price,
             "stop_price": stop_price,
             "timestamp": int(time.time() * 1000)
         }

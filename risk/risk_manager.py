@@ -1,6 +1,6 @@
 import math
 import os
-import threading
+import asyncio
 from config import Config
 
 class RiskManager:
@@ -8,30 +8,50 @@ class RiskManager:
         self.daily_starting_equity = None
         self.current_drawdown_pct = 0.0
         self.reserved_risk_pct = 0.0 # Atomic risk tracker for pending orders
-        self.max_correlated_risk_pct = getattr(Config, 'MAX_CORRELATED_RISK_PCT', 1.2)
-        self._lock = threading.Lock()
+        self.reserved_open_count = 0
+        self.reserved_longs_count = 0
+        self.reserved_shorts_count = 0
+        # Canonical decimal representation: 1.2% = 0.012
+        raw_cap = float(getattr(Config, 'MAX_CORRELATED_RISK_PCT', 0.012))
+        self.max_correlated_risk_pct = raw_cap / 100.0 if raw_cap > 0.2 else raw_cap
+        self._lock = asyncio.Lock()
+        # Portfolio-level lock for atomic risk reservation across concurrent entry tasks
+        self.portfolio_lock = asyncio.Lock()
 
-    def check_and_reserve_risk_atomic(self, current_open_risk_pct: float, proposed_risk_pct: float) -> bool:
+    async def check_and_reserve_risk_atomic(self, current_open_risk_pct: float, proposed_risk_pct: float, side: str = "BUY") -> bool:
         """
         Atomically checks and commits reservation in a single critical section (P0 Invariant):
-        CurrentRisk + ReservedRisk + ProposedRisk <= 1.20%
+        CurrentRisk + ReservedRisk + ProposedRisk <= max_correlated_risk_pct
         """
-        with self._lock:
+        async with self._lock:
             total_projected_risk = current_open_risk_pct + self.reserved_risk_pct + proposed_risk_pct
             if total_projected_risk > (self.max_correlated_risk_pct + 0.0001):
-                print(f"[RISK] ⛔ Portfolio risk cap breach prevented! Projected: {total_projected_risk:.2f}%, Limit: {self.max_correlated_risk_pct:.2f}%")
+                try:
+                    print(f"[RISK] ⛔ Portfolio risk cap breach prevented! Projected: {total_projected_risk*100:.2f}%, Limit: {self.max_correlated_risk_pct*100:.2f}%")
+                except Exception:
+                    print(f"[RISK] [BLOCK] Portfolio risk cap breach prevented! Projected: {total_projected_risk*100:.2f}%, Limit: {self.max_correlated_risk_pct*100:.2f}%")
                 return False
             self.reserved_risk_pct += proposed_risk_pct
+            self.reserved_open_count += 1
+            if side.upper() in ("BUY", "LONG"):
+                self.reserved_longs_count += 1
+            elif side.upper() in ("SELL", "SHORT"):
+                self.reserved_shorts_count += 1
             return True
 
-    def can_open_trade_atomic(self, current_open_risk_pct: float, proposed_risk_pct: float) -> bool:
+    async def can_open_trade_atomic(self, current_open_risk_pct: float, proposed_risk_pct: float, side: str = "BUY") -> bool:
         """Compatibility wrapper for atomic check and reserve."""
-        return self.check_and_reserve_risk_atomic(current_open_risk_pct, proposed_risk_pct)
+        return await self.check_and_reserve_risk_atomic(current_open_risk_pct, proposed_risk_pct, side=side)
 
-    def release_risk(self, risk_pct: float):
+    async def release_risk(self, risk_pct: float, side: str = "BUY"):
         """Releases reserved risk when order is confirmed filled or cancelled."""
-        with self._lock:
+        async with self._lock:
             self.reserved_risk_pct = max(0.0, self.reserved_risk_pct - risk_pct)
+            self.reserved_open_count = max(0, self.reserved_open_count - 1)
+            if side.upper() in ("BUY", "LONG"):
+                self.reserved_longs_count = max(0, self.reserved_longs_count - 1)
+            elif side.upper() in ("SELL", "SHORT"):
+                self.reserved_shorts_count = max(0, self.reserved_shorts_count - 1)
 
     def calculate_position_size(self, account_equity: float, entry_price: float, stop_loss: float) -> float:
         """

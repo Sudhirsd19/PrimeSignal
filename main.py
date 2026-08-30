@@ -99,6 +99,8 @@ class PrimeSignalBot:
         # Per-symbol locks to prevent concurrent candle processing on the same symbol
         self._candle_locks = {sym: asyncio.Lock() for sym in Config.SUPPORTED_SYMBOLS}
         self._pending_candle_evaluations = {sym: False for sym in Config.SUPPORTED_SYMBOLS}
+        # Per-symbol exit locks to prevent concurrent exit_position() calls (LOGIC-001 fix)
+        self._exit_locks = {sym: asyncio.Lock() for sym in Config.SUPPORTED_SYMBOLS}
         self._active_scan_tasks: set[asyncio.Task] = set()
         self._last_reset_date = datetime.datetime.now(datetime.timezone.utc).date()
         
@@ -625,6 +627,11 @@ class PrimeSignalBot:
             print(f"[NO TRADE] [{symbol}] Reason: {metadata.get('reason')} | {reason_str}")
             return
             
+        ctx = self.order_state_machine.get_context(symbol)
+        if ctx.is_in_flight():
+            add_log_message(f"[{symbol}] Trade skipped: Pending execution outcome ({ctx.state}).")
+            return
+            
         # Session Volume Block
         if getattr(Config, 'ENABLE_SESSION_FILTER', False) and not Config.PAPER_TRADING and is_low_volume_session:
             avg_vol = ltf_df['volume'].rolling(20).mean().iloc[-2] if len(ltf_df) > 20 else 0.0
@@ -829,355 +836,406 @@ class PrimeSignalBot:
             trade_risk_pct *= 0.5
             add_log_message(f"[{symbol}] Equity Protection: Hourly DD > 3%. Risk slashed by 50%.")
 
-        open_count, total_risk, longs_count, shorts_count = await self.get_open_positions_info()
-        max_risk_cap = getattr(Config, 'MAX_PORTFOLIO_RISK_PCT', 0.06)
-        
-        if signal == "BUY" and longs_count >= 2:
-            add_log_message(f"[{symbol}] Trade skipped: Max 2 LONG positions already open.")
-            return
-        if signal == "SELL" and shorts_count >= 2:
-            add_log_message(f"[{symbol}] Trade skipped: Max 2 SHORT positions already open.")
-            return
-        
-        # Task 10: Priority Ranking
-        priority_score = (score * 0.7) + (prob * 0.3)
-        
-        if priority_score < 3.5 and total_risk + trade_risk_pct > max_risk_cap - 0.04:
-            add_log_message(f"[{symbol}] Trade skipped: Priority score {priority_score:.1f} < 3.5. Reserving cap space.")
-            return
-        if priority_score < 4.5 and total_risk + trade_risk_pct > max_risk_cap - 0.02:
-            add_log_message(f"[{symbol}] Trade skipped: Priority score {priority_score:.1f} < 4.5. Reserving cap space.")
-            return
-        if total_risk + trade_risk_pct > max_risk_cap:
-            add_log_message(f"[{symbol}] Trade blocked: Absolute exposure limit reached.")
-            return
-        
-        
-        # Liquidity & Spread Filter
-        ticker = await self.execution.fetch_ticker_data(symbol)
-        if not ticker:
-            return
+        # ── LOGIC-002 FIX: Atomic Portfolio Risk Reservation ──
+        # Acquire portfolio lock to prevent concurrent tasks from reading stale open_count/total_risk
+        async with self.risk.portfolio_lock:
+            open_count, total_risk, longs_count, shorts_count = await self.get_open_positions_info()
+            max_open_trades = int(getattr(Config, 'MAX_OPEN_TRADES', 2))
+            max_risk_cap = float(getattr(Config, 'MAX_PORTFOLIO_RISK_PCT', 0.06))
             
-        bid = ticker.get('bid')
-        ask = ticker.get('ask')
-        vol = ticker.get('quoteVolume', 0)
+            # Account for in-flight reservations
+            effective_open_count = open_count + self.risk.reserved_open_count
+            effective_longs = longs_count + self.risk.reserved_longs_count
+            effective_shorts = shorts_count + self.risk.reserved_shorts_count
+            effective_total_risk = total_risk + self.risk.reserved_risk_pct
+
+            if effective_open_count >= max_open_trades:
+                add_log_message(f"[{symbol}] Trade skipped: Max {max_open_trades} open trades reached ({effective_open_count} active/in-flight).")
+                return
+            if signal == "BUY" and effective_longs >= 2:
+                add_log_message(f"[{symbol}] Trade skipped: Max 2 LONG positions already open/reserved ({effective_longs} in-flight).")
+                return
+            if signal == "SELL" and effective_shorts >= 2:
+                add_log_message(f"[{symbol}] Trade skipped: Max 2 SHORT positions already open/reserved ({effective_shorts} in-flight).")
+                return
+            
+            # Task 10: Priority Ranking
+            priority_score = (score * 0.7) + (prob * 0.3)
+            
+            if priority_score < 3.5 and effective_total_risk + trade_risk_pct > max_risk_cap - 0.04:
+                add_log_message(f"[{symbol}] Trade skipped: Priority score {priority_score:.1f} < 3.5. Reserving cap space.")
+                return
+            if priority_score < 4.5 and effective_total_risk + trade_risk_pct > max_risk_cap - 0.02:
+                add_log_message(f"[{symbol}] Trade skipped: Priority score {priority_score:.1f} < 4.5. Reserving cap space.")
+                return
+            if effective_total_risk + trade_risk_pct > max_risk_cap:
+                add_log_message(f"[{symbol}] Trade blocked: Absolute exposure limit reached ({effective_total_risk*100:.2f}% + {trade_risk_pct*100:.2f}% > {max_risk_cap*100:.2f}%).")
+                return
+
+            # Atomically reserve portfolio risk capacity before releasing the lock
+            risk_reserved = await self.risk.check_and_reserve_risk_atomic(total_risk, trade_risk_pct, side=signal)
+            if not risk_reserved:
+                add_log_message(f"[{symbol}] Trade blocked: Atomic risk reservation denied (concurrent limit).")
+                return
+        # Portfolio lock released here — exchange API calls proceed without holding it
+        reserved_trade_risk = trade_risk_pct  # Track for cleanup in finally block
         
-        if bid and ask and bid > 0 and ask > 0:
-            spread = (ask - bid) / ((ask + bid) / 2)
-            max_spread = 0.0015
-            if spread > max_spread:
-                add_log_message(f"[{symbol}] Rejected: High spread ({spread*100:.3f}%)")
+        try:
+            # Liquidity & Spread Filter
+            ticker = await self.execution.fetch_ticker_data(symbol)
+            if not ticker:
                 return
                 
-        min_vol = 30000000 if relaxed_used else getattr(Config, 'MIN_24H_VOL_USDT', 50000000)
-        if not Config.PAPER_TRADING and vol > 0 and vol < min_vol:
-            if symbol not in Config.SUPPORTED_SYMBOLS:
-                all_tickers = await self.execution.fetch_all_tickers()
-                is_top_20 = False
-                if all_tickers:
-                    sorted_tickers = sorted([t for t in all_tickers.values() if t.get('quoteVolume')], key=lambda x: x.get('quoteVolume', 0), reverse=True)
-                    top_20 = [t['symbol'] for t in sorted_tickers[:20]]
-                    if symbol in top_20:
-                        is_top_20 = True
-                
-                if not is_top_20:
-                    add_log_message(f"[{symbol}] Rejected: Low volume ({vol:,.0f} USDT) and not in top 20.")
-                    return
-        
-        # Slippage Check
-        live_price = ticker.get('last', entry_price)
-        if abs(live_price - entry_price) / entry_price > getattr(Config, 'MAX_SLIPPAGE_PCT', 0.002):
-            add_log_message(f"[{symbol}] Trade skipped: Slippage too high. Signal: {entry_price}, Live: {live_price}")
-            return
-        entry_price = live_price  # Execute at live price
-        
-        sl = float(metadata['stop_loss']) if metadata.get('stop_loss') is not None else (entry_price * 0.98)
-        tp = float(metadata['take_profit']) if metadata.get('take_profit') is not None else (entry_price * 1.04)
-        
-        pos_size = self.risk.calculate_position_size(current_equity, entry_price, sl)
-        pos_size = pos_size * (trade_risk_pct / (getattr(Config, 'RISK_PCT', 0.8) / 100.0))
-        
-        is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
-        
-        # ── Pre-Trade Exchange Rules & Equity Validation ──
-        is_valid, validated_pos_size, v_reason = ExchangeValidator.validate_order_intent(
-            symbol=symbol,
-            side='buy' if signal == 'BUY' else 'sell',
-            order_type='market',
-            amount=pos_size,
-            price=entry_price,
-            current_equity=current_equity,
-            is_inr=is_inr
-        )
-        if not is_valid:
-            add_log_message(f"[{symbol}] Order pre-validation REJECTED: {v_reason}")
-            return
-        pos_size = validated_pos_size
-
-        if pos_size <= 0.0:
-            return
-
-        # ── Next-Gen Proprietary Edge: Dual-Brain Adversarial AI Debate Courtroom ──
-        market_context = {
-            'cvd': metadata.get('cvd', {}),
-            'liquidation': metadata.get('liquidation', {}),
-            'ml_confidence': raw_prob,
-            'directional_ml_confidence': prob,
-            'funding_rate': fr,
-            'bb_squeeze': False,
-            'spread_pct': spread
-        }
-        debate_result = self.courtroom.conduct_debate(signal, metadata, market_context)
-        if debate_result.get('verdict') != 'APPROVED':
-            add_log_message(f"[{symbol}] ⚖️ Trade REJECTED by Dual-Brain AI Courtroom ({debate_result['conviction_pct']}% conviction): {', '.join(debate_result['prosecutor_objections'])}")
-            return
-        else:
-            add_log_message(f"[{symbol}] ⚖️ Trade APPROVED by Dual-Brain AI Courtroom ({debate_result['conviction_pct']}% conviction)!")
+            bid = ticker.get('bid')
+            ask = ticker.get('ask')
+            vol = ticker.get('quoteVolume', 0)
             
-        ctx = self.order_state_machine.get_context(symbol)
-        ctx.transition_to(OrderState.ORDER_INTENT_CREATED, reason=f"{signal} setup approved")
-        ctx.requested_qty = pos_size
-        ctx.entry_price = entry_price
-        ctx.stop_loss = sl
-        ctx.side = "LONG" if signal == "BUY" else "SHORT"
-
-        if signal == "BUY":
-            add_log_message(f"[{symbol}] Executing BUY (LONG). Size: {pos_size:.6f} | SL: {sl:.2f} | TP: {tp:.2f}")
-            order = None
-            ctx.transition_to(OrderState.ORDER_SUBMITTED, reason="BUY market order submitted")
-            if self.has_keys and not Config.PAPER_TRADING:
-                order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol)
-            else:
-                min_paper_cost = 50.0 if is_inr else 1.0
-                cur_sym = "₹" if is_inr else "$"
-                position_cost = pos_size * entry_price
-                if position_cost <= self._dry_run_balance_usdt:
-                    self._dry_run_balance_usdt -= position_cost
-                    order = {'id': f'MOCK_BUY_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
-                elif self._dry_run_balance_usdt >= min_paper_cost:
-                    pos_size = self._dry_run_balance_usdt / entry_price
-                    self._dry_run_balance_usdt = 0.0
-                    order = {'id': f'MOCK_BUY_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
-                else:
-                    add_log_message(f"[{symbol}] ⚠️ Paper trading wallet balance depleted ({cur_sym}{self._dry_run_balance_usdt:.2f}). Reset wallet to continue.")
-
-            if order:
-                filled_amount = float(order.get('amount') or pos_size)
-                fill_price = float(order.get('price') or entry_price)
-                ctx.filled_qty = filled_amount
-                ctx.fill_avg_price = fill_price
-                ctx.transition_to(OrderState.FILLED, reason="BUY fill confirmed")
-                
-                # ── NATIVE EXCHANGE STOP LOSS PLACEMENT & VERIFICATION ──
-                if self.has_keys and not Config.PAPER_TRADING:
-                    ctx.transition_to(OrderState.SL_PLACEMENT_PENDING, reason="Submitting native SL to exchange")
-                    sl_order = await self.execution.place_native_stop_loss(symbol, 'sell', filled_amount, sl)
-                    if sl_order and sl_order.get('id'):
-                        ctx.native_sl_order_id = str(sl_order['id'])
-                        ctx.transition_to(OrderState.PROTECTED, reason=f"Native SL confirmed on exchange @ {sl}")
-                        add_log_message(f"[{symbol}] 🛡️ NATIVE STOP LOSS ACTIVE on exchange (ID: {ctx.native_sl_order_id}, Price: {sl:.4f})")
-                    else:
-                        add_log_message(f"[{symbol}] 🚨 NATIVE SL PLACEMENT FAILED! Executing EMERGENCY FLATTEN.")
-                        await self.execution.emergency_flatten_position(symbol, 'BUY', filled_amount, reason="NATIVE_SL_FAILED")
-                        ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason="Native SL placement failed")
-                        self.in_position[symbol] = False
+            if bid and ask and bid > 0 and ask > 0:
+                spread = (ask - bid) / ((ask + bid) / 2)
+                max_spread = 0.0015
+                if spread > max_spread:
+                    add_log_message(f"[{symbol}] Rejected: High spread ({spread*100:.3f}%)")
+                    return
+                    
+            min_vol = 30000000 if relaxed_used else getattr(Config, 'MIN_24H_VOL_USDT', 50000000)
+            if not Config.PAPER_TRADING and vol > 0 and vol < min_vol:
+                if symbol not in Config.SUPPORTED_SYMBOLS:
+                    all_tickers = await self.execution.fetch_all_tickers()
+                    is_top_20 = False
+                    if all_tickers:
+                        sorted_tickers = sorted([t for t in all_tickers.values() if t.get('quoteVolume')], key=lambda x: x.get('quoteVolume', 0), reverse=True)
+                        top_20 = [t['symbol'] for t in sorted_tickers[:20]]
+                        if symbol in top_20:
+                            is_top_20 = True
+                    
+                    if not is_top_20:
+                        add_log_message(f"[{symbol}] Rejected: Low volume ({vol:,.0f} USDT) and not in top 20.")
                         return
-                else:
-                    ctx.transition_to(OrderState.PROTECTED, reason="Virtual SL activated")
+            
+            # Slippage Check
+            live_price = ticker.get('last', entry_price)
+            if abs(live_price - entry_price) / entry_price > getattr(Config, 'MAX_SLIPPAGE_PCT', 0.002):
+                add_log_message(f"[{symbol}] Trade skipped: Slippage too high. Signal: {entry_price}, Live: {live_price}")
+                return
+            entry_price = live_price  # Execute at live price
+            
+            sl = float(metadata['stop_loss']) if metadata.get('stop_loss') is not None else (entry_price * 0.98)
+            tp = float(metadata['take_profit']) if metadata.get('take_profit') is not None else (entry_price * 1.04)
+            
+            pos_size = self.risk.calculate_position_size(current_equity, entry_price, sl)
+            pos_size = pos_size * (trade_risk_pct / (getattr(Config, 'RISK_PCT', 0.8) / 100.0))
+            
+            is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+            
+            # ── Pre-Trade Exchange Rules & Equity Validation ──
+            is_valid, validated_pos_size, v_reason = ExchangeValidator.validate_order_intent(
+                symbol=symbol,
+                side='buy' if signal == 'BUY' else 'sell',
+                order_type='market',
+                amount=pos_size,
+                price=entry_price,
+                current_equity=current_equity,
+                is_inr=is_inr
+            )
+            if not is_valid:
+                add_log_message(f"[{symbol}] Order pre-validation REJECTED: {v_reason}")
+                return
+            pos_size = validated_pos_size
 
-                self.in_position[symbol] = True
-                self.position_side[symbol] = "LONG"
-                self.entry_price[symbol] = fill_price
-                self.stop_loss[symbol] = sl
-                
-                # Initialize TP levels for LONG (3-Stage: TP1 50%, TP2 30%, Runner 20%)
-                self.partial_tp_taken[symbol] = False
-                self.tp2_taken[symbol] = False
-                r_amount = abs(sl - fill_price)
-                fee_adj = fill_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
-                self.take_profit_1r[symbol] = float(metadata.get('tp1') or (fill_price + (1.0 * r_amount) + fee_adj))
-                self.take_profit_2r[symbol] = float(metadata.get('tp2') or (fill_price + (2.2 * r_amount) + fee_adj))
-                self.take_profit[symbol] = float(metadata.get('tp3') or (fill_price + (4.0 * r_amount) + fee_adj))
-                
-                self.highest_price_reached[symbol] = fill_price
-                self.position_size[symbol] = filled_amount
-                self.original_position_size[symbol] = filled_amount
-                self.realized_pnl[symbol] = 0.0
-                self.entry_time[symbol] = time.time() * 1000.0
-                self.last_trade_time[symbol] = time.time()
-                self.position_mode[symbol] = str(metadata.get('mode') or 'STRICT')
-                zone_id_raw = metadata.get('zone_id')
-                zone_id = str(zone_id_raw) if zone_id_raw is not None else None
-                self.last_zone_traded[symbol] = zone_id
-                if zone_id:
-                    self.traded_zones_cache[f"{symbol}_{zone_id}"] = True
-                self.trades_today += 1
-                self.global_last_trade_time = time.time()
-                if metadata.get('mode') == 'RELAXED':
-                    self.relaxed_trades_today += 1
+            if pos_size <= 0.0:
+                return
 
-                if symbol == Config.SYMBOL:
-                    DashboardState.in_position = True
-                    DashboardState.position_side = "LONG"
-                    DashboardState.entry_price = fill_price
-                    DashboardState.stop_loss = sl
-                    DashboardState.take_profit = self.take_profit[symbol]
-
-                # Record in Immutable Ledger
-                self.immutable_ledger.record_entry(
-                    symbol=symbol,
-                    side="LONG",
-                    requested_qty=pos_size,
-                    filled_qty=filled_amount,
-                    fill_price=fill_price,
-                    stop_loss=sl,
-                    tp1=self.take_profit_1r[symbol],
-                    tp2=self.take_profit_2r[symbol],
-                    runner_tp=self.take_profit[symbol],
-                    client_order_id=str(order.get('clientOrderId') or f"CLIENT_{int(time.time()*1000)}"),
-                    exchange_order_id=str(order.get('id') or ''),
-                    native_sl_id=ctx.native_sl_order_id
-                )
-
-                self.save_state()
-                # Telegram Notification with 3-Stage Target Levels
-                msg_str = (
-                    f"🟢 *BUY (LONG) {symbol}*\n"
-                    f"Mode: {metadata.get('mode', 'STRICT')}\n"
-                    f"Setup Type: {metadata.get('setup_type', 'NONE')}\n"
-                    f"Entry: {fill_price:.4f}\n"
-                    f"Stop Loss: {sl:.4f} (NATIVE PROTECTED)\n"
-                    f"TP1 (1.0R - 50%): {self.take_profit_1r[symbol]:.4f}\n"
-                    f"TP2 (2.2R - 30%): {self.take_profit_2r[symbol]:.4f}\n"
-                    f"Runner (4.0R - 20%): {self.take_profit[symbol]:.4f}\n"
-                    f"Position Size: {filled_amount:.6f}\n"
-                    f"Confidence: {prob:.2f}\n"
-                    f"Reason: {metadata.get('reason', 'N/A')}"
-                )
-                add_log_message(f"[{symbol}] " + msg_str.replace('\n', ' | '))
-                await self.notifier.send_message(msg_str)
+            # ── Next-Gen Proprietary Edge: Dual-Brain Adversarial AI Debate Courtroom ──
+            market_context = {
+                'cvd': metadata.get('cvd', {}),
+                'liquidation': metadata.get('liquidation', {}),
+                'ml_confidence': raw_prob,
+                'directional_ml_confidence': prob,
+                'funding_rate': fr,
+                'bb_squeeze': False,
+                'spread_pct': spread
+            }
+            debate_result = self.courtroom.conduct_debate(signal, metadata, market_context)
+            if debate_result.get('verdict') != 'APPROVED':
+                add_log_message(f"[{symbol}] ⚖️ Trade REJECTED by Dual-Brain AI Courtroom ({debate_result['conviction_pct']}% conviction): {', '.join(debate_result['prosecutor_objections'])}")
+                return
             else:
-                ctx.transition_to(OrderState.REJECTED, reason="Exchange rejected BUY order")
-                add_log_message(f"[{symbol}] ❌ BUY order REJECTED (check execution logs)")
-                await self.notifier.send_message(f"⚠️ BUY REJECTED {symbol}: Order failed to execute. Check bot logs.")
+                add_log_message(f"[{symbol}] ⚖️ Trade APPROVED by Dual-Brain AI Courtroom ({debate_result['conviction_pct']}% conviction)!")
                 
-        elif signal == "SELL":
-            order = None
-            ctx.transition_to(OrderState.ORDER_SUBMITTED, reason="SELL market order submitted")
-            if self.has_keys and not Config.PAPER_TRADING:
-                order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol)
-            else:
-                min_paper_cost = 50.0 if is_inr else 1.0
-                cur_sym = "₹" if is_inr else "$"
-                collateral = pos_size * entry_price
-                if collateral <= self._dry_run_balance_usdt:
-                    self._dry_run_balance_usdt -= collateral
-                    order = {'id': f'MOCK_SELL_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
-                elif self._dry_run_balance_usdt >= min_paper_cost:
-                    pos_size = self._dry_run_balance_usdt / entry_price
-                    self._dry_run_balance_usdt = 0.0
-                    order = {'id': f'MOCK_SELL_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
-                else:
-                    add_log_message(f"[{symbol}] ⚠️ Paper trading wallet balance depleted ({cur_sym}{self._dry_run_balance_usdt:.2f}). Reset wallet to continue.")
-                
-            if order:
-                filled_amount = float(order.get('amount') or pos_size)
-                fill_price = float(order.get('price') or entry_price)
-                ctx.filled_qty = filled_amount
-                ctx.fill_avg_price = fill_price
-                ctx.transition_to(OrderState.FILLED, reason="SELL fill confirmed")
-                
-                # ── NATIVE EXCHANGE STOP LOSS PLACEMENT & VERIFICATION ──
+            ctx = self.order_state_machine.get_context(symbol)
+            ctx.transition_to(OrderState.ORDER_INTENT_CREATED, reason=f"{signal} setup approved")
+            ctx.requested_qty = pos_size
+            ctx.entry_price = entry_price
+            ctx.stop_loss = sl
+            ctx.side = "LONG" if signal == "BUY" else "SHORT"
+
+            if signal == "BUY":
+                add_log_message(f"[{symbol}] Executing BUY (LONG). Size: {pos_size:.6f} | SL: {sl:.2f} | TP: {tp:.2f}")
+                order = None
+                ctx.transition_to(OrderState.ORDER_SUBMITTED, reason="BUY market order submitted")
                 if self.has_keys and not Config.PAPER_TRADING:
-                    ctx.transition_to(OrderState.SL_PLACEMENT_PENDING, reason="Submitting native SL to exchange")
-                    sl_order = await self.execution.place_native_stop_loss(symbol, 'buy', filled_amount, sl)
-                    if sl_order and sl_order.get('id'):
-                        ctx.native_sl_order_id = str(sl_order['id'])
-                        ctx.transition_to(OrderState.PROTECTED, reason=f"Native SL confirmed on exchange @ {sl}")
-                        add_log_message(f"[{symbol}] 🛡️ NATIVE STOP LOSS ACTIVE on exchange (ID: {ctx.native_sl_order_id}, Price: {sl:.4f})")
-                    else:
-                        add_log_message(f"[{symbol}] 🚨 NATIVE SL PLACEMENT FAILED! Executing EMERGENCY FLATTEN.")
-                        await self.execution.emergency_flatten_position(symbol, 'SELL', filled_amount, reason="NATIVE_SL_FAILED")
-                        ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason="Native SL placement failed")
-                        self.in_position[symbol] = False
-                        return
+                    try:
+                        order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol)
+                    except Exception as net_err:
+                        add_log_message(f"[{symbol}] ⚠️ Network error during BUY submission ({net_err}). Transitioning to EXECUTION_UNKNOWN (LOGIC-003 fix).")
+                        ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason=f"Submission NetworkError: {net_err}")
+                        order = None
+                        # P1: Expedite reconciliation to minimize blind window
+                        if hasattr(self, 'reconciliation'):
+                            asyncio.create_task(self.reconciliation._reconcile_live_broker_state())
                 else:
-                    ctx.transition_to(OrderState.PROTECTED, reason="Virtual SL activated")
+                    min_paper_cost = 50.0 if is_inr else 1.0
+                    cur_sym = "₹" if is_inr else "$"
+                    position_cost = pos_size * entry_price
+                    if position_cost <= self._dry_run_balance_usdt:
+                        self._dry_run_balance_usdt -= position_cost
+                        order = {'id': f'MOCK_BUY_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
+                    elif self._dry_run_balance_usdt >= min_paper_cost:
+                        pos_size = self._dry_run_balance_usdt / entry_price
+                        self._dry_run_balance_usdt = 0.0
+                        order = {'id': f'MOCK_BUY_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
+                    else:
+                        add_log_message(f"[{symbol}] ⚠️ Paper trading wallet balance depleted ({cur_sym}{self._dry_run_balance_usdt:.2f}). Reset wallet to continue.")
 
-                self.in_position[symbol] = True
-                self.position_side[symbol] = "SHORT"
-                self.entry_price[symbol] = fill_price
-                self.stop_loss[symbol] = sl
-                
-                # Initialize TP levels for SHORT (3-Stage: TP1 50%, TP2 30%, Runner 20%)
-                self.partial_tp_taken[symbol] = False
-                self.tp2_taken[symbol] = False
-                r_amount = abs(sl - fill_price)
-                fee_adj = fill_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
-                self.take_profit_1r[symbol] = float(metadata.get('tp1') or (fill_price - (1.0 * r_amount) - fee_adj))
-                self.take_profit_2r[symbol] = float(metadata.get('tp2') or (fill_price - (2.2 * r_amount) - fee_adj))
-                self.take_profit[symbol] = float(metadata.get('tp3') or (fill_price - (4.0 * r_amount) - fee_adj))
-                
-                self.lowest_price_reached[symbol] = fill_price
-                self.position_size[symbol] = filled_amount
-                self.original_position_size[symbol] = filled_amount
-                self.realized_pnl[symbol] = 0.0
-                self.entry_time[symbol] = time.time() * 1000.0
-                self.last_trade_time[symbol] = time.time()
-                self.position_mode[symbol] = str(metadata.get('mode') or 'STRICT')
-                zone_id_raw = metadata.get('zone_id')
-                zone_id = str(zone_id_raw) if zone_id_raw is not None else None
-                self.last_zone_traded[symbol] = zone_id
-                if zone_id:
-                    self.traded_zones_cache[f"{symbol}_{zone_id}"] = True
-                self.trades_today += 1
-                self.global_last_trade_time = time.time()
-                if metadata.get('mode') == 'RELAXED':
-                    self.relaxed_trades_today += 1
-                
-                if symbol == Config.SYMBOL:
-                    DashboardState.in_position = True
-                    DashboardState.position_side = "SHORT"
-                    DashboardState.entry_price = fill_price
-                    DashboardState.stop_loss = sl
-                    DashboardState.take_profit = self.take_profit[symbol]
+                if order:
+                    filled_amount = float(order.get('amount') or pos_size)
+                    fill_price = float(order.get('price') or entry_price)
+                    ctx.filled_qty = filled_amount
+                    ctx.fill_avg_price = fill_price
+                    ctx.transition_to(OrderState.FILLED, reason="BUY fill confirmed")
+                    
+                    # ── NATIVE EXCHANGE STOP LOSS PLACEMENT & VERIFICATION ──
+                    if self.has_keys and not Config.PAPER_TRADING:
+                        ctx.transition_to(OrderState.SL_PLACEMENT_PENDING, reason="Submitting native SL to exchange")
+                        sl_order = await self.execution.place_native_stop_loss(symbol, 'sell', filled_amount, sl)
+                        if sl_order and sl_order.get('id'):
+                            ctx.native_sl_order_id = str(sl_order['id'])
+                            ctx.transition_to(OrderState.PROTECTED, reason=f"Native SL confirmed on exchange @ {sl}")
+                            add_log_message(f"[{symbol}] 🛡️ NATIVE STOP LOSS ACTIVE on exchange (ID: {ctx.native_sl_order_id}, Price: {sl:.4f})")
+                        else:
+                            add_log_message(f"[{symbol}] 🚨 NATIVE SL PLACEMENT FAILED! Executing EMERGENCY FLATTEN.")
+                            await self.execution.emergency_flatten_position(symbol, 'BUY', filled_amount, reason="NATIVE_SL_FAILED")
+                            ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason="Native SL placement failed")
+                            self.in_position[symbol] = False
+                            return
+                    else:
+                        ctx.transition_to(OrderState.PROTECTED, reason="Virtual SL activated")
 
-                # Record in Immutable Ledger
-                self.immutable_ledger.record_entry(
-                    symbol=symbol,
-                    side="SHORT",
-                    requested_qty=pos_size,
-                    filled_qty=filled_amount,
-                    fill_price=fill_price,
-                    stop_loss=sl,
-                    tp1=self.take_profit_1r[symbol],
-                    tp2=self.take_profit_2r[symbol],
-                    runner_tp=self.take_profit[symbol],
-                    client_order_id=str(order.get('clientOrderId') or f"CLIENT_{int(time.time()*1000)}"),
-                    exchange_order_id=str(order.get('id') or ''),
-                    native_sl_id=ctx.native_sl_order_id
-                )
+                    self.in_position[symbol] = True
+                    self.position_side[symbol] = "LONG"
+                    self.entry_price[symbol] = fill_price
+                    self.stop_loss[symbol] = sl
+                    
+                    # Initialize TP levels for LONG (3-Stage: TP1 50%, TP2 30%, Runner 20%)
+                    # LOGIC-004 fix: Authoritative recalculation based on actual execution fill_price
+                    self.partial_tp_taken[symbol] = False
+                    self.tp2_taken[symbol] = False
+                    r_amount = abs(sl - fill_price)
+                    fee_adj = fill_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
+                    self.take_profit_1r[symbol] = float(fill_price + (1.0 * r_amount) + fee_adj)
+                    self.take_profit_2r[symbol] = float(fill_price + (2.2 * r_amount) + fee_adj)
+                    self.take_profit[symbol] = float(fill_price + (4.0 * r_amount) + fee_adj)
+                    
+                    self.highest_price_reached[symbol] = fill_price
+                    self.position_size[symbol] = filled_amount
+                    self.original_position_size[symbol] = filled_amount
+                    self.realized_pnl[symbol] = 0.0
+                    self.entry_time[symbol] = time.time() * 1000.0
+                    self.last_trade_time[symbol] = time.time()
+                    self.position_mode[symbol] = str(metadata.get('mode') or 'STRICT')
+                    zone_id_raw = metadata.get('zone_id')
+                    zone_id = str(zone_id_raw) if zone_id_raw is not None else None
+                    self.last_zone_traded[symbol] = zone_id
+                    if zone_id:
+                        self.traded_zones_cache[f"{symbol}_{zone_id}"] = True
+                    self.trades_today += 1
+                    self.global_last_trade_time = time.time()
+                    if metadata.get('mode') == 'RELAXED':
+                        self.relaxed_trades_today += 1
 
-                self.save_state()
-                msg_str = (
-                    f"🔴 *SELL (SHORT) {symbol}*\n"
-                    f"Mode: {metadata.get('mode', 'STRICT')}\n"
-                    f"Setup Type: {metadata.get('setup_type', 'NONE')}\n"
-                    f"Entry: {fill_price:.4f}\n"
-                    f"Stop Loss: {sl:.4f} (NATIVE PROTECTED)\n"
-                    f"TP1 (1.0R - 50%): {self.take_profit_1r[symbol]:.4f}\n"
-                    f"TP2 (2.2R - 30%): {self.take_profit_2r[symbol]:.4f}\n"
-                    f"Runner (4.0R - 20%): {self.take_profit[symbol]:.4f}\n"
-                    f"Position Size: {filled_amount:.6f}\n"
-                    f"Confidence: {prob:.2f}\n"
-                    f"Reason: {metadata.get('reason', 'N/A')}"
-                )
-                add_log_message(f"[{symbol}] " + msg_str.replace('\n', ' | '))
-                await self.notifier.send_message(msg_str)
-            else:
-                ctx.transition_to(OrderState.REJECTED, reason="Exchange rejected SELL order")
-                add_log_message(f"[{symbol}] ❌ SELL order REJECTED (check execution logs)")
-                await self.notifier.send_message(f"⚠️ SELL REJECTED {symbol}: Order failed to execute. Check logs.")
+                    if symbol == Config.SYMBOL:
+                        DashboardState.in_position = True
+                        DashboardState.position_side = "LONG"
+                        DashboardState.entry_price = fill_price
+                        DashboardState.stop_loss = sl
+                        DashboardState.take_profit = self.take_profit[symbol]
+
+                    # Record in Immutable Ledger
+                    self.immutable_ledger.record_entry(
+                        symbol=symbol,
+                        side="LONG",
+                        requested_qty=pos_size,
+                        filled_qty=filled_amount,
+                        fill_price=fill_price,
+                        stop_loss=sl,
+                        tp1=self.take_profit_1r[symbol],
+                        tp2=self.take_profit_2r[symbol],
+                        runner_tp=self.take_profit[symbol],
+                        client_order_id=str(order.get('clientOrderId') or f"CLIENT_{int(time.time()*1000)}"),
+                        exchange_order_id=str(order.get('id') or ''),
+                        native_sl_id=ctx.native_sl_order_id
+                    )
+
+                    self.save_state()
+                    # Telegram Notification with 3-Stage Target Levels
+                    msg_str = (
+                        f"🟢 *BUY (LONG) {symbol}*\n"
+                        f"Mode: {metadata.get('mode', 'STRICT')}\n"
+                        f"Setup Type: {metadata.get('setup_type', 'NONE')}\n"
+                        f"Entry: {fill_price:.4f}\n"
+                        f"Stop Loss: {sl:.4f} (NATIVE PROTECTED)\n"
+                        f"TP1 (1.0R - 50%): {self.take_profit_1r[symbol]:.4f}\n"
+                        f"TP2 (2.2R - 30%): {self.take_profit_2r[symbol]:.4f}\n"
+                        f"Runner (4.0R - 20%): {self.take_profit[symbol]:.4f}\n"
+                        f"Position Size: {filled_amount:.6f}\n"
+                        f"Confidence: {prob:.2f}\n"
+                        f"Reason: {metadata.get('reason', 'N/A')}"
+                    )
+                    add_log_message(f"[{symbol}] " + msg_str.replace('\n', ' | '))
+                    await self.notifier.send_message(msg_str)
+                else:
+                    if ctx.state != OrderState.EXECUTION_UNKNOWN:
+                        ctx.transition_to(OrderState.REJECTED, reason="Exchange rejected BUY order")
+                    add_log_message(f"[{symbol}] ❌ BUY order REJECTED or UNKNOWN (check execution logs)")
+                    await self.notifier.send_message(f"⚠️ BUY REJECTED {symbol}: Order failed to execute. Check execution logs.")
+                    
+            elif signal == "SELL":
+                order = None
+                ctx.transition_to(OrderState.ORDER_SUBMITTED, reason="SELL market order submitted")
+                if self.has_keys and not Config.PAPER_TRADING:
+                    try:
+                        order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol)
+                    except Exception as net_err:
+                        add_log_message(f"[{symbol}] ⚠️ Network error during SELL submission ({net_err}). Transitioning to EXECUTION_UNKNOWN (LOGIC-003 fix).")
+                        ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason=f"Submission NetworkError: {net_err}")
+                        order = None
+                        # P1: Expedite reconciliation to minimize blind window
+                        if hasattr(self, 'reconciliation'):
+                            asyncio.create_task(self.reconciliation._reconcile_live_broker_state())
+                else:
+                    min_paper_cost = 50.0 if is_inr else 1.0
+                    cur_sym = "₹" if is_inr else "$"
+                    collateral = pos_size * entry_price
+                    if collateral <= self._dry_run_balance_usdt:
+                        self._dry_run_balance_usdt -= collateral
+                        order = {'id': f'MOCK_SELL_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
+                    elif self._dry_run_balance_usdt >= min_paper_cost:
+                        pos_size = self._dry_run_balance_usdt / entry_price
+                        self._dry_run_balance_usdt = 0.0
+                        order = {'id': f'MOCK_SELL_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
+                    else:
+                        add_log_message(f"[{symbol}] ⚠️ Paper trading wallet balance depleted ({cur_sym}{self._dry_run_balance_usdt:.2f}). Reset wallet to continue.")
+                    
+                if order:
+                    filled_amount = float(order.get('amount') or pos_size)
+                    fill_price = float(order.get('price') or entry_price)
+                    ctx.filled_qty = filled_amount
+                    ctx.fill_avg_price = fill_price
+                    ctx.transition_to(OrderState.FILLED, reason="SELL fill confirmed")
+                    
+                    # ── NATIVE EXCHANGE STOP LOSS PLACEMENT & VERIFICATION ──
+                    if self.has_keys and not Config.PAPER_TRADING:
+                        ctx.transition_to(OrderState.SL_PLACEMENT_PENDING, reason="Submitting native SL to exchange")
+                        sl_order = await self.execution.place_native_stop_loss(symbol, 'buy', filled_amount, sl)
+                        if sl_order and sl_order.get('id'):
+                            ctx.native_sl_order_id = str(sl_order['id'])
+                            ctx.transition_to(OrderState.PROTECTED, reason=f"Native SL confirmed on exchange @ {sl}")
+                            add_log_message(f"[{symbol}] 🛡️ NATIVE STOP LOSS ACTIVE on exchange (ID: {ctx.native_sl_order_id}, Price: {sl:.4f})")
+                        else:
+                            add_log_message(f"[{symbol}] 🚨 NATIVE SL PLACEMENT FAILED! Executing EMERGENCY FLATTEN.")
+                            await self.execution.emergency_flatten_position(symbol, 'SELL', filled_amount, reason="NATIVE_SL_FAILED")
+                            ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason="Native SL placement failed")
+                            self.in_position[symbol] = False
+                            return
+                    else:
+                        ctx.transition_to(OrderState.PROTECTED, reason="Virtual SL activated")
+
+                    self.in_position[symbol] = True
+                    self.position_side[symbol] = "SHORT"
+                    self.entry_price[symbol] = fill_price
+                    self.stop_loss[symbol] = sl
+                    
+                    # Initialize TP levels for SHORT (3-Stage: TP1 50%, TP2 30%, Runner 20%)
+                    # LOGIC-004 fix: Authoritative recalculation based on actual execution fill_price
+                    self.partial_tp_taken[symbol] = False
+                    self.tp2_taken[symbol] = False
+                    r_amount = abs(sl - fill_price)
+                    fee_adj = fill_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
+                    self.take_profit_1r[symbol] = float(fill_price - (1.0 * r_amount) - fee_adj)
+                    self.take_profit_2r[symbol] = float(fill_price - (2.2 * r_amount) - fee_adj)
+                    self.take_profit[symbol] = float(fill_price - (4.0 * r_amount) - fee_adj)
+                    
+                    self.lowest_price_reached[symbol] = fill_price
+                    self.position_size[symbol] = filled_amount
+                    self.original_position_size[symbol] = filled_amount
+                    self.realized_pnl[symbol] = 0.0
+                    self.entry_time[symbol] = time.time() * 1000.0
+                    self.last_trade_time[symbol] = time.time()
+                    self.position_mode[symbol] = str(metadata.get('mode') or 'STRICT')
+                    zone_id_raw = metadata.get('zone_id')
+                    zone_id = str(zone_id_raw) if zone_id_raw is not None else None
+                    self.last_zone_traded[symbol] = zone_id
+                    if zone_id:
+                        self.traded_zones_cache[f"{symbol}_{zone_id}"] = True
+                    self.trades_today += 1
+                    self.global_last_trade_time = time.time()
+                    if metadata.get('mode') == 'RELAXED':
+                        self.relaxed_trades_today += 1
+                    
+                    if symbol == Config.SYMBOL:
+                        DashboardState.in_position = True
+                        DashboardState.position_side = "SHORT"
+                        DashboardState.entry_price = fill_price
+                        DashboardState.stop_loss = sl
+                        DashboardState.take_profit = self.take_profit[symbol]
+
+                    # Record in Immutable Ledger
+                    self.immutable_ledger.record_entry(
+                        symbol=symbol,
+                        side="SHORT",
+                        requested_qty=pos_size,
+                        filled_qty=filled_amount,
+                        fill_price=fill_price,
+                        stop_loss=sl,
+                        tp1=self.take_profit_1r[symbol],
+                        tp2=self.take_profit_2r[symbol],
+                        runner_tp=self.take_profit[symbol],
+                        client_order_id=str(order.get('clientOrderId') or f"CLIENT_{int(time.time()*1000)}"),
+                        exchange_order_id=str(order.get('id') or ''),
+                        native_sl_id=ctx.native_sl_order_id
+                    )
+
+                    self.save_state()
+                    msg_str = (
+                        f"🔴 *SELL (SHORT) {symbol}*\n"
+                        f"Mode: {metadata.get('mode', 'STRICT')}\n"
+                        f"Setup Type: {metadata.get('setup_type', 'NONE')}\n"
+                        f"Entry: {fill_price:.4f}\n"
+                        f"Stop Loss: {sl:.4f} (NATIVE PROTECTED)\n"
+                        f"TP1 (1.0R - 50%): {self.take_profit_1r[symbol]:.4f}\n"
+                        f"TP2 (2.2R - 30%): {self.take_profit_2r[symbol]:.4f}\n"
+                        f"Runner (4.0R - 20%): {self.take_profit[symbol]:.4f}\n"
+                        f"Position Size: {filled_amount:.6f}\n"
+                        f"Confidence: {prob:.2f}\n"
+                        f"Reason: {metadata.get('reason', 'N/A')}"
+                    )
+                    add_log_message(f"[{symbol}] " + msg_str.replace('\n', ' | '))
+                    await self.notifier.send_message(msg_str)
+                else:
+                    if ctx.state != OrderState.EXECUTION_UNKNOWN:
+                        ctx.transition_to(OrderState.REJECTED, reason="Exchange rejected SELL order")
+                    add_log_message(f"[{symbol}] ❌ SELL order REJECTED or UNKNOWN (check execution logs)")
+                    await self.notifier.send_message(f"⚠️ SELL REJECTED {symbol}: Order failed to execute. Check logs.")
+        finally:
+            # P0: EXPOSURE LEAK FIX - Do NOT release reserved risk if execution outcome is unknown!
+            ctx = self.order_state_machine.get_context(symbol)
+            if reserved_trade_risk > 0.0:
+                if ctx.is_in_flight():
+                    add_log_message(f"[{symbol}] ⚠️ Risk reservation RETAINED due to unknown execution outcome ({ctx.state}).")
+                    ctx.reserved_risk_pct = reserved_trade_risk
+                    ctx.reserved_risk_side = signal
+                else:
+                    await self.risk.release_risk(reserved_trade_risk, side=signal)
 
     async def run_live_risk_monitor(self):
         while True:
@@ -1335,6 +1393,11 @@ class PrimeSignalBot:
                                     if profit_lock_sl > self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = profit_lock_sl
                                         if symbol == Config.SYMBOL: DashboardState.stop_loss = profit_lock_sl
+                                        
+                                    # P1 / LOGIC-015 fix: Resize Native SL to match remaining position quantity
+                                    ctx = self.order_state_machine.get_context(symbol)
+                                    if self.has_keys and not Config.PAPER_TRADING and ctx.native_sl_order_id:
+                                        await self._resize_native_sl_safe(symbol, 'sell', self.position_size[symbol], self.stop_loss[symbol])
                                     
                                     orig_sz = self.original_position_size.get(symbol, self.position_size[symbol] * 2) or (self.position_size[symbol] * 2)
                                     runner_guar = max(0.0, self.position_size[symbol] * (self.stop_loss[symbol] - self.entry_price[symbol]))
@@ -1413,6 +1476,11 @@ class PrimeSignalBot:
                                     if self.take_profit_1r[symbol] > self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = self.take_profit_1r[symbol]
                                         if symbol == Config.SYMBOL: DashboardState.stop_loss = self.take_profit_1r[symbol]
+                                        
+                                    # P1 / LOGIC-015 fix: Resize Native SL to match remaining position quantity
+                                    ctx = self.order_state_machine.get_context(symbol)
+                                    if self.has_keys and not Config.PAPER_TRADING and ctx.native_sl_order_id:
+                                        await self._resize_native_sl_safe(symbol, 'sell', self.position_size[symbol], self.stop_loss[symbol])
                                     
                                     orig_sz = self.original_position_size.get(symbol, self.position_size[symbol] / 0.20) or (self.position_size[symbol] / 0.20)
                                     runner_guar = max(0.0, self.position_size[symbol] * (self.stop_loss[symbol] - self.entry_price[symbol]))
@@ -1554,6 +1622,11 @@ class PrimeSignalBot:
                                     if profit_lock_sl < self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = profit_lock_sl
                                         if symbol == Config.SYMBOL: DashboardState.stop_loss = profit_lock_sl
+                                        
+                                    # P1 / LOGIC-015 fix: Resize Native SL to match remaining position quantity
+                                    ctx = self.order_state_machine.get_context(symbol)
+                                    if self.has_keys and not Config.PAPER_TRADING and ctx.native_sl_order_id:
+                                        await self._resize_native_sl_safe(symbol, 'buy', self.position_size[symbol], self.stop_loss[symbol])
                                     
                                     orig_sz = self.original_position_size.get(symbol, self.position_size[symbol] * 2) or (self.position_size[symbol] * 2)
                                     runner_guar = max(0.0, self.position_size[symbol] * (self.entry_price[symbol] - self.stop_loss[symbol]))
@@ -1632,6 +1705,11 @@ class PrimeSignalBot:
                                     if self.take_profit_1r[symbol] < self.stop_loss[symbol]:
                                         self.stop_loss[symbol] = self.take_profit_1r[symbol]
                                         if symbol == Config.SYMBOL: DashboardState.stop_loss = self.take_profit_1r[symbol]
+                                        
+                                    # P1 / LOGIC-015 fix: Resize Native SL to match remaining position quantity
+                                    ctx = self.order_state_machine.get_context(symbol)
+                                    if self.has_keys and not Config.PAPER_TRADING and ctx.native_sl_order_id:
+                                        await self._resize_native_sl_safe(symbol, 'buy', self.position_size[symbol], self.stop_loss[symbol])
                                     
                                     orig_sz = self.original_position_size.get(symbol, self.position_size[symbol] / 0.20) or (self.position_size[symbol] / 0.20)
                                     runner_guar = max(0.0, self.position_size[symbol] * (self.entry_price[symbol] - self.stop_loss[symbol]))
@@ -1836,174 +1914,243 @@ class PrimeSignalBot:
         await self.notifier.send_message(f"🚨 *EMERGENCY CLOSE ALL EXECUTED*\nClosed {count} positions. Force-cleared {fail_count}.")
         return count + fail_count, msg
 
-    async def exit_position(self, symbol, reason):
-        # FIX #5: Better fallback for exit_price to avoid 0.0 values
-        exit_price = self.pipeline.latest_prices.get(symbol) or self.entry_price[symbol]
-        if exit_price <= 0 or not exit_price:
-            exit_price = self.entry_price[symbol]
-        add_log_message(f"[{symbol}] Exiting at price: {exit_price:.4f} (reason: {reason})")
-        order = None
-        if self.has_keys and not Config.PAPER_TRADING:
-            side = 'buy' if self.position_side[symbol] == 'SHORT' else 'sell'
-            order = await self.execution.place_order(side, 'market', self.position_size[symbol], price=exit_price, is_exit_order=True, symbol=symbol)
-        else:
-            order = {'id': 'MOCK_EXIT_ORDER_ID', 'price': exit_price, 'status': 'filled'}
+    async def _resize_native_sl_safe(self, symbol, side, size, stop_price):
+        """Safely resizes a native SL, ensuring no duplicate orders are left (P1)."""
+        ctx = self.order_state_machine.get_context(symbol)
+        if not ctx.native_sl_order_id:
+            return
             
-        if order:
-            ctx = self.order_state_machine.get_context(symbol)
-            # Cancel active native stop loss if it exists on exchange
-            if ctx.native_sl_order_id and self.has_keys and not Config.PAPER_TRADING:
-                await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
-                ctx.native_sl_order_id = None
-
-            if self.position_side[symbol] == "LONG":
-                pnl_pct = (exit_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
-                pnl_usdt = self.position_size[symbol] * (exit_price - self.entry_price[symbol])
-                if not self.has_keys or Config.PAPER_TRADING:
-                    self._dry_run_balance_usdt += self.position_size[symbol] * exit_price
-            else:
-                pnl_pct = (self.entry_price[symbol] - exit_price) / self.entry_price[symbol] * 100.0
-                pnl_usdt = self.position_size[symbol] * (self.entry_price[symbol] - exit_price)
-                if not self.has_keys or Config.PAPER_TRADING:
-                    self._dry_run_balance_usdt += (self.position_size[symbol] * self.entry_price[symbol]) + pnl_usdt
-                
-            entry_ts = self.entry_time.get(symbol, int(time.time() * 1000))
-            exit_ts = int(time.time() * 1000)
-            duration_secs = max(0, int((exit_ts - entry_ts) / 1000))
-            mins = duration_secs // 60
-            secs = duration_secs % 60
-            duration_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
-            
-            entry_dt_str = datetime.datetime.fromtimestamp(entry_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
-            exit_dt_str = datetime.datetime.fromtimestamp(exit_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
-
-            trade_record = {
-                'symbol': symbol,
-                'side': self.position_side[symbol],
-                'entry_price': self.entry_price[symbol],
-                'exit_price': exit_price,
-                'pnl_usdt': round(pnl_usdt, 4),
-                'pnl_pct': round(pnl_pct, 2),
-                'entry_time': entry_ts,
-                'exit_time': exit_ts,
-                'entry_time_str': entry_dt_str,
-                'exit_time_str': exit_dt_str,
-                'duration': duration_str,
-                'reason': reason
-            }
-            DashboardState.trades.append(trade_record)
-            if len(DashboardState.trades) > 500:
-                DashboardState.trades = DashboardState.trades[-500:]
-
-            # State Machine closure
-            ctx.transition_to(OrderState.CLOSED, reason=reason)
-            ctx.closed_at = time.time()
-            ctx.exit_reason = reason
-            ctx.realized_pnl = pnl_usdt
-
-            # Record in Immutable Ledger
-            self.immutable_ledger.record_exit(
-                symbol=symbol,
-                side=self.position_side[symbol],
-                exit_qty=self.position_size[symbol],
-                exit_price=exit_price,
-                entry_price=self.entry_price[symbol],
-                realized_pnl=pnl_usdt,
-                pnl_pct=pnl_pct,
-                exit_reason=reason,
-                client_order_id=f"EXIT_{int(time.time()*1000)}",
-                exchange_order_id=str(order.get('id') or '')
-            )
-
-            # Persist to data/trade_logs.jsonl on disk
-            try:
-                log_dir = Path("data")
-                log_dir.mkdir(parents=True, exist_ok=True)
-                log_file = log_dir / "trade_logs.jsonl"
-                with open(log_file, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(trade_record) + "\n")
-            except Exception as e:
-                print(f"[LOG] Failed to write trade log: {e}")
-
-            # Task 5: Cluster Loss Tracking (Evaluates Total Trade Return = Realized TP1/TP2 Cash + Final Runner PnL)
-            total_trade_pnl = self.realized_pnl.get(symbol, 0.0) + pnl_usdt
-            is_loss = total_trade_pnl < -0.01
-            self.trade_history.append(1 if is_loss else 0)
-            if len(self.trade_history) > 6:
-                self.trade_history.pop(0)
-                
-            if len(self.trade_history) >= 2 and all(self.trade_history[-2:]):
-                cooldown_secs = 900.0 if Config.PAPER_TRADING else 3600.0
-                cooldown_mins = int(cooldown_secs // 60)
-                cooldown_time = time.time() + cooldown_secs
-                self.cluster_loss_pause_until = cooldown_time
-                self.global_pause_until = cooldown_time  # Update global pause
-                add_log_message(f"🚨 [SAFETY] 2 consecutive losses. Trading paused globally for {cooldown_mins} minutes.")
-                self.trade_history.clear()
-            elif len(self.trade_history) >= 6 and sum(self.trade_history) >= 3:
-                self.cluster_risk_penalty = True
-                add_log_message("🚨 [SAFETY] 3 losses in last 6 trades. Global risk slashed by 50%.")
-            else:
-                self.cluster_risk_penalty = False
-
-            # Update relaxed cooldowns
-            pos_mode = self.position_mode.get(symbol, 'STRICT')
-            if pos_mode == 'RELAXED' and is_loss:
-                self.relaxed_losses += 1
-                if self.relaxed_losses >= 2:
-                    self.relaxed_disabled_until = time.time() + 7200.0
-                    add_log_message("🚨 [SAFETY] 2 relaxed losses. Relaxed mode disabled for 2 hours.")
-                    self.relaxed_losses = 0
-            elif not is_loss and pos_mode == 'RELAXED':
-                self.relaxed_losses = 0
-
-            now_exit = time.time()
-            self.last_exit_time[symbol] = now_exit
-            self.last_trade_time[symbol] = now_exit
-            self.global_last_trade_time = now_exit
-
-            # Check if previous position had taken profit (TP1 / TP2 / full TP exit)
-            had_tp = self.partial_tp_taken[symbol] or self.tp2_taken[symbol] or reason in ["TAKE_PROFIT_RUNNER", "TRAILING_STOP", "TP2_HIT"]
-            if had_tp and pnl_usdt >= 0:
-                tp_cooldown_mins = getattr(Config, 'TP_EXIT_COOLDOWN_MINUTES', 25)
-                self.tp_cooldown_until[symbol] = now_exit + (tp_cooldown_mins * 60.0)
-                add_log_message(f"[{symbol}] 🎯 Profit secured from wave ({reason}). Harvest cooldown active for {tp_cooldown_mins}m to prevent chasing exhausted move.")
-            else:
-                post_exit_mins = getattr(Config, 'POST_EXIT_COOLDOWN_MINUTES', 15)
-                self.tp_cooldown_until[symbol] = now_exit + (post_exit_mins * 60.0)
-                add_log_message(f"[{symbol}] ⏱️ Position closed. Post-exit cooldown active for {post_exit_mins}m.")
-
+        old_sl_id = ctx.native_sl_order_id
+        cancel_success = await self.execution.cancel_order_safe(symbol, old_sl_id)
+        
+        # Verify if it's actually cancelled
+        status = await self.execution.verify_order_active(symbol, old_sl_id)
+        
+        if status in ('ACTIVE', 'UNKNOWN'):
+            add_log_message(f"[{symbol}] 🚨 CRITICAL: Failed to cancel old Native SL {old_sl_id}. Status: {status}. Will NOT place a duplicate.")
+            add_log_message(f"[{symbol}] 🚨 Triggering emergency flatten to prevent double-execution.")
+            await self.execution.emergency_flatten_position(symbol, 'BUY' if self.position_side[symbol] == 'LONG' else 'SELL', self.position_size[symbol], reason="SL_RESIZE_FAILED")
+            ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason=f"SL resize cancellation failed ({status})")
             self.in_position[symbol] = False
             self.position_side[symbol] = "HOLD"
             self.position_size[symbol] = 0.0
-            self.original_position_size[symbol] = 0.0
-            self.realized_pnl[symbol] = 0.0
-            self.entry_price[symbol] = 0.0
-            self.stop_loss[symbol] = 0.0
-            self.take_profit[symbol] = 0.0
-            self.take_profit_1r[symbol] = 0.0
-            self.take_profit_2r[symbol] = 0.0
-            self.partial_tp_taken[symbol] = False
-            self.tp2_taken[symbol] = False
+            if hasattr(self, 'reconciliation'):
+                await self.reconciliation._release_reserved_risk(ctx)
+            return
 
-            if symbol in DashboardState.active_positions:
-                new_positions = DashboardState.active_positions.copy()
-                del new_positions[symbol]
-                DashboardState.active_positions = new_positions
+        # It's cancelled. Safe to place new one.
+        try:
+            new_sl = await self.execution.place_native_stop_loss(symbol, side, size, stop_price)
+            if new_sl and new_sl.get('id'):
+                new_sl_id = str(new_sl['id'])
+                # Verify the replacement is active!
+                new_status = await self.execution.verify_order_active(symbol, new_sl_id)
+                if new_status == 'ACTIVE':
+                    ctx.native_sl_order_id = new_sl_id
+                    add_log_message(f"[{symbol}] 🛡️ Native SL replaced for remaining size {size} @ {stop_price:.4f}")
+                else:
+                    ctx.native_sl_order_id = None
+                    add_log_message(f"[{symbol}] 🚨 Native SL replaced but verification failed ({new_status}). Resorting to virtual SL.")
+            else:
+                ctx.native_sl_order_id = None
+        except Exception as e:
+            add_log_message(f"[{symbol}] 🚨 Exception placing new native SL: {e}")
+            ctx.native_sl_order_id = None
 
-            if symbol == Config.SYMBOL:
-                DashboardState.in_position = False
-                DashboardState.position_side = "HOLD"
-                DashboardState.entry_price = 0.0
-                DashboardState.stop_loss = 0.0
-                DashboardState.take_profit = 0.0
-                DashboardState.current_pnl_pct = 0.0
-                DashboardState.current_pnl_usdt = 0.0
+    async def exit_position(self, symbol, reason):
+        # LOGIC-001 fix: Idempotent exit serialization via per-symbol exit lock
+        if symbol not in self._exit_locks:
+            self._exit_locks[symbol] = asyncio.Lock()
 
-            self.save_state()
-            await self.notifier.send_message(
-                f"🚨 *{symbol} CLOSED ({reason})*\nExit Price: {exit_price:.2f}\nPnL: {pnl_pct:+.2f}% ({pnl_usdt:+.2f} USDT)"
-            )
+        if self._exit_locks[symbol].locked():
+            add_log_message(f"[{symbol}] ⚠️ Exit already in progress (locked). Skipping duplicate exit request ({reason}).")
+            return
+
+        async with self._exit_locks[symbol]:
+            if not self.in_position.get(symbol, False):
+                add_log_message(f"[{symbol}] Position already closed or not in position. Skipping exit ({reason}).")
+                return
+
+            ctx = self.order_state_machine.get_context(symbol)
+            ctx.transition_to(OrderState.CLOSING, reason=f"Exit initiated: {reason}")
+
+            # FIX #5: Better fallback for exit_price to avoid 0.0 values
+            exit_price = self.pipeline.latest_prices.get(symbol) or self.entry_price[symbol]
+            if exit_price <= 0 or not exit_price:
+                exit_price = self.entry_price[symbol]
+            add_log_message(f"[{symbol}] Exiting at price: {exit_price:.4f} (reason: {reason})")
+            if self.has_keys and not Config.PAPER_TRADING:
+                side = 'buy' if self.position_side[symbol] == 'SHORT' else 'sell'
+                try:
+                    order = await self.execution.place_order(side, 'market', self.position_size[symbol], price=exit_price, is_exit_order=True, symbol=symbol)
+                except Exception as e:
+                    add_log_message(f"[{symbol}] 🚨 Exception during exit execution: {e}. Transitioning to EXIT_UNKNOWN.")
+                    ctx.transition_to(OrderState.EXIT_UNKNOWN, reason=f"Exit NetworkError: {e}")
+                    order = None
+                    if hasattr(self, 'reconciliation'):
+                        asyncio.create_task(self.reconciliation._reconcile_live_broker_state())
+            else:
+                order = {'id': 'MOCK_EXIT_ORDER_ID', 'price': exit_price, 'status': 'filled'}
+                
+            if order:
+                # Cancel active native stop loss if it exists on exchange
+                if ctx.native_sl_order_id and self.has_keys and not Config.PAPER_TRADING:
+                    await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
+                    ctx.native_sl_order_id = None
+
+                if self.position_side[symbol] == "LONG":
+                    pnl_pct = (exit_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
+                    pnl_usdt = self.position_size[symbol] * (exit_price - self.entry_price[symbol])
+                    if not self.has_keys or Config.PAPER_TRADING:
+                        self._dry_run_balance_usdt += self.position_size[symbol] * exit_price
+                else:
+                    pnl_pct = (self.entry_price[symbol] - exit_price) / self.entry_price[symbol] * 100.0
+                    pnl_usdt = self.position_size[symbol] * (self.entry_price[symbol] - exit_price)
+                    if not self.has_keys or Config.PAPER_TRADING:
+                        self._dry_run_balance_usdt += (self.position_size[symbol] * self.entry_price[symbol]) + pnl_usdt
+                    
+                entry_ts = self.entry_time.get(symbol, int(time.time() * 1000))
+                exit_ts = int(time.time() * 1000)
+                duration_secs = max(0, int((exit_ts - entry_ts) / 1000))
+                mins = duration_secs // 60
+                secs = duration_secs % 60
+                duration_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
+                
+                entry_dt_str = datetime.datetime.fromtimestamp(entry_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
+                exit_dt_str = datetime.datetime.fromtimestamp(exit_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
+
+                trade_record = {
+                    'symbol': symbol,
+                    'side': self.position_side[symbol],
+                    'entry_price': self.entry_price[symbol],
+                    'exit_price': exit_price,
+                    'pnl_usdt': round(pnl_usdt, 4),
+                    'pnl_pct': round(pnl_pct, 2),
+                    'entry_time': entry_ts,
+                    'exit_time': exit_ts,
+                    'entry_time_str': entry_dt_str,
+                    'exit_time_str': exit_dt_str,
+                    'duration': duration_str,
+                    'reason': reason
+                }
+                DashboardState.trades.append(trade_record)
+                if len(DashboardState.trades) > 500:
+                    DashboardState.trades = DashboardState.trades[-500:]
+
+                # State Machine closure
+                ctx.transition_to(OrderState.CLOSED, reason=reason)
+                ctx.closed_at = time.time()
+                ctx.exit_reason = reason
+                ctx.realized_pnl = pnl_usdt
+
+                # Record in Immutable Ledger
+                self.immutable_ledger.record_exit(
+                    symbol=symbol,
+                    side=self.position_side[symbol],
+                    exit_qty=self.position_size[symbol],
+                    exit_price=exit_price,
+                    entry_price=self.entry_price[symbol],
+                    realized_pnl=pnl_usdt,
+                    pnl_pct=pnl_pct,
+                    exit_reason=reason,
+                    client_order_id=f"EXIT_{int(time.time()*1000)}",
+                    exchange_order_id=str(order.get('id', '')) if isinstance(order, dict) else ""
+                )
+
+                # Persist to data/trade_logs.jsonl on disk
+                try:
+                    log_dir = Path("data")
+                    log_dir.mkdir(parents=True, exist_ok=True)
+                    log_file = log_dir / "trade_logs.jsonl"
+                    with open(log_file, "a", encoding="utf-8") as f:
+                        f.write(json.dumps(trade_record) + "\n")
+                except Exception as e:
+                    print(f"[LOG] Failed to write trade log: {e}")
+
+                # Task 5: Cluster Loss Tracking (Evaluates Total Trade Return = Realized TP1/TP2 Cash + Final Runner PnL)
+                total_trade_pnl = self.realized_pnl.get(symbol, 0.0) + pnl_usdt
+                is_loss = total_trade_pnl < -0.01
+                self.trade_history.append(1 if is_loss else 0)
+                if len(self.trade_history) > 6:
+                    self.trade_history.pop(0)
+                    
+                if len(self.trade_history) >= 2 and all(self.trade_history[-2:]):
+                    cooldown_secs = 900.0 if Config.PAPER_TRADING else 3600.0
+                    cooldown_mins = int(cooldown_secs // 60)
+                    cooldown_time = time.time() + cooldown_secs
+                    self.cluster_loss_pause_until = cooldown_time
+                    self.global_pause_until = cooldown_time  # Update global pause
+                    add_log_message(f"🚨 [SAFETY] 2 consecutive losses. Trading paused globally for {cooldown_mins} minutes.")
+                    self.trade_history.clear()
+                elif len(self.trade_history) >= 6 and sum(self.trade_history) >= 3:
+                    self.cluster_risk_penalty = True
+                    add_log_message("🚨 [SAFETY] 3 losses in last 6 trades. Global risk slashed by 50%.")
+                else:
+                    self.cluster_risk_penalty = False
+
+                # Update relaxed cooldowns
+                pos_mode = self.position_mode.get(symbol, 'STRICT')
+                if pos_mode == 'RELAXED' and is_loss:
+                    self.relaxed_losses += 1
+                    if self.relaxed_losses >= 2:
+                        self.relaxed_disabled_until = time.time() + 7200.0
+                        add_log_message("🚨 [SAFETY] 2 relaxed losses. Relaxed mode disabled for 2 hours.")
+                        self.relaxed_losses = 0
+                elif not is_loss and pos_mode == 'RELAXED':
+                    self.relaxed_losses = 0
+
+                now_exit = time.time()
+                self.last_exit_time[symbol] = now_exit
+                self.last_trade_time[symbol] = now_exit
+                self.global_last_trade_time = now_exit
+
+                # Check if previous position had taken profit (TP1 / TP2 / full TP exit)
+                had_tp = self.partial_tp_taken[symbol] or self.tp2_taken[symbol] or reason in ["TAKE_PROFIT_RUNNER", "TRAILING_STOP", "TP2_HIT"]
+                if had_tp and pnl_usdt >= 0:
+                    tp_cooldown_mins = getattr(Config, 'TP_EXIT_COOLDOWN_MINUTES', 25)
+                    self.tp_cooldown_until[symbol] = now_exit + (tp_cooldown_mins * 60.0)
+                    add_log_message(f"[{symbol}] 🎯 Profit secured from wave ({reason}). Harvest cooldown active for {tp_cooldown_mins}m to prevent chasing exhausted move.")
+                else:
+                    post_exit_mins = getattr(Config, 'POST_EXIT_COOLDOWN_MINUTES', 15)
+                    self.tp_cooldown_until[symbol] = now_exit + (post_exit_mins * 60.0)
+                    add_log_message(f"[{symbol}] ⏱️ Position closed. Post-exit cooldown active for {post_exit_mins}m.")
+
+                self.in_position[symbol] = False
+                self.position_side[symbol] = "HOLD"
+                self.position_size[symbol] = 0.0
+                self.original_position_size[symbol] = 0.0
+                self.realized_pnl[symbol] = 0.0
+                self.entry_price[symbol] = 0.0
+                self.stop_loss[symbol] = 0.0
+                self.take_profit[symbol] = 0.0
+                self.take_profit_1r[symbol] = 0.0
+                self.take_profit_2r[symbol] = 0.0
+                self.partial_tp_taken[symbol] = False
+                self.tp2_taken[symbol] = False
+
+                if symbol in DashboardState.active_positions:
+                    new_positions = DashboardState.active_positions.copy()
+                    del new_positions[symbol]
+                    DashboardState.active_positions = new_positions
+
+                if symbol == Config.SYMBOL:
+                    DashboardState.in_position = False
+                    DashboardState.position_side = "HOLD"
+                    DashboardState.entry_price = 0.0
+                    DashboardState.stop_loss = 0.0
+                    DashboardState.take_profit = 0.0
+                    DashboardState.current_pnl_pct = 0.0
+                    DashboardState.current_pnl_usdt = 0.0
+
+                self.save_state()
+                await self.notifier.send_message(
+                    f"🚨 *{symbol} CLOSED ({reason})*\nExit Price: {exit_price:.2f}\nPnL: {pnl_pct:+.2f}% ({pnl_usdt:+.2f} USDT)"
+                )
+            else:
+                # LOGIC-001 fix: If exchange rejected exit order, revert context to PROTECTED so position can be retried
+                if ctx.state != OrderState.EXECUTION_UNKNOWN:
+                    ctx.transition_to(OrderState.PROTECTED, reason=f"Exit order rejected on exchange: {reason}")
+                add_log_message(f"[{symbol}] ❌ Exit order REJECTED or UNKNOWN. Position remains active locally.")
 
     async def change_bot_symbol(self, new_symbol):
         if new_symbol not in Config.SUPPORTED_SYMBOLS:

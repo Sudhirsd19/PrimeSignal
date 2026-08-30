@@ -306,12 +306,19 @@ class ExecutionEngine:
                 print(f"[EXECUTION] Trade failed (Insufficient Funds): {e}")
                 break
             except ccxt.InvalidOrder as e:
+                # P1 Idempotency Fix: Duplicate order ID means the previous attempt succeeded!
+                err_str = str(e).lower()
+                if 'duplicate' in err_str or 'client order id' in err_str or 'already exists' in err_str:
+                    print(f"[EXECUTION] Duplicate clientOrderId detected ({e}). Assuming order succeeded!")
+                    if len(args) > 3 and isinstance(args[-1], dict) and 'clientOrderId' in args[-1]:
+                        # Optional: Fetch order status here, but for now just raise NetworkError to trigger EXECUTION_UNKNOWN
+                        raise ccxt.NetworkError(f"Duplicate clientOrderId indicates execution success but state unknown: {e}")
                 print(f"[EXECUTION] Trade failed (Invalid Order): {e}")
                 break
-            except (ccxt.NetworkError, ccxt.RateLimitExceeded) as e:
+            except (ccxt.NetworkError, ccxt.RateLimitExceeded, ccxt.RequestTimeout) as e:
                 if attempt == retries:
                     print(f"[EXECUTION] API failed after {retries} attempts. Final Error: {e}")
-                    raise e
+                    raise ccxt.NetworkError(f"API Failed completely: {e}") # Force exception
                 sleep_time = delay * (2 ** (attempt - 1))
                 print(f"[EXECUTION] API error ({e}). Retrying in {sleep_time:.1f}s (Attempt {attempt}/{retries})...")
                 await asyncio.sleep(sleep_time)
@@ -389,28 +396,39 @@ class ExecutionEngine:
             print(f"[NATIVE SL ERROR] Failed to place exchange stop loss: {e}")
         return None
 
-    async def verify_order_active(self, symbol: str, order_id: str) -> bool:
+    async def verify_order_active(self, symbol: str, order_id: str) -> str:
         """Verifies if an order is actively resting on the exchange."""
         if not order_id:
-            return False
+            return 'INACTIVE'
         if self.coindcx_client:
-            status_data = await self.coindcx_client.fetch_order_status(str(order_id))
-            return status_data is not None and status_data.get('status') in ('open', 'active', 'untriggered')
+            try:
+                status_data = await self.coindcx_client.fetch_order_status(str(order_id))
+                return 'ACTIVE' if (status_data is not None and status_data.get('status') in ('open', 'active', 'untriggered')) else 'INACTIVE'
+            except Exception as e:
+                print(f"[ORDER VERIFY] CoinDCX Error checking order {order_id}: {e}")
+                return 'UNKNOWN'
 
         try:
             order = await self.execute_with_retry(self.trade_client.fetch_order, order_id, symbol)
             if order and order.get('status') in ('open', 'untriggered', 'pending'):
-                return True
+                return 'ACTIVE'
+            return 'INACTIVE'
+        except ccxt.OrderNotFound:
+            return 'INACTIVE'
         except Exception as e:
             print(f"[ORDER VERIFY] Error checking order {order_id}: {e}")
-        return False
+            return 'UNKNOWN'
 
     async def cancel_order_safe(self, symbol: str, order_id: str) -> bool:
         """Safely cancels an order without throwing unhandled exceptions."""
         if not order_id:
             return True
         if self.coindcx_client:
-            return await self.coindcx_client.cancel_order(str(order_id))
+            try:
+                return await self.coindcx_client.cancel_order(str(order_id))
+            except Exception as e:
+                print(f"[EXECUTION] Warning cancelling CoinDCX order {order_id}: {e}")
+                return False
 
         try:
             await self.execute_with_retry(self.trade_client.cancel_order, order_id, symbol)

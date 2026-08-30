@@ -6,6 +6,8 @@ class OrderState(str, Enum):
     IDLE = "IDLE"
     ORDER_INTENT_CREATED = "ORDER_INTENT_CREATED"
     ORDER_SUBMITTED = "ORDER_SUBMITTED"
+    EXECUTION_UNKNOWN = "EXECUTION_UNKNOWN"
+    EXIT_UNKNOWN = "EXIT_UNKNOWN"
     ORDER_ACK = "ORDER_ACK"
     PARTIALLY_FILLED = "PARTIALLY_FILLED"
     FILLED = "FILLED"
@@ -57,6 +59,10 @@ class PositionContext:
         self.exit_reason: Optional[str] = None
         self.realized_pnl: float = 0.0
         self.history: List[Dict[str, Any]] = []
+        
+        # Risk tracking for EXECUTION_UNKNOWN exposure leak fix
+        self.reserved_risk_pct: float = 0.0
+        self.reserved_risk_side: str = "HOLD"
 
     def is_active(self) -> bool:
         """Returns True if position is currently active and not closed/idle/rejected."""
@@ -65,6 +71,10 @@ class PositionContext:
     def is_protected(self) -> bool:
         """Returns True if position has an active verified stop loss."""
         return self.state in (OrderState.PROTECTED, OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE)
+
+    def is_in_flight(self) -> bool:
+        """Returns True if an order is being submitted or its outcome is unknown. Reconciliation must not interfere."""
+        return self.state in (OrderState.ORDER_INTENT_CREATED, OrderState.ORDER_SUBMITTED, OrderState.EXECUTION_UNKNOWN, OrderState.SL_PLACEMENT_PENDING)
 
     def transition_to(self, new_state: OrderState, reason: str = "", metadata: Optional[Dict[str, Any]] = None) -> bool:
         """
