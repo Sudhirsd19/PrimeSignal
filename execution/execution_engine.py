@@ -37,7 +37,7 @@ class ExecutionEngine:
 
         # 3. CoinDCX Integration (spot only — CoinDCX has no standard futures API)
         from execution.coindcx_client import CoinDCXClient
-        self.coindcx_client = None
+        self.coindcx_client: CoinDCXClient | None = None
         if Config.COINDCX_API_KEY and Config.COINDCX_API_KEY != "your_coindcx_key_here":
             if is_futures:
                 print("[EXECUTION] CoinDCX disabled in futures mode (CoinDCX does not support futures via API).")
@@ -56,7 +56,7 @@ class ExecutionEngine:
         self._futures_initialized = False
         self.intent_journal = ExecutionIntentJournal(intent_journal_path)
         if self.coindcx_client:
-            self.coindcx_client.intent_journal = self.intent_journal
+            self.coindcx_client.intent_journal = cast(Any, self.intent_journal)
 
     def prepare_order_intent(
         self,
@@ -83,7 +83,7 @@ class ExecutionEngine:
             account_mode=account_mode,
             symbol=symbol,
             side=side.lower(),
-            requested_qty=float(amount),
+            requested_qty=amount,
             order_role=order_role,
             price=price,
         )
@@ -232,8 +232,8 @@ class ExecutionEngine:
         print(f"[FILL] Order {order_id} TIMED OUT after {timeout}s — status unknown")
         return ExecutionResult(
             state=ExecutionState.EXECUTION_UNKNOWN,
-            requested_qty=float(requested_qty or 0.0),
-            exchange_order_id=str(order_id),
+            requested_qty=requested_qty or 0.0,
+            exchange_order_id=order_id,
             client_order_id=client_order_id,
             intent_id=intent_id,
             venue="BINANCE",
@@ -470,7 +470,7 @@ class ExecutionEngine:
                     continue
                 info = order.get("info") if isinstance(order.get("info"), dict) else {}
                 candidate_id = order.get("clientOrderId") or order.get("client_order_id") or info.get("clientOrderId")
-                if candidate_id and str(candidate_id) == str(client_order_id):
+                if candidate_id and str(candidate_id) == client_order_id:
                     exchange_id = order.get("id") or order.get("orderId") or candidate_id
                     candidates[str(exchange_id)] = order
         if len(candidates) == 1:
@@ -488,16 +488,16 @@ class ExecutionEngine:
             return await result
         return result
 
-    async def execute_with_retry(self, func, *args, retries=3, delay=1.0):
+    async def execute_with_retry(self, func, *args, retries=3, delay=1.0, **kwargs):
         """
         Executes a CCXT call with exponential backoff retry logic.
         """
         for attempt in range(1, retries + 1):
             try:
                 if inspect.iscoroutinefunction(func):
-                    return await func(*args)
+                    return await func(*args, **kwargs)
                 else:
-                    return func(*args)
+                    return func(*args, **kwargs)
             except ccxt.InsufficientFunds as e:
                 print(f"[EXECUTION] Trade failed (Insufficient Funds): {e}")
                 break
@@ -520,13 +520,14 @@ class ExecutionEngine:
                 await asyncio.sleep(sleep_time)
             except ccxt.BaseError as e:
                 print(f"[EXECUTION] CCXT Error (not retryable): {type(e).__name__}: {e}")
-                break
+                raise
             except Exception as e:
                 import traceback
                 print(f"[EXECUTION] CRITICAL: Unexpected exception in {func.__name__}:")
                 print(f"[EXECUTION]   Error type: {type(e).__name__}")
                 print(f"[EXECUTION]   Error message: {e}")
                 traceback.print_exc()
+                raise
                 break
         return None
 
@@ -550,7 +551,7 @@ class ExecutionEngine:
             )
         except Exception as e:
             return ExecutionResult(
-                state=ExecutionState.NOT_SUBMITTED, requested_qty=float(amount or 0.0),
+                state=ExecutionState.NOT_SUBMITTED, requested_qty=amount or 0.0,
                 client_order_id=client_order_id, intent_id=intent_id,
                 venue="COINDCX" if self.coindcx_client else "BINANCE", error=str(e),
             )
@@ -577,9 +578,9 @@ class ExecutionEngine:
             if not self.trade_client.markets:
                 await self.trade_client.load_markets()
             amount_prec = self.trade_client.amount_to_precision(symbol, amount)
-            amount = float(amount_prec) if amount_prec is not None else float(amount)
+            amount = float(amount_prec) if amount_prec is not None else amount
             price_prec = self.trade_client.price_to_precision(symbol, stop_price)
-            stop_price = float(price_prec) if price_prec is not None else float(stop_price)
+            stop_price = float(price_prec) if price_prec is not None else stop_price
 
             params: dict[str, Any] = {
                 'stopPrice': stop_price,
@@ -617,7 +618,7 @@ class ExecutionEngine:
                 return resolved
         result = ExecutionResult(
             state=ExecutionState.EXECUTION_UNKNOWN,
-            requested_qty=float(amount or 0.0),
+            requested_qty=amount or 0.0,
             client_order_id=client_order_id,
             intent_id=intent_id,
             venue="BINANCE",
@@ -631,7 +632,7 @@ class ExecutionEngine:
         if not order_id: return False
         if self.coindcx_client:
             try:
-                status_data = await self.coindcx_client.fetch_order_status(str(order_id))
+                status_data = await self.coindcx_client.fetch_order_status(order_id)
                 if status_data and status_data.get('status') in ('filled', 'closed'):
                     return True
             except: pass
@@ -650,7 +651,7 @@ class ExecutionEngine:
             return 'INACTIVE'
         if self.coindcx_client:
             try:
-                status_data = await self.coindcx_client.fetch_order_status(str(order_id))
+                status_data = await self.coindcx_client.fetch_order_status(order_id)
                 if status_data is None:
                     return 'UNKNOWN'
                 if status_data.get('status') in ('open', 'active', 'untriggered', 'pending'):
@@ -683,12 +684,12 @@ class ExecutionEngine:
             return ExecutionResult(state=ExecutionState.ALREADY_CANCELLED, venue="BINANCE")
         if self.coindcx_client:
             try:
-                raw = await self.coindcx_client.cancel_order(str(order_id))
+                raw = await self.coindcx_client.cancel_order(order_id)
                 result = coerce_execution_result(raw, venue="COINDCX")
-                result.exchange_order_id = str(order_id)
+                result.exchange_order_id = order_id
                 if result.state != ExecutionState.CANCELLED:
                     return result
-                status_data = await self.coindcx_client.fetch_order_status(str(order_id))
+                status_data = await self.coindcx_client.fetch_order_status(order_id)
                 if status_data is None:
                     result.state = ExecutionState.CANCEL_UNKNOWN
                 elif status_data.get('status') not in ('cancelled', 'canceled', 'rejected', 'expired', 'closed'):
@@ -696,25 +697,25 @@ class ExecutionEngine:
                 return result
             except Exception as e:
                 print(f"[EXECUTION] Warning cancelling CoinDCX order {order_id}: {e}")
-                return ExecutionResult(state=ExecutionState.CANCEL_UNKNOWN, exchange_order_id=str(order_id), venue="COINDCX", error=str(e))
+                return ExecutionResult(state=ExecutionState.CANCEL_UNKNOWN, exchange_order_id=order_id, venue="COINDCX", error=str(e))
 
         try:
             await self.execute_with_retry(self.trade_client.cancel_order, order_id, symbol)
             status = await self.trade_client.fetch_order(order_id, symbol)
             if status is None:
-                return ExecutionResult(state=ExecutionState.CANCEL_UNKNOWN, exchange_order_id=str(order_id), venue="BINANCE")
-            status_name = str(status.get('status') or '').lower()
+                return ExecutionResult(state=ExecutionState.CANCEL_UNKNOWN, exchange_order_id=order_id, venue="BINANCE")
+            status_name = (status.get('status') or '').lower()
             if status_name in ('canceled', 'cancelled', 'closed', 'expired', 'rejected'):
                 print(f"[EXECUTION] Successfully cancelled order {order_id}")
-                return ExecutionResult(state=ExecutionState.CANCELLED, exchange_order_id=str(order_id), venue="BINANCE", raw=status)
-            return ExecutionResult(state=ExecutionState.CANCEL_UNKNOWN, exchange_order_id=str(order_id), venue="BINANCE", raw=status)
+                return ExecutionResult(state=ExecutionState.CANCELLED, exchange_order_id=order_id, venue="BINANCE", raw=dict(status))
+            return ExecutionResult(state=ExecutionState.CANCEL_UNKNOWN, exchange_order_id=order_id, venue="BINANCE", raw=dict(status))
         except ccxt.OrderNotFound:
-            return ExecutionResult(state=ExecutionState.ALREADY_CANCELLED, exchange_order_id=str(order_id), venue="BINANCE")
+            return ExecutionResult(state=ExecutionState.ALREADY_CANCELLED, exchange_order_id=order_id, venue="BINANCE")
         except Exception as e:
             print(f"[EXECUTION] Warning cancelling order {order_id}: {e}")
-            return ExecutionResult(state=ExecutionState.CANCEL_UNKNOWN, exchange_order_id=str(order_id), venue="BINANCE", error=str(e))
+            return ExecutionResult(state=ExecutionState.CANCEL_UNKNOWN, exchange_order_id=order_id, venue="BINANCE", error=str(e))
 
-    async def emergency_flatten_position(self, symbol: str, side: str, amount: float, reason: str = "EMERGENCY") -> dict | None:
+    async def emergency_flatten_position(self, symbol: str, side: str, amount: float, reason: str = "EMERGENCY") -> ExecutionResult:
         """Force-closes a position immediately at market to avoid unprotected risk."""
         print(f"[EMERGENCY FLATTEN] 🚨 Flattening {side.upper()} {amount} {symbol} | Reason: {reason}")
         exit_side = 'sell' if side.upper() in ('BUY', 'LONG') else 'buy'
@@ -726,3 +727,109 @@ class ExecutionEngine:
             is_exit_order=True,
             order_role="EMERGENCY"
         )
+
+    async def reconcile_intent_on_exchange(self, intent: dict[str, Any]) -> Optional[ExecutionResult]:
+        """Queries exchange to reconcile an in-flight or ambiguous intent."""
+        symbol = intent.get('symbol')
+        side = intent.get('side', 'buy')
+        qty = float(intent.get('requested_qty', 0.0))
+        client_order_id = intent.get('client_order_id')
+        intent_id = intent.get('intent_id')
+        venue = intent.get('venue', 'BINANCE')
+
+        if self.coindcx_client:
+            return await self.coindcx_client._reconcile_ambiguous_order(
+                symbol or 'BTCINR', side, qty,
+                created_after_ts=int((intent.get('created_at', time.time()) - 30) * 1000),
+                client_order_id=client_order_id,
+                intent_id=intent_id
+            )
+
+        # Binance reconciliation by clientOrderId or open orders
+        try:
+            if not self.trade_client or not symbol:
+                return None
+            open_orders = await self.execute_with_retry(self.trade_client.fetch_open_orders, symbol)
+            for o in (open_orders or []):
+                o_cid = o.get('clientOrderId') or (o.get('info') or {}).get('clientOrderId')
+                if o_cid and client_order_id and str(o_cid) == str(client_order_id):
+                    return ExecutionResult.from_exchange(o, requested_qty=qty, client_order_id=client_order_id, intent_id=intent_id, venue=venue)
+            
+            # Check recently closed/filled orders
+            closed_orders = await self.execute_with_retry(self.trade_client.fetch_closed_orders, symbol, limit=20)
+            for o in (closed_orders or []):
+                o_cid = o.get('clientOrderId') or (o.get('info') or {}).get('clientOrderId')
+                if o_cid and client_order_id and str(o_cid) == str(client_order_id):
+                    return ExecutionResult.from_exchange(o, requested_qty=qty, client_order_id=client_order_id, intent_id=intent_id, venue=venue)
+        except Exception as e:
+            print(f"[RECONCILE INTENT] Error querying exchange for intent {intent_id}: {e}")
+            return ExecutionResult(
+                state=ExecutionState.EXECUTION_UNKNOWN,
+                requested_qty=qty,
+                client_order_id=client_order_id,
+                intent_id=intent_id,
+                venue=venue,
+                error=str(e)
+            )
+
+        return None
+
+    async def replay_and_resolve_unresolved_intents(self) -> dict[str, ExecutionResult]:
+        """
+        Phase 5 Invariant: Replays and resolves all unresolved intents from journal on startup.
+        """
+        unresolved = self.intent_journal.unresolved()
+        resolutions: dict[str, ExecutionResult] = {}
+        if not unresolved:
+            return resolutions
+
+        print(f"[REPLAY] Found {len(unresolved)} unresolved intent(s) in journal. Reconciling with exchange...")
+        for intent in unresolved:
+            intent_id = intent.get('intent_id')
+            client_order_id = intent.get('client_order_id')
+            qty = float(intent.get('requested_qty', 0.0))
+            venue = intent.get('venue', 'BINANCE')
+            symbol = intent.get('symbol', Config.SYMBOL)
+            order_role = intent.get('order_role', 'ENTRY')
+            side = intent.get('side', 'buy')
+            price = intent.get('price')
+            
+            discovered = await self.reconcile_intent_on_exchange(intent)
+            if discovered is not None and not discovered.is_unknown:
+                if not discovered.raw: discovered.raw = {}
+                discovered.raw['order_role'] = order_role
+                discovered.raw['symbol'] = symbol
+                discovered.raw['side'] = side
+                discovered.raw['price'] = price
+                discovered.intent_id = intent_id
+                discovered.client_order_id = client_order_id
+                discovered.venue = venue
+                print(f"[REPLAY] Intent {intent_id} ({client_order_id}) resolved on exchange: {discovered.state.value} (Filled: {discovered.filled_qty})")
+                self.intent_journal.result(discovered)
+                resolutions[intent_id] = discovered
+            elif discovered is not None and discovered.is_unknown:
+                if not discovered.raw: discovered.raw = {}
+                discovered.raw['order_role'] = order_role
+                discovered.raw['symbol'] = symbol
+                discovered.raw['side'] = side
+                discovered.raw['price'] = price
+                discovered.intent_id = intent_id
+                discovered.client_order_id = client_order_id
+                discovered.venue = venue
+                print(f"[REPLAY] Intent {intent_id} ({client_order_id}) remains UNKNOWN due to exchange query error.")
+                resolutions[intent_id] = discovered
+            else:
+                print(f"[REPLAY] Intent {intent_id} ({client_order_id}) NOT FOUND on exchange. Marking REJECTED.")
+                rejected_res = ExecutionResult(
+                    state=ExecutionState.REJECTED,
+                    requested_qty=qty,
+                    client_order_id=client_order_id,
+                    intent_id=intent_id,
+                    venue=venue,
+                    error="Unplaced or rejected before restart; verified absent on exchange",
+                    raw={'order_role': order_role, 'symbol': symbol, 'side': side, 'price': price}
+                )
+                self.intent_journal.result(rejected_res)
+                resolutions[intent_id] = rejected_res
+
+        return resolutions

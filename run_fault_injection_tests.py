@@ -133,6 +133,10 @@ async def test_continuous_broker_reconciliation_orphan_and_ghost():
     Config.PAPER_TRADING = False
     Config.EXCHANGE_TYPE = 'futures'
     
+    bot.execution.place_native_stop_loss = AsyncMock(return_value={'id': 'SL_ORPHAN_123', 'status': 'open'})
+    bot.execution.verify_order_active = AsyncMock(return_value="ACTIVE")
+    bot.execution.emergency_flatten_position = AsyncMock()
+
     reconciler = ReconciliationEngine(bot, check_interval=1.0)
     
     # Case 1: Exchange reports open BTC position, local thinks IDLE -> Orphan adoption

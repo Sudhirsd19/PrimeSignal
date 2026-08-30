@@ -1,4 +1,6 @@
 import asyncio
+import os
+import threading
 import sys
 import uvicorn
 import time
@@ -32,6 +34,20 @@ from alerts.notifier import TelegramNotifier
 from dashboard.app import app, DashboardState, add_log_message
 
 class PrimeSignalBot:
+
+    def _extract_filled_qty(self, order, default_req: float) -> float:
+        if not order: return 0.0
+        if isinstance(order, dict):
+            val = order.get('filled', order.get('amount', default_req))
+            return float(val if val is not None else default_req)
+        return float(order.filled_qty) if order.is_fill_confirmed else 0.0
+
+    def _is_truthy_fill(self, order) -> bool:
+        if not order: return False
+        if isinstance(order, dict):
+            return str(order.get('status', '')).upper() in ('FILLED', 'PARTIALLY_FILLED')
+        return order.is_fill_confirmed
+
     def __init__(self):
         self.has_keys = Config.validate()
         
@@ -108,146 +124,203 @@ class PrimeSignalBot:
         self.pipeline.on_candle_close_callback = self.on_candle_close
 
     _STATE_FILE = Path("bot_state.json")
+    _STATE_MUTEX = threading.RLock()
+    STATE_SCHEMA_VERSION = "2.0"
 
     def save_state(self):
-        """Persist current position state to disk and Firebase Cloud DB for crash recovery."""
-        state = {
-            'in_position': self.in_position,
-            'position_side': self.position_side,
-            'entry_price': self.entry_price,
-            'stop_loss': self.stop_loss,
-            'take_profit': self.take_profit,
-            'position_size': self.position_size,
-            'entry_time': self.entry_time,
-            'highest_price_reached': self.highest_price_reached,
-            'lowest_price_reached': self.lowest_price_reached,
-            '_dry_run_balance_usdt': self._dry_run_balance_usdt,
-            'take_profit_1r': self.take_profit_1r,
-            'take_profit_2r': self.take_profit_2r,
-            'partial_tp_taken': self.partial_tp_taken,
-            'tp2_taken': self.tp2_taken,
-            'realized_pnl': self.realized_pnl,
-            'original_position_size': self.original_position_size,
-            'last_exit_time': self.last_exit_time,
-            'tp_cooldown_until': self.tp_cooldown_until,
-            'position_mode': self.position_mode,
-            'last_trade_time': self.last_trade_time,
-            'last_zone_traded': self.last_zone_traded,
-            'closed_trades': list(DashboardState.trades[-100:]),
-            'order_state_machine': self.order_state_machine.serialize_all(),
-        }
-        try:
-            self._STATE_FILE.write_text(json.dumps(state))
-        except Exception as e:
-            print(f"[STATE] Failed to save state to local file: {e}")
-            
-        try:
-            from core.firebase_manager import FirebaseManager
-            firebase = FirebaseManager()
-            if firebase.is_connected:
-                firebase.db.collection("bot_state").document("current").set(state)
-        except Exception as e:
-            print(f"[STATE] Firebase state save note: {e}")
+        """Persist current position state atomically to disk and Firebase Cloud DB for crash recovery."""
+        with self._STATE_MUTEX:
+            state = {
+                'schema_version': self.STATE_SCHEMA_VERSION,
+                'in_position': self.in_position,
+                'position_side': self.position_side,
+                'entry_price': self.entry_price,
+                'stop_loss': self.stop_loss,
+                'take_profit': self.take_profit,
+                'position_size': self.position_size,
+                'entry_time': self.entry_time,
+                'highest_price_reached': self.highest_price_reached,
+                'lowest_price_reached': self.lowest_price_reached,
+                '_dry_run_balance_usdt': self._dry_run_balance_usdt,
+                'take_profit_1r': self.take_profit_1r,
+                'take_profit_2r': self.take_profit_2r,
+                'partial_tp_taken': self.partial_tp_taken,
+                'tp2_taken': self.tp2_taken,
+                'realized_pnl': self.realized_pnl,
+                'original_position_size': self.original_position_size,
+                'last_exit_time': self.last_exit_time,
+                'tp_cooldown_until': self.tp_cooldown_until,
+                'position_mode': self.position_mode,
+                'last_trade_time': self.last_trade_time,
+                'last_zone_traded': self.last_zone_traded,
+                'closed_trades': list(DashboardState.trades[-100:]),
+                'order_state_machine': self.order_state_machine.serialize_all(),
+                'active_risk_reservations': self.risk.serialize_reservations() if hasattr(self, 'risk') else {},
+                'saved_at_ts': time.time(),
+            }
+            temp_file = self._STATE_FILE.with_name(f"{self._STATE_FILE.name}.tmp.{os.getpid()}.{time.time_ns()}")
+            try:
+                # 1. Write to temporary file in same directory
+                with open(temp_file, "w", encoding="utf-8") as f:
+                    f.write(json.dumps(state, indent=2, sort_keys=True))
+                    f.flush()
+                    os.fsync(f.fileno())
+                # 2. Atomic rename / replace
+                os.replace(temp_file, self._STATE_FILE)
+            except Exception as e:
+                print(f"[STATE] Failed to atomically save state to local file: {e}")
+                if temp_file.exists():
+                    try:
+                        temp_file.unlink()
+                    except Exception:
+                        pass
+                
+            try:
+                from core.firebase_manager import FirebaseManager
+                firebase = FirebaseManager()
+                if firebase.is_connected:
+                    firebase.db.collection("bot_state").document("current").set(state)
+            except Exception as e:
+                print(f"[STATE] Firebase state save note: {e}")
 
     def load_state(self):
         """Restore position state from Firebase Cloud DB or local disk after a restart."""
-        state = None
-        
-        # 1. Try Firebase Cloud DB first (survives Render container restarts)
-        try:
-            from core.firebase_manager import FirebaseManager
-            firebase = FirebaseManager()
-            if firebase.is_connected:
-                doc = firebase.db.collection("bot_state").document("current").get()
-                if doc.exists:
-                    state = doc.to_dict()
-                    add_log_message("[STATE] Recovered position state from Firebase Cloud DB.")
-        except Exception as e:
-            print(f"[STATE] Firebase load check: {e}")
-
-        # 2. Fallback to local file if not restored from Cloud DB
-        if not state and self._STATE_FILE.exists():
+        with self._STATE_MUTEX:
+            state = None
+            
+            # 1. Try Firebase Cloud DB first (survives Render container restarts)
             try:
-                state = json.loads(self._STATE_FILE.read_text())
+                from core.firebase_manager import FirebaseManager
+                firebase = FirebaseManager()
+                if firebase.is_connected:
+                    doc = firebase.db.collection("bot_state").document("current").get()
+                    if doc.exists:
+                        state = doc.to_dict()
+                        add_log_message("[STATE] Recovered position state from Firebase Cloud DB.")
             except Exception as e:
-                print(f"[STATE] Failed to load local state: {e}")
+                print(f"[STATE] Firebase load check: {e}")
+
+            file_exists = self._STATE_FILE.exists()
+            # 2. Fallback to local file if not restored from Cloud DB
+            if not state and file_exists:
+                try:
+                    content = self._STATE_FILE.read_text(encoding="utf-8")
+                    if not content.strip():
+                        print("[STATE] FATAL: bot_state.json exists but is empty (0 bytes).")
+                        import sys
+                        sys.exit("[CRASH_BOUNDARY] SAFE HALT: bot_state.json is empty or truncated. Manual intervention required to prevent state desync.")
+                    state = json.loads(content)
+                except json.JSONDecodeError as e:
+                    print(f"[STATE] FATAL: Corrupted local state file: {e}")
+                    import sys
+                    sys.exit("[CRASH_BOUNDARY] SAFE HALT: bot_state.json is corrupted or unreadable. Manual intervention required to prevent state desync.")
+                except Exception as e:
+                    print(f"[STATE] FATAL: Error reading state file: {e}")
+                    import sys
+                    sys.exit(f"[CRASH_BOUNDARY] SAFE HALT: {e}")
+
+            # If file existed on disk (or cloud doc existed) but state is None, non-dict, or falsy -> FAIL HALT
+            if (file_exists or state is not None) and (not isinstance(state, dict) or not state):
+                print(f"[STATE] FATAL: bot_state.json exists but contains non-dict or empty payload ({state!r}).")
+                import sys
+                sys.exit("[CRASH_BOUNDARY] SAFE HALT: bot_state.json has empty/invalid schema. Aborting to prevent silent state reset.")
+
+            if not file_exists and state is None:
+                # Genuinely first run or clean startup: state file does not exist on disk
+                self._load_trade_logs()
+                return
+
+            mandatory_keys = ['in_position', 'position_side', 'position_size', 'entry_price', 'stop_loss']
+            missing_keys = [k for k in mandatory_keys if k not in state]
+            if missing_keys:
+                print(f"[STATE] FATAL: bot_state.json missing mandatory keys: {missing_keys}")
+                import sys
+                sys.exit(f"[CRASH_BOUNDARY] SAFE HALT: bot_state.json missing mandatory fields {missing_keys}.")
+
+            # Validate nested dictionary types
+            for mkey in mandatory_keys:
+                if not isinstance(state[mkey], dict):
+                    print(f"[STATE] FATAL: bot_state.json field '{mkey}' must be a mapping.")
+                    import sys
+                    sys.exit(f"[CRASH_BOUNDARY] SAFE HALT: bot_state.json field '{mkey}' has invalid type.")
+
+            try:
+                # Helper to safely load dict state, falling back to default if new symbols were added
+                def safe_load(key, default_val):
+                    loaded_dict = state.get(key, {})
+                    if not isinstance(loaded_dict, dict):
+                        return {sym: default_val for sym in Config.SUPPORTED_SYMBOLS}
+                    return {sym: loaded_dict.get(sym, default_val) for sym in Config.SUPPORTED_SYMBOLS}
+
+                self.in_position = safe_load('in_position', False)
+                self.position_side = safe_load('position_side', 'HOLD')
+                self.entry_price = safe_load('entry_price', 0.0)
+                self.stop_loss = safe_load('stop_loss', 0.0)
+                self.take_profit = safe_load('take_profit', 0.0)
+                self.position_size = safe_load('position_size', 0.0)
+                self.entry_time = safe_load('entry_time', 0)
+                self.highest_price_reached = safe_load('highest_price_reached', 0.0)
+                self.lowest_price_reached = safe_load('lowest_price_reached', 999999.0)
+                self._dry_run_balance_usdt = state.get('_dry_run_balance_usdt', getattr(Config, 'PAPER_STARTING_BALANCE', 2000.0))
+                self.take_profit_1r = safe_load('take_profit_1r', 0.0)
+                self.take_profit_2r = safe_load('take_profit_2r', 0.0)
+                self.partial_tp_taken = safe_load('partial_tp_taken', False)
+                self.tp2_taken = safe_load('tp2_taken', False)
+                self.realized_pnl = safe_load('realized_pnl', 0.0)
+                self.original_position_size = safe_load('original_position_size', 0.0)
+                self.last_exit_time = safe_load('last_exit_time', 0)
+                self.tp_cooldown_until = safe_load('tp_cooldown_until', 0)
+                self.position_mode = safe_load('position_mode', 'STRICT')
+                self.last_trade_time = safe_load('last_trade_time', 0)
+                self.last_zone_traded = safe_load('last_zone_traded', None)
                 
-        if not state:
-            # Check if historical trades exist in data/trade_logs.jsonl
-            self._load_trade_logs()
-            return
+                # Restore closed trades history
+                saved_trades = state.get('closed_trades', [])
+                if saved_trades:
+                    DashboardState.trades = list(saved_trades)
+                    
+                # Restore Order State Machine contexts
+                if 'order_state_machine' in state:
+                    self.order_state_machine.load_all(state['order_state_machine'])
 
-        try:
-            # Helper to safely load dict state, falling back to default if new symbols were added
-            def safe_load(key, default_val):
-                loaded_dict = state.get(key, {})
-                return {sym: loaded_dict.get(sym, default_val) for sym in Config.SUPPORTED_SYMBOLS}
-
-            self.in_position = safe_load('in_position', False)
-            self.position_side = safe_load('position_side', 'HOLD')
-            self.entry_price = safe_load('entry_price', 0.0)
-            self.stop_loss = safe_load('stop_loss', 0.0)
-            self.take_profit = safe_load('take_profit', 0.0)
-            self.position_size = safe_load('position_size', 0.0)
-            self.entry_time = safe_load('entry_time', 0)
-            self.highest_price_reached = safe_load('highest_price_reached', 0.0)
-            self.lowest_price_reached = safe_load('lowest_price_reached', 999999.0)
-            self._dry_run_balance_usdt = state.get('_dry_run_balance_usdt', getattr(Config, 'PAPER_STARTING_BALANCE', 2000.0))
-            self.take_profit_1r = safe_load('take_profit_1r', 0.0)
-            self.take_profit_2r = safe_load('take_profit_2r', 0.0)
-            self.partial_tp_taken = safe_load('partial_tp_taken', False)
-            self.tp2_taken = safe_load('tp2_taken', False)
-            self.realized_pnl = safe_load('realized_pnl', 0.0)
-            self.original_position_size = safe_load('original_position_size', 0.0)
-            self.last_exit_time = safe_load('last_exit_time', 0)
-            self.tp_cooldown_until = safe_load('tp_cooldown_until', 0)
-            self.position_mode = safe_load('position_mode', 'STRICT')
-            self.last_trade_time = safe_load('last_trade_time', 0)
-            self.last_zone_traded = safe_load('last_zone_traded', None)
-            
-            # Restore closed trades history
-            saved_trades = state.get('closed_trades', [])
-            if saved_trades:
-                DashboardState.trades = list(saved_trades)
+                # Restore Durable Risk Reservations
+                if hasattr(self, 'risk') and 'active_risk_reservations' in state:
+                    self.risk.load_reservations(state['active_risk_reservations'])
                 
-            # Restore Order State Machine contexts
-            if 'order_state_machine' in state:
-                self.order_state_machine.load_all(state['order_state_machine'])
-            
-            # Sync any additional logs from data/trade_logs.jsonl
-            self._load_trade_logs()
+                # Sync any additional logs from data/trade_logs.jsonl
+                self._load_trade_logs()
 
-            # Sync to dashboard for active UI symbol
-            sym = Config.SYMBOL
-            DashboardState.in_position = self.in_position[sym]
-            DashboardState.position_side = self.position_side[sym]
-            DashboardState.entry_price = self.entry_price[sym]
-            DashboardState.stop_loss = self.stop_loss[sym]
-            DashboardState.take_profit = self.take_profit[sym]
-            DashboardState.balance_usdt = self.calculate_total_equity() if (not self.has_keys or Config.PAPER_TRADING) else self._dry_run_balance_usdt
-            
-            # Immediately populate active_positions map for UI refresh recovery
-            active_pos_map = {}
-            for s in Config.SUPPORTED_SYMBOLS:
-                if self.in_position[s]:
-                    active_pos_map[s] = {
-                        'side': self.position_side[s],
-                        'entry_price': self.entry_price[s],
-                        'stop_loss': self.stop_loss[s],
-                        'take_profit': self.take_profit[s],
-                        'position_size': self.position_size[s],
-                        'current_pnl_usdt': 0.0,
-                        'current_pnl_pct': 0.0
-                    }
-            DashboardState.active_positions = active_pos_map
+                # Sync to dashboard for active UI symbol
+                sym = Config.SYMBOL
+                DashboardState.in_position = self.in_position[sym]
+                DashboardState.position_side = self.position_side[sym]
+                DashboardState.entry_price = self.entry_price[sym]
+                DashboardState.stop_loss = self.stop_loss[sym]
+                DashboardState.take_profit = self.take_profit[sym]
+                DashboardState.balance_usdt = self.calculate_total_equity() if (not self.has_keys or Config.PAPER_TRADING) else self._dry_run_balance_usdt
+                
+                # Immediately populate active_positions map for UI refresh recovery
+                active_pos_map = {}
+                for s in Config.SUPPORTED_SYMBOLS:
+                    if self.in_position[s]:
+                        active_pos_map[s] = {
+                            'side': self.position_side[s],
+                            'entry_price': self.entry_price[s],
+                            'stop_loss': self.stop_loss[s],
+                            'take_profit': self.take_profit[s],
+                            'position_size': self.position_size[s],
+                            'current_pnl_usdt': 0.0,
+                            'current_pnl_pct': 0.0
+                        }
+                DashboardState.active_positions = active_pos_map
 
-            open_positions = sum(1 for s in Config.SUPPORTED_SYMBOLS if self.in_position[s])
-            if open_positions > 0:
-                add_log_message(f"[STATE] Recovered {open_positions} open positions into Dashboard state.")
-            else:
-                add_log_message("[STATE] State loaded — no open positions to recover.")
-        except Exception as e:
-            print(f"[STATE] Failed to process state: {e}")
+                open_positions = sum(1 for s in Config.SUPPORTED_SYMBOLS if self.in_position[s])
+                if open_positions > 0:
+                    add_log_message(f"[STATE] Recovered {open_positions} open positions into Dashboard state.")
+                else:
+                    add_log_message("[STATE] State loaded — no open positions to recover.")
+            except Exception as e:
+                print(f"[STATE] Failed to process state: {e}")
 
     def _load_trade_logs(self):
         """Read historical closed trades from data/trade_logs.jsonl into DashboardState.trades."""
@@ -516,11 +589,20 @@ class PrimeSignalBot:
         # Update balance via API if live
         if self.has_keys and not Config.PAPER_TRADING:
             balance = await self.execution.fetch_balance()
-            if balance:
-                usdt_balance = balance.get('total', {}).get('USDT', None)
-                if usdt_balance and usdt_balance > 0:
-                    DashboardState.balance_usdt = usdt_balance
-                DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
+            if balance and isinstance(balance, dict):
+                total_dict = balance.get('total', {})
+                if isinstance(total_dict, dict):
+                    if Config.COINDCX_TRADE_INR:
+                        inr_balance = total_dict.get('INR', None)
+                        if inr_balance is not None and float(inr_balance) > 0:
+                            DashboardState.balance_usdt = float(inr_balance)
+                            DashboardState.balance_currency = "INR"
+                    else:
+                        usdt_balance = total_dict.get('USDT', None)
+                        if usdt_balance is not None and float(usdt_balance) > 0:
+                            DashboardState.balance_usdt = float(usdt_balance)
+                            DashboardState.balance_currency = "USDT"
+                    DashboardState.balance_base = float(total_dict.get(Config.SYMBOL.split('/')[0], 0.0) or 0.0)
                 
         # Check drawdown circuit breakers
         current_equity = DashboardState.balance_usdt if (self.has_keys and not Config.PAPER_TRADING) else self.calculate_total_equity()
@@ -872,11 +954,16 @@ class PrimeSignalBot:
                 add_log_message(f"[{symbol}] Trade blocked: Absolute exposure limit reached ({effective_total_risk*100:.2f}% + {trade_risk_pct*100:.2f}% > {max_risk_cap*100:.2f}%).")
                 return
 
-            # Atomically reserve portfolio risk capacity before releasing the lock
-            risk_reserved = await self.risk.check_and_reserve_risk_atomic(total_risk, trade_risk_pct, side=signal)
+            # Atomically reserve portfolio risk capacity with durable reservation identity
+            reservation_id = f"RES_{symbol.replace('/', '')}_{int(time.time()*1000)}"
+            risk_reserved = await self.risk.check_and_reserve_risk_atomic(
+                total_risk, trade_risk_pct, side=signal, reservation_id=reservation_id, symbol=symbol
+            )
             if not risk_reserved:
                 add_log_message(f"[{symbol}] Trade blocked: Atomic risk reservation denied (concurrent limit).")
                 return
+            ctx = self.order_state_machine.get_context(symbol)
+            ctx.reservation_id = reservation_id
         # Portfolio lock released here — exchange API calls proceed without holding it
         reserved_trade_risk = trade_risk_pct  # Track for cleanup in finally block
         
@@ -922,11 +1009,20 @@ class PrimeSignalBot:
             sl = float(metadata['stop_loss']) if metadata.get('stop_loss') is not None else (entry_price * 0.98)
             tp = float(metadata['take_profit']) if metadata.get('take_profit') is not None else (entry_price * 1.04)
             
-            pos_size = self.risk.calculate_position_size(current_equity, entry_price, sl)
-            pos_size = pos_size * (trade_risk_pct / (getattr(Config, 'RISK_PCT', 0.8) / 100.0))
-            
             is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
-            
+            quote_curr = "USDT" if "/" in symbol and symbol.endswith("USDT") else ("INR" if is_inr else "USDT")
+            conversion_rate = float(getattr(Config, 'USDT_INR_RATE', 85.0))
+
+            pos_size = self.risk.calculate_position_size(
+                account_equity=current_equity,
+                entry_price=entry_price,
+                stop_loss=sl,
+                quote_currency=quote_curr,
+                is_inr=is_inr,
+                conversion_rate=conversion_rate,
+            )
+            pos_size = pos_size * (trade_risk_pct / (getattr(Config, 'RISK_PCT', 0.8) / 100.0))
+
             # ── Pre-Trade Exchange Rules & Equity Validation ──
             is_valid, validated_pos_size, v_reason = ExchangeValidator.validate_order_intent(
                 symbol=symbol,
@@ -935,7 +1031,9 @@ class PrimeSignalBot:
                 amount=pos_size,
                 price=entry_price,
                 current_equity=current_equity,
-                is_inr=is_inr
+                is_inr=is_inr,
+                quote_currency=quote_curr,
+                conversion_rate=conversion_rate,
             )
             if not is_valid:
                 add_log_message(f"[{symbol}] Order pre-validation REJECTED: {v_reason}")
@@ -997,9 +1095,10 @@ class PrimeSignalBot:
                     else:
                         add_log_message(f"[{symbol}] ⚠️ Paper trading wallet balance depleted ({cur_sym}{self._dry_run_balance_usdt:.2f}). Reset wallet to continue.")
 
-                if order:
-                    filled_amount = float(order.get('amount') or pos_size)
-                    fill_price = float(order.get('price') or entry_price)
+                if self._is_truthy_fill(order):
+                    assert order is not None  # Guaranteed by _is_truthy_fill
+                    filled_amount = self._extract_filled_qty(order, pos_size)
+                    fill_price = float(order.get('price') or entry_price) if isinstance(order, dict) else float(order.average_fill_price or entry_price)
                     ctx.filled_qty = filled_amount
                     ctx.fill_avg_price = fill_price
                     ctx.transition_to(OrderState.FILLED, reason="BUY fill confirmed")
@@ -1014,9 +1113,28 @@ class PrimeSignalBot:
                             add_log_message(f"[{symbol}] 🛡️ NATIVE STOP LOSS ACTIVE on exchange (ID: {ctx.native_sl_order_id}, Price: {sl:.4f})")
                         else:
                             add_log_message(f"[{symbol}] 🚨 NATIVE SL PLACEMENT FAILED! Executing EMERGENCY FLATTEN.")
-                            await self.execution.emergency_flatten_position(symbol, 'BUY', filled_amount, reason="NATIVE_SL_FAILED")
-                            ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason="Native SL placement failed")
-                            self.in_position[symbol] = False
+                            flatten_order = await self.execution.emergency_flatten_position(symbol, 'BUY', filled_amount, reason="NATIVE_SL_FAILED")
+                            if self._is_truthy_fill(flatten_order):
+                                actual_flatten = self._extract_filled_qty(flatten_order, filled_amount)
+                                remaining_qty = max(0.0, filled_amount - actual_flatten)
+                                self.position_size[symbol] = remaining_qty
+                                if remaining_qty <= 0.0001:
+                                    self.in_position[symbol] = False
+                                    ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason="Native SL placement failed")
+                                else:
+                                    self.in_position[symbol] = True
+                                    self.position_side[symbol] = "LONG"
+                                    self.entry_price[symbol] = fill_price
+                                    ctx.transition_to(OrderState.EXIT_UNKNOWN, reason="Partial fill on emergency flatten")
+                            else:
+                                self.in_position[symbol] = True
+                                self.position_side[symbol] = "LONG"
+                                self.position_size[symbol] = filled_amount
+                                self.entry_price[symbol] = fill_price
+                                self.stop_loss[symbol] = sl
+                                ctx.transition_to(OrderState.EXIT_UNKNOWN, reason="Emergency flatten failed or unknown")
+                            self.save_state()
+                            if hasattr(self, 'reconciliation'): asyncio.create_task(self.reconciliation._reconcile_live_broker_state())
                             return
                     else:
                         ctx.transition_to(OrderState.PROTECTED, reason="Virtual SL activated")
@@ -1126,9 +1244,10 @@ class PrimeSignalBot:
                     else:
                         add_log_message(f"[{symbol}] ⚠️ Paper trading wallet balance depleted ({cur_sym}{self._dry_run_balance_usdt:.2f}). Reset wallet to continue.")
                     
-                if order:
-                    filled_amount = float(order.get('amount') or pos_size)
-                    fill_price = float(order.get('price') or entry_price)
+                if self._is_truthy_fill(order):
+                    assert order is not None  # Guaranteed by _is_truthy_fill
+                    filled_amount = self._extract_filled_qty(order, pos_size)
+                    fill_price = float(order.get('price') or entry_price) if isinstance(order, dict) else float(order.average_fill_price or entry_price)
                     ctx.filled_qty = filled_amount
                     ctx.fill_avg_price = fill_price
                     ctx.transition_to(OrderState.FILLED, reason="SELL fill confirmed")
@@ -1143,9 +1262,28 @@ class PrimeSignalBot:
                             add_log_message(f"[{symbol}] 🛡️ NATIVE STOP LOSS ACTIVE on exchange (ID: {ctx.native_sl_order_id}, Price: {sl:.4f})")
                         else:
                             add_log_message(f"[{symbol}] 🚨 NATIVE SL PLACEMENT FAILED! Executing EMERGENCY FLATTEN.")
-                            await self.execution.emergency_flatten_position(symbol, 'SELL', filled_amount, reason="NATIVE_SL_FAILED")
-                            ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason="Native SL placement failed")
-                            self.in_position[symbol] = False
+                            flatten_order = await self.execution.emergency_flatten_position(symbol, 'SELL', filled_amount, reason="NATIVE_SL_FAILED")
+                            if self._is_truthy_fill(flatten_order):
+                                actual_flatten = self._extract_filled_qty(flatten_order, filled_amount)
+                                remaining_qty = max(0.0, filled_amount - actual_flatten)
+                                self.position_size[symbol] = remaining_qty
+                                if remaining_qty <= 0.0001:
+                                    self.in_position[symbol] = False
+                                    ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason="Native SL placement failed")
+                                else:
+                                    self.in_position[symbol] = True
+                                    self.position_side[symbol] = "SHORT"
+                                    self.entry_price[symbol] = fill_price
+                                    ctx.transition_to(OrderState.EXIT_UNKNOWN, reason="Partial fill on emergency flatten")
+                            else:
+                                self.in_position[symbol] = True
+                                self.position_side[symbol] = "SHORT"
+                                self.position_size[symbol] = filled_amount
+                                self.entry_price[symbol] = fill_price
+                                self.stop_loss[symbol] = sl
+                                ctx.transition_to(OrderState.EXIT_UNKNOWN, reason="Emergency flatten failed or unknown")
+                            self.save_state()
+                            if hasattr(self, 'reconciliation'): asyncio.create_task(self.reconciliation._reconcile_live_broker_state())
                             return
                     else:
                         ctx.transition_to(OrderState.PROTECTED, reason="Virtual SL activated")
@@ -1235,7 +1373,13 @@ class PrimeSignalBot:
                     ctx.reserved_risk_pct = reserved_trade_risk
                     ctx.reserved_risk_side = signal
                 else:
-                    await self.risk.release_risk(reserved_trade_risk, side=signal)
+                    await self.risk.release_risk(reserved_trade_risk, side=signal, reservation_id=getattr(ctx, 'reservation_id', None))
+                    ctx.reserved_risk_pct = 0.0
+                    ctx.reserved_risk_side = 'HOLD'
+                    ctx.reservation_id = None
+            
+            # FINAL SAVE at end of candle iteration to persist any UNKNOWN states or risk reservations
+            self.save_state()
 
     async def run_live_risk_monitor(self):
         while True:
@@ -1336,13 +1480,16 @@ class PrimeSignalBot:
                                 add_log_message(f"[{symbol}] 🎯 Target 1 hit! Booking 50% profit.")
                                 tp1_size = self.position_size[symbol] * 0.50
                                 tp1_success = False
+                                tp1_order = None
                                 if self.has_keys and not Config.PAPER_TRADING:
                                     tp1_order = await self.execution.place_order('sell', 'market', tp1_size, symbol=symbol, is_exit_order=True)
-                                    tp1_success = bool(tp1_order)
+                                    tp1_success = self._is_truthy_fill(tp1_order)
                                 else:
                                     self._dry_run_balance_usdt += tp1_size * curr_price
                                     tp1_success = True
                                 if tp1_success:
+                                    if self.has_keys and not Config.PAPER_TRADING:
+                                        tp1_size = self._extract_filled_qty(tp1_order, tp1_size)
                                     self.position_size[symbol] -= tp1_size
                                     self.partial_tp_taken[symbol] = True
                                     
@@ -1421,13 +1568,16 @@ class PrimeSignalBot:
                                 add_log_message(f"[{symbol}] 🎯 Target 2 (2.2R) hit! Booking 30% profit. 20% Runner active.")
                                 tp2_size = self.position_size[symbol] * 0.60  # 60% of remaining 50% = 30% of original
                                 tp2_success = False
+                                tp2_order = None
                                 if self.has_keys and not Config.PAPER_TRADING:
                                     tp2_order = await self.execution.place_order('sell', 'market', tp2_size, symbol=symbol, is_exit_order=True)
-                                    tp2_success = bool(tp2_order)
+                                    tp2_success = self._is_truthy_fill(tp2_order)
                                 else:
                                     self._dry_run_balance_usdt += tp2_size * curr_price
                                     tp2_success = True
                                 if tp2_success:
+                                    if self.has_keys and not Config.PAPER_TRADING:
+                                        tp2_size = self._extract_filled_qty(tp2_order, tp2_size)
                                     self.position_size[symbol] -= tp2_size
                                     self.tp2_taken[symbol] = True
                                     
@@ -1565,13 +1715,16 @@ class PrimeSignalBot:
                                 add_log_message(f"[{symbol}] 🎯 Target 1 hit! Booking 50% profit.")
                                 tp1_size = self.position_size[symbol] * 0.50
                                 tp1_success = False
+                                tp1_order = None
                                 if self.has_keys and not Config.PAPER_TRADING:
                                     tp1_order = await self.execution.place_order('buy', 'market', tp1_size, symbol=symbol, is_exit_order=True)
-                                    tp1_success = bool(tp1_order)
+                                    tp1_success = self._is_truthy_fill(tp1_order)
                                 else:
                                     self._dry_run_balance_usdt += tp1_size * (self.entry_price[symbol] - curr_price) + (tp1_size * self.entry_price[symbol])
                                     tp1_success = True
                                 if tp1_success:
+                                    if self.has_keys and not Config.PAPER_TRADING:
+                                        tp1_size = self._extract_filled_qty(tp1_order, tp1_size)
                                     self.position_size[symbol] -= tp1_size
                                     self.partial_tp_taken[symbol] = True
                                     
@@ -1650,13 +1803,16 @@ class PrimeSignalBot:
                                 add_log_message(f"[{symbol}] 🎯 Target 2 (2.2R) hit! Booking 30% profit. 20% Runner active.")
                                 tp2_size = self.position_size[symbol] * 0.60  # 60% of remaining 50% = 30% of original
                                 tp2_success = False
+                                tp2_order = None
                                 if self.has_keys and not Config.PAPER_TRADING:
                                     tp2_order = await self.execution.place_order('buy', 'market', tp2_size, symbol=symbol, is_exit_order=True)
-                                    tp2_success = bool(tp2_order)
+                                    tp2_success = self._is_truthy_fill(tp2_order)
                                 else:
                                     self._dry_run_balance_usdt += tp2_size * (self.entry_price[symbol] - curr_price) + (tp2_size * self.entry_price[symbol])
                                     tp2_success = True
                                 if tp2_success:
+                                    if self.has_keys and not Config.PAPER_TRADING:
+                                        tp2_size = self._extract_filled_qty(tp2_order, tp2_size)
                                     self.position_size[symbol] -= tp2_size
                                     self.tp2_taken[symbol] = True
                                     
@@ -1992,22 +2148,29 @@ class PrimeSignalBot:
             else:
                 order = {'id': 'MOCK_EXIT_ORDER_ID', 'price': exit_price, 'status': 'filled'}
                 
-            if order:
-                # Cancel active native stop loss if it exists on exchange
-                if ctx.native_sl_order_id and self.has_keys and not Config.PAPER_TRADING:
+            if self._is_truthy_fill(order):
+                actual_exit = self._extract_filled_qty(order, self.position_size[symbol])
+                is_full_close = (actual_exit >= (self.position_size[symbol] - 0.0001))
+
+                # Cancel active native stop loss if it exists on exchange AND we fully closed
+                if is_full_close and ctx.native_sl_order_id and self.has_keys and not Config.PAPER_TRADING:
+                    await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
+                    ctx.native_sl_order_id = None
+                elif not is_full_close and ctx.native_sl_order_id and self.has_keys and not Config.PAPER_TRADING:
+                    # Cancel existing SL, transition to PROTECTED will re-create it for remainder
                     await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
                     ctx.native_sl_order_id = None
 
                 if self.position_side[symbol] == "LONG":
                     pnl_pct = (exit_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
-                    pnl_usdt = self.position_size[symbol] * (exit_price - self.entry_price[symbol])
+                    pnl_usdt = actual_exit * (exit_price - self.entry_price[symbol])
                     if not self.has_keys or Config.PAPER_TRADING:
-                        self._dry_run_balance_usdt += self.position_size[symbol] * exit_price
+                        self._dry_run_balance_usdt += actual_exit * exit_price
                 else:
                     pnl_pct = (self.entry_price[symbol] - exit_price) / self.entry_price[symbol] * 100.0
-                    pnl_usdt = self.position_size[symbol] * (self.entry_price[symbol] - exit_price)
+                    pnl_usdt = actual_exit * (self.entry_price[symbol] - exit_price)
                     if not self.has_keys or Config.PAPER_TRADING:
-                        self._dry_run_balance_usdt += (self.position_size[symbol] * self.entry_price[symbol]) + pnl_usdt
+                        self._dry_run_balance_usdt += (actual_exit * self.entry_price[symbol]) + pnl_usdt
                     
                 entry_ts = self.entry_time.get(symbol, int(time.time() * 1000))
                 exit_ts = int(time.time() * 1000)
@@ -2037,17 +2200,23 @@ class PrimeSignalBot:
                 if len(DashboardState.trades) > 500:
                     DashboardState.trades = DashboardState.trades[-500:]
 
-                # State Machine closure
-                ctx.transition_to(OrderState.CLOSED, reason=reason)
-                ctx.closed_at = time.time()
-                ctx.exit_reason = reason
-                ctx.realized_pnl = pnl_usdt
+                # State Machine transition
+                if is_full_close:
+                    ctx.transition_to(OrderState.CLOSED, reason=reason)
+                    ctx.closed_at = time.time()
+                    ctx.exit_reason = reason
+                    ctx.realized_pnl = pnl_usdt
+                else:
+                    remaining_size = max(0.0, self.position_size[symbol] - actual_exit)
+                    self.position_size[symbol] = remaining_size
+                    ctx.filled_qty = remaining_size
+                    ctx.transition_to(OrderState.PROTECTED, reason=f"Partial exit executed ({actual_exit} filled, {remaining_size} remaining)")
 
                 # Record in Immutable Ledger
                 self.immutable_ledger.record_exit(
                     symbol=symbol,
                     side=self.position_side[symbol],
-                    exit_qty=self.position_size[symbol],
+                    exit_qty=actual_exit,
                     exit_price=exit_price,
                     entry_price=self.entry_price[symbol],
                     realized_pnl=pnl_usdt,
@@ -2115,32 +2284,37 @@ class PrimeSignalBot:
                     self.tp_cooldown_until[symbol] = now_exit + (post_exit_mins * 60.0)
                     add_log_message(f"[{symbol}] ⏱️ Position closed. Post-exit cooldown active for {post_exit_mins}m.")
 
-                self.in_position[symbol] = False
-                self.position_side[symbol] = "HOLD"
-                self.position_size[symbol] = 0.0
-                self.original_position_size[symbol] = 0.0
-                self.realized_pnl[symbol] = 0.0
-                self.entry_price[symbol] = 0.0
-                self.stop_loss[symbol] = 0.0
-                self.take_profit[symbol] = 0.0
-                self.take_profit_1r[symbol] = 0.0
-                self.take_profit_2r[symbol] = 0.0
-                self.partial_tp_taken[symbol] = False
-                self.tp2_taken[symbol] = False
+                if is_full_close:
+                    self.in_position[symbol] = False
+                    self.position_side[symbol] = "HOLD"
+                    self.position_size[symbol] = 0.0
+                    self.original_position_size[symbol] = 0.0
+                    self.realized_pnl[symbol] = 0.0
+                    self.entry_price[symbol] = 0.0
+                    self.stop_loss[symbol] = 0.0
+                    self.take_profit[symbol] = 0.0
+                    self.take_profit_1r[symbol] = 0.0
+                    self.take_profit_2r[symbol] = 0.0
+                    self.partial_tp_taken[symbol] = False
+                    self.tp2_taken[symbol] = False
 
-                if symbol in DashboardState.active_positions:
-                    new_positions = DashboardState.active_positions.copy()
-                    del new_positions[symbol]
-                    DashboardState.active_positions = new_positions
+                    if symbol in DashboardState.active_positions:
+                        new_positions = DashboardState.active_positions.copy()
+                        del new_positions[symbol]
+                        DashboardState.active_positions = new_positions
 
-                if symbol == Config.SYMBOL:
-                    DashboardState.in_position = False
-                    DashboardState.position_side = "HOLD"
-                    DashboardState.entry_price = 0.0
-                    DashboardState.stop_loss = 0.0
-                    DashboardState.take_profit = 0.0
-                    DashboardState.current_pnl_pct = 0.0
-                    DashboardState.current_pnl_usdt = 0.0
+                    if symbol == Config.SYMBOL:
+                        DashboardState.in_position = False
+                        DashboardState.position_side = "HOLD"
+                        DashboardState.entry_price = 0.0
+                        DashboardState.stop_loss = 0.0
+                        DashboardState.take_profit = 0.0
+                        DashboardState.current_pnl_pct = 0.0
+                        DashboardState.current_pnl_usdt = 0.0
+                else:
+                    self.in_position[symbol] = True
+                    if symbol in DashboardState.active_positions:
+                        DashboardState.active_positions[symbol]['position_size'] = self.position_size[symbol]
 
                 self.save_state()
                 await self.notifier.send_message(

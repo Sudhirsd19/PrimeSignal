@@ -5,9 +5,12 @@ import math
 import hmac
 import hashlib
 import aiohttp
+from typing import Any
 from execution.execution_result import ExecutionResult, ExecutionState, ExecutionIntentJournal, new_intent_id
 
 class CoinDCXClient:
+    intent_journal: ExecutionIntentJournal
+
     def __init__(self, api_key: str, secret_key: str, intent_journal_path=None):
         self.api_key = api_key
         self.secret_key = secret_key
@@ -109,7 +112,7 @@ class CoinDCXClient:
         for attempt in range(3):
             try:
                 session = await self._get_session()
-                async with session.post(url, data=payload_str, headers=headers, timeout=10.0) as response:
+                async with session.post(url, data=payload_str, headers=headers, timeout=aiohttp.ClientTimeout(total=10.0)) as response:
                     if response.status == 200:
                         balances = await response.json()
                         formatted_balances = {'total': {}, 'free': {}, 'used': {}}
@@ -140,7 +143,7 @@ class CoinDCXClient:
         for attempt in range(3):
             try:
                 session = await self._get_session()
-                async with session.get(url, timeout=10.0) as response:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10.0)) as response:
                     if response.status == 200:
                         tickers = await response.json()
                         target = next((t for t in tickers if t.get('market') == coindcx_symbol or t.get('pair') == coindcx_symbol), None)
@@ -183,7 +186,7 @@ class CoinDCXClient:
 
         if not symbol:
             print("[CoinDCX] Error: symbol required for order placement.")
-            return ExecutionResult(state=ExecutionState.NOT_SUBMITTED, requested_qty=float(amount or 0.0), error="symbol required", venue="COINDCX")
+            return ExecutionResult(state=ExecutionState.NOT_SUBMITTED, requested_qty=amount or 0.0, error="symbol required", venue="COINDCX")
 
         # CoinDCX expected market code (e.g. BTCINR)
         market_name = symbol.replace('/', '').upper()
@@ -245,7 +248,7 @@ class CoinDCXClient:
             try:
                 print(f"[CoinDCX] Sending spot order (attempt {attempt+1}): {payload}")
                 session = await self._get_session()
-                async with session.post(url, data=payload_str, headers=headers, timeout=12.0) as response:
+                async with session.post(url, data=payload_str, headers=headers, timeout=aiohttp.ClientTimeout(total=12.0)) as response:
                     if response.status == 200:
                         res = await response.json()
                         print(f"[CoinDCX] Order placed successfully! ID: {res.get('id')}")
@@ -272,7 +275,7 @@ class CoinDCXClient:
                                 market_name, side, amount, payload["timestamp"] - 5000,
                                 client_order_id=client_order_id, intent_id=intent_id,
                             )
-                            if existing_order:
+                            if existing_order is not None and not existing_order.is_unknown:
                                 self.intent_journal.result(existing_order)
                                 return existing_order
                             result = ExecutionResult(
@@ -303,8 +306,8 @@ class CoinDCXClient:
                     market_name, side, amount, created_after_ts=payload["timestamp"] - 5000,
                     client_order_id=client_order_id, intent_id=intent_id,
                 )
-                if existing_order:
-                    print(f"[CoinDCX IDEMPOTENCY] Discovered existing order {existing_order['id']} on exchange after timeout; adopting without duplicate submission.")
+                if existing_order is not None and not existing_order.is_unknown:
+                    print(f"[CoinDCX IDEMPOTENCY] Discovered existing order {existing_order.exchange_order_id} on exchange after timeout; adopting without duplicate submission.")
                     self.intent_journal.result(existing_order)
                     return existing_order
 
@@ -335,13 +338,13 @@ class CoinDCXClient:
     async def fetch_active_orders(self, market: str | None = None) -> list | None:
         """Fetches list of active/open orders from CoinDCX."""
         url = f"{self.base_url}/exchange/v1/orders/active_orders"
-        payload = {"timestamp": int(time.time() * 1000)}
+        payload: dict[str, Any] = {"timestamp": int(time.time() * 1000)}
         if market:
             payload["market"] = market
         payload_str, headers = self._sign(payload)
         try:
             session = await self._get_session()
-            async with session.post(url, data=payload_str, headers=headers, timeout=10.0) as response:
+            async with session.post(url, data=payload_str, headers=headers, timeout=aiohttp.ClientTimeout(total=10.0)) as response:
                 if response.status == 200:
                     data = await response.json()
                     return data.get('orders', []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
@@ -353,13 +356,13 @@ class CoinDCXClient:
     async def fetch_recent_trades(self, market: str | None = None) -> list | None:
         """Fetches recent trade execution history from CoinDCX."""
         url = f"{self.base_url}/exchange/v1/orders/trade_history"
-        payload = {"timestamp": int(time.time() * 1000)}
+        payload: dict[str, Any] = {"timestamp": int(time.time() * 1000)}
         if market:
             payload["market"] = market
         payload_str, headers = self._sign(payload)
         try:
             session = await self._get_session()
-            async with session.post(url, data=payload_str, headers=headers, timeout=10.0) as response:
+            async with session.post(url, data=payload_str, headers=headers, timeout=aiohttp.ClientTimeout(total=10.0)) as response:
                 if response.status == 200:
                     data = await response.json()
                     return data if isinstance(data, list) else data.get('trades', [])
@@ -389,7 +392,7 @@ class CoinDCXClient:
             candidates = []
             for ord in (active_orders or []):
                 ord_client_id = ord.get('client_order_id') or ord.get('clientOrderId')
-                if client_order_id and ord_client_id and str(ord_client_id) == str(client_order_id):
+                if client_order_id and ord_client_id and str(ord_client_id) == client_order_id:
                     return ExecutionResult.from_exchange(
                         ord, requested_qty=amount, client_order_id=client_order_id,
                         intent_id=intent_id, venue="COINDCX",
@@ -411,7 +414,7 @@ class CoinDCXClient:
             candidates = []
             for tr in (recent_trades or []):
                 tr_client_id = tr.get('client_order_id') or tr.get('clientOrderId')
-                if client_order_id and tr_client_id and str(tr_client_id) == str(client_order_id):
+                if client_order_id and tr_client_id and str(tr_client_id) == client_order_id:
                     result = ExecutionResult.from_exchange(
                         tr, requested_qty=amount, client_order_id=client_order_id,
                         intent_id=intent_id, venue="COINDCX",
@@ -464,7 +467,7 @@ class CoinDCXClient:
     async def fetch_order_status(self, order_id: str | None = None, client_order_id: str | None = None) -> dict | None:
         """Fetches order status by exchange ID or exact client identity."""
         url = f"{self.base_url}/exchange/v1/orders/status"
-        payload = {
+        payload: dict[str, Any] = {
             "timestamp": int(time.time() * 1000),
         }
         if order_id:
@@ -570,7 +573,7 @@ class CoinDCXClient:
             try:
                 print(f"[CoinDCX Native SL] Placing Stop Loss @ {stop_price} ({payload})")
                 session = await self._get_session()
-                async with session.post(url, data=payload_str, headers=headers, timeout=10.0) as response:
+                async with session.post(url, data=payload_str, headers=headers, timeout=aiohttp.ClientTimeout(total=10.0)) as response:
                     if response.status == 200:
                         res = await response.json()
                         print(f"[CoinDCX Native SL] ✅ SL Order Placed Successfully! ID: {res.get('id')}")
@@ -651,12 +654,12 @@ class CoinDCXClient:
         payload_str, headers = self._sign(payload)
         try:
             session = await self._get_session()
-            async with session.post(url, data=payload_str, headers=headers, timeout=10.0) as response:
+            async with session.post(url, data=payload_str, headers=headers, timeout=aiohttp.ClientTimeout(total=10.0)) as response:
                 if response.status == 200:
                     print(f"[CoinDCX] Cancelled order {order_id}")
                     return ExecutionResult(
                         state=ExecutionState.CANCELLED,
-                        exchange_order_id=str(order_id),
+                        exchange_order_id=order_id,
                         venue="COINDCX",
                     )
                 else:
@@ -664,7 +667,7 @@ class CoinDCXClient:
                     print(f"[CoinDCX] Error cancelling order {order_id}: {err_text}")
                     return ExecutionResult(
                         state=ExecutionState.CANCEL_UNKNOWN if response.status >= 500 else ExecutionState.REJECTED,
-                        exchange_order_id=str(order_id),
+                        exchange_order_id=order_id,
                         venue="COINDCX",
                         error=err_text,
                     )
@@ -672,7 +675,7 @@ class CoinDCXClient:
             print(f"[CoinDCX] Exception cancelling order: {e}")
             return ExecutionResult(
                 state=ExecutionState.CANCEL_UNKNOWN,
-                exchange_order_id=str(order_id),
+                exchange_order_id=order_id,
                 venue="COINDCX",
                 error="cancel request outcome unknown",
             )
@@ -704,10 +707,10 @@ class CoinDCXClient:
         print(f"[CoinDCX FILL] Order {order_id} TIMED OUT after {timeout}s")
         return ExecutionResult(
             state=ExecutionState.EXECUTION_UNKNOWN,
-            requested_qty=float(requested_qty or 0.0),
+            requested_qty=requested_qty or 0.0,
             client_order_id=client_order_id,
             intent_id=intent_id,
-            exchange_order_id=str(order_id),
+            exchange_order_id=order_id,
             venue="COINDCX",
             error="fill polling timed out or status remained unavailable",
         )

@@ -119,6 +119,7 @@ class Config:
     COINDCX_API_KEY = os.getenv("COINDCX_API_KEY", "")
     COINDCX_SECRET_KEY = os.getenv("COINDCX_SECRET_KEY", "")
     COINDCX_TRADE_INR = os.getenv("COINDCX_TRADE_INR", "True").lower() in ("true", "1", "yes")
+    USDT_INR_RATE = float(os.getenv("USDT_INR_RATE", "85.0"))
 
     # Exchange type: 'spot' or 'futures' (Binance USDT-M Futures)
     EXCHANGE_TYPE = os.getenv("EXCHANGE_TYPE", "spot").lower()

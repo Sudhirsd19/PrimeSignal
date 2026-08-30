@@ -1,3 +1,4 @@
+import math
 from typing import Any
 from strategies.base import BaseStrategy
 from strategies.indicators import calculate_ema, calculate_rsi, calculate_atr, calculate_vwap, calculate_adx, calculate_bollinger_bands, detect_rsi_divergence
@@ -108,7 +109,13 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         adx_df = calculate_adx(ltf_df)
         curr_adx = adx_df['adx'].iloc[-2]
         prev_adx = adx_df['adx'].iloc[-3]
-        adx_rising = curr_adx > prev_adx and curr_adx >= 20
+        
+        # AUD-P2-02: Strict Fail-Closed check on uninitialized / NaN ADX indicator data
+        if curr_adx is None or math.isnan(curr_adx):
+            metadata['reason'] = "Uninitialized / NaN ADX indicator data"
+            return "HOLD", metadata
+
+        adx_rising = (prev_adx is not None and not math.isnan(prev_adx)) and curr_adx > prev_adx and curr_adx >= 20
         
         # Task 1: Market Regime
         avg_atr_14 = ltf_atr.rolling(14).mean().iloc[-2]

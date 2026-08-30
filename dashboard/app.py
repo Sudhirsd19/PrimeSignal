@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from config import Config
 from collections import deque
 from core.firebase_manager import FirebaseManager
+from core.order_state_machine import OrderState
 
 # Global bot instance — set by main.py before server starts
 bot_instance: Any = None
@@ -670,6 +671,11 @@ async def get_trades():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    # AUD-P2-01 Fix: Enforce dashboard authentication before accepting financial stream
+    token = websocket.query_params.get("token") or websocket.query_params.get("key") or websocket.headers.get("x-api-key")
+    if _DASHBOARD_SECRET and token != _DASHBOARD_SECRET:
+        await websocket.close(code=1008, reason="Unauthorized: Invalid or missing dashboard API key")
+        return
     await websocket.accept()
     DashboardState.active_websockets.add(websocket)
     try:

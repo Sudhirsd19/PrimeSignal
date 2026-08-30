@@ -106,5 +106,8 @@ class ImmutableLedger:
         try:
             with open(self.ledger_file, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(record) + "\n")
+                f.flush()
+                import os
+                os.fsync(f.fileno())
         except Exception as e:
             print(f"[LEDGER ERROR] Failed to write ledger record: {e}")
