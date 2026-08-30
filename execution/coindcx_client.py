@@ -5,9 +5,10 @@ import math
 import hmac
 import hashlib
 import aiohttp
+from execution.execution_result import ExecutionResult, ExecutionState, ExecutionIntentJournal, new_intent_id
 
 class CoinDCXClient:
-    def __init__(self, api_key: str, secret_key: str):
+    def __init__(self, api_key: str, secret_key: str, intent_journal_path=None):
         self.api_key = api_key
         self.secret_key = secret_key
         self.base_url = "https://api.coindcx.com"
@@ -15,6 +16,7 @@ class CoinDCXClient:
         self.initialized = False
         # FIX G: Reuse a persistent session to avoid per-request TCP overhead
         self._session = None
+        self.intent_journal = ExecutionIntentJournal(intent_journal_path)
 
     async def _get_session(self):
         """Lazily create and reuse a single aiohttp session."""
@@ -160,14 +162,28 @@ class CoinDCXClient:
                     await asyncio.sleep(1.0 * (2 ** attempt))
         return None
 
-    async def place_order(self, side: str, order_type: str, amount: float, price: float | None = None, symbol: str | None = None):
-        """Places a spot order on CoinDCX with automatic retry and precision truncation."""
+    async def place_order(
+        self,
+        side: str,
+        order_type: str,
+        amount: float,
+        price: float | None = None,
+        symbol: str | None = None,
+        client_order_id: str | None = None,
+        intent_id: str | None = None,
+    ) -> ExecutionResult:
+        """Places one idempotent CoinDCX spot order.
+
+        The client identity is created once, before the first POST, and reused
+        for every retry of this economic intent.  An unresolved request never
+        becomes a rejection merely because the lookup endpoint was unavailable.
+        """
         if not self.initialized:
             await self.initialize()
 
         if not symbol:
             print("[CoinDCX] Error: symbol required for order placement.")
-            return None
+            return ExecutionResult(state=ExecutionState.NOT_SUBMITTED, requested_qty=float(amount or 0.0), error="symbol required", venue="COINDCX")
 
         # CoinDCX expected market code (e.g. BTCINR)
         market_name = symbol.replace('/', '').upper()
@@ -181,9 +197,12 @@ class CoinDCXClient:
             min_q = m_info['min_quantity']
             if amount < min_q:
                 print(f"[CoinDCX] Order rejected: Amount {amount} is below CoinDCX minimum {min_q} for {market_name}")
-                return None
+                return ExecutionResult(state=ExecutionState.REJECTED, requested_qty=amount, venue="COINDCX", error="below CoinDCX minimum")
         else:
             amount = math.floor(amount * 1000000.0) / 1000000.0
+
+        intent_id = intent_id or new_intent_id()
+        client_order_id = client_order_id or f"PS_DCX_{intent_id[:20].upper()}"
 
         url = f"{self.base_url}/exchange/v1/orders/create"
         payload = {
@@ -191,11 +210,34 @@ class CoinDCXClient:
             "order_type": "market_order" if order_type.lower() == "market" else "limit_order",
             "market": market_name,
             "total_quantity": amount,
-            "timestamp": int(time.time() * 1000)
+            "timestamp": int(time.time() * 1000),
+            "client_order_id": client_order_id,
         }
         
         if order_type.lower() == "limit" and price is not None:
             payload["price_per_unit"] = price
+
+        try:
+            self.intent_journal.create(
+                intent_id=intent_id,
+                client_order_id=client_order_id,
+                venue="COINDCX",
+                account_mode="spot",
+                symbol=market_name,
+                side=side.lower(),
+                requested_qty=amount,
+                order_role="ENTRY",
+                price=price,
+            )
+        except Exception as journal_error:
+            return ExecutionResult(
+                state=ExecutionState.NOT_SUBMITTED,
+                requested_qty=amount,
+                client_order_id=client_order_id,
+                intent_id=intent_id,
+                venue="COINDCX",
+                error=f"intent journal failed: {journal_error}",
+            )
 
         payload_str, headers = self._sign(payload)
 
@@ -207,31 +249,88 @@ class CoinDCXClient:
                     if response.status == 200:
                         res = await response.json()
                         print(f"[CoinDCX] Order placed successfully! ID: {res.get('id')}")
-                        return {
-                            'id': res.get('id'),
-                            'price': float(res.get('avg_price') or res.get('price_per_unit') or price or 0.0),
-                            'status': res.get('status', '').lower(),
-                            'amount': float(res.get('total_quantity') or amount)
-                        }
+                        result = ExecutionResult.from_exchange(
+                            res,
+                            requested_qty=amount,
+                            client_order_id=client_order_id,
+                            intent_id=intent_id,
+                            venue="COINDCX",
+                        )
+                        if not result.exchange_order_id:
+                            result.state = ExecutionState.SUBMISSION_UNKNOWN
+                            result.error = "successful response did not contain exchange order id"
+                        self.intent_journal.result(result)
+                        return result
                     elif response.status == 429:
                         print(f"[CoinDCX] Order rate-limited (429). Retrying in {attempt+1}s...")
                         await asyncio.sleep(1.0 * (2 ** attempt))
                     else:
                         err_text = await response.text()
                         print(f"[CoinDCX] ERROR placing order: {response.status} - {err_text}")
-                        return None
+                        if any(token in err_text.lower() for token in ("duplicate", "client_order_id", "already exists")):
+                            existing_order = await self._reconcile_ambiguous_order(
+                                market_name, side, amount, payload["timestamp"] - 5000,
+                                client_order_id=client_order_id, intent_id=intent_id,
+                            )
+                            if existing_order:
+                                self.intent_journal.result(existing_order)
+                                return existing_order
+                            result = ExecutionResult(
+                                state=ExecutionState.EXECUTION_UNKNOWN,
+                                requested_qty=amount,
+                                client_order_id=client_order_id,
+                                intent_id=intent_id,
+                                venue="COINDCX",
+                                error=f"duplicate client order id unresolved: {err_text}",
+                            )
+                            self.intent_journal.result(result)
+                            return result
+                        result = ExecutionResult(
+                            state=ExecutionState.REJECTED,
+                            requested_qty=amount,
+                            client_order_id=client_order_id,
+                            intent_id=intent_id,
+                            venue="COINDCX",
+                            error=err_text,
+                        )
+                        self.intent_journal.result(result)
+                        return result
             except Exception as e:
                 print(f"[CoinDCX] Order execution exception on attempt {attempt+1}: {e}")
                 # GAP-01 FIX: Reconcile exchange order state before blindly retrying to prevent duplicate fills
                 print(f"[CoinDCX TIMEOUT] Verifying exchange state for {market_name} {side} ({amount}) before retry...")
-                existing_order = await self._reconcile_ambiguous_order(market_name, side, amount, created_after_ts=payload["timestamp"] - 5000)
+                existing_order = await self._reconcile_ambiguous_order(
+                    market_name, side, amount, created_after_ts=payload["timestamp"] - 5000,
+                    client_order_id=client_order_id, intent_id=intent_id,
+                )
                 if existing_order:
-                    print(f"[CoinDCX IDEMPOTENCY] ✅ Discovered existing order {existing_order['id']} on exchange after timeout! Adopting without duplicate submission.")
+                    print(f"[CoinDCX IDEMPOTENCY] Discovered existing order {existing_order['id']} on exchange after timeout; adopting without duplicate submission.")
+                    self.intent_journal.result(existing_order)
                     return existing_order
-                    
-                if attempt < 2:
-                    await asyncio.sleep(1.0 * (2 ** attempt))
-        return None
+
+                # A POST whose response was lost is an ambiguous economic
+                # mutation.  Never issue a second POST merely because reads
+                # are unavailable; quarantine the original intent instead.
+                result = ExecutionResult(
+                    state=ExecutionState.EXECUTION_UNKNOWN,
+                    requested_qty=amount,
+                    client_order_id=client_order_id,
+                    intent_id=intent_id,
+                    venue="COINDCX",
+                    error="submission response lost and authoritative lookup failed",
+                )
+                self.intent_journal.result(result)
+                return result
+        result = ExecutionResult(
+            state=ExecutionState.EXECUTION_UNKNOWN,
+            requested_qty=amount,
+            client_order_id=client_order_id,
+            intent_id=intent_id,
+            venue="COINDCX",
+            error="all submission attempts and authoritative lookups failed",
+        )
+        self.intent_journal.result(result)
+        return result
 
     async def fetch_active_orders(self, market: str | None = None) -> list | None:
         """Fetches list of active/open orders from CoinDCX."""
@@ -269,42 +368,71 @@ class CoinDCXClient:
             print(f"[CoinDCX] Error fetching trade history: {e}")
             return None
 
-    async def _reconcile_ambiguous_order(self, market: str, side: str, amount: float, created_after_ts: int) -> dict | None:
+    async def _reconcile_ambiguous_order(
+        self,
+        market: str,
+        side: str,
+        amount: float,
+        created_after_ts: int,
+        client_order_id: str | None = None,
+        intent_id: str | None = None,
+    ) -> ExecutionResult | None:
         """
         Reconciles ambiguous order state after network timeout.
         Queries active orders and recent trade history to find if an order matching
         the market, side, and quantity was executed around the timestamp.
         """
         try:
-            # 1. Check active orders
+            # 1. Check active orders. Prefer exact client identity. A heuristic
+            # fallback is accepted only when exactly one candidate exists.
             active_orders = await self.fetch_active_orders(market=market)
+            candidates = []
             for ord in (active_orders or []):
+                ord_client_id = ord.get('client_order_id') or ord.get('clientOrderId')
+                if client_order_id and ord_client_id and str(ord_client_id) == str(client_order_id):
+                    return ExecutionResult.from_exchange(
+                        ord, requested_qty=amount, client_order_id=client_order_id,
+                        intent_id=intent_id, venue="COINDCX",
+                    )
                 ord_side = (ord.get('side') or '').lower()
                 ord_qty = float(ord.get('total_quantity') or ord.get('quantity') or 0.0)
                 ord_ts = int(ord.get('created_at') or ord.get('timestamp') or 0)
                 if ord_side == side.lower() and abs(ord_qty - amount) <= 1e-5:
                     if ord_ts >= (created_after_ts - 10000):
-                        return {
-                            'id': ord.get('id'),
-                            'price': float(ord.get('avg_price') or ord.get('price_per_unit') or 0.0),
-                            'status': (ord.get('status') or 'open').lower(),
-                            'amount': ord_qty
-                        }
+                        candidates.append(ord)
+            if len(candidates) == 1:
+                return ExecutionResult.from_exchange(
+                    candidates[0], requested_qty=amount,
+                    client_order_id=client_order_id, intent_id=intent_id, venue="COINDCX",
+                )
             
             # 2. Check recent trade history (for immediate market fills)
             recent_trades = await self.fetch_recent_trades(market=market)
+            candidates = []
             for tr in (recent_trades or []):
+                tr_client_id = tr.get('client_order_id') or tr.get('clientOrderId')
+                if client_order_id and tr_client_id and str(tr_client_id) == str(client_order_id):
+                    result = ExecutionResult.from_exchange(
+                        tr, requested_qty=amount, client_order_id=client_order_id,
+                        intent_id=intent_id, venue="COINDCX",
+                    )
+                    result.state = ExecutionState.FILLED if result.filled_qty > 0 else ExecutionState.EXECUTION_UNKNOWN
+                    result.exchange_order_id = str(tr.get('order_id') or tr.get('id')) if (tr.get('order_id') or tr.get('id')) else None
+                    return result
                 tr_side = (tr.get('side') or '').lower()
                 tr_qty = float(tr.get('quantity') or tr.get('total_quantity') or 0.0)
                 tr_ts = int(tr.get('created_at') or tr.get('timestamp') or 0)
                 if tr_side == side.lower() and abs(tr_qty - amount) <= 1e-5:
                     if tr_ts >= (created_after_ts - 10000):
-                        return {
-                            'id': tr.get('order_id') or tr.get('id'),
-                            'price': float(tr.get('price') or tr.get('avg_price') or 0.0),
-                            'status': 'filled',
-                            'amount': tr_qty
-                        }
+                        candidates.append(tr)
+            if len(candidates) == 1:
+                result = ExecutionResult.from_exchange(
+                    candidates[0], requested_qty=amount,
+                    client_order_id=client_order_id, intent_id=intent_id, venue="COINDCX",
+                )
+                result.exchange_order_id = str(candidates[0].get('order_id') or candidates[0].get('id')) if (candidates[0].get('order_id') or candidates[0].get('id')) else None
+                result.state = ExecutionState.FILLED if result.filled_qty > 0 else ExecutionState.EXECUTION_UNKNOWN
+                return result
         except Exception as e:
             print(f"[CoinDCX RECONCILE] Error checking ambiguous order state: {e}")
         return None
@@ -333,13 +461,16 @@ class CoinDCXClient:
             print(f"[CoinDCX] ERROR calling user info endpoint: {e}")
             return None
 
-    async def fetch_order_status(self, order_id: str) -> dict | None:
-        """Fetches the status of a specific order by ID."""
+    async def fetch_order_status(self, order_id: str | None = None, client_order_id: str | None = None) -> dict | None:
+        """Fetches order status by exchange ID or exact client identity."""
         url = f"{self.base_url}/exchange/v1/orders/status"
         payload = {
-            "id": order_id,
             "timestamp": int(time.time() * 1000),
         }
+        if order_id:
+            payload["id"] = order_id
+        if client_order_id:
+            payload["client_order_id"] = client_order_id
         payload_str, headers = self._sign(payload)
         try:
             session = await self._get_session()
@@ -352,6 +483,8 @@ class CoinDCXClient:
                         'price': float(data.get('avg_price') or data.get('price_per_unit') or 0),
                         'amount': float(data.get('total_quantity') or 0),
                         'filled': float(data.get('filled_quantity') or 0),
+                        'remaining': float(data.get('remaining_quantity') or max(0.0, float(data.get('total_quantity') or 0.0) - float(data.get('filled_quantity') or 0.0))),
+                        'client_order_id': data.get('client_order_id') or data.get('clientOrderId') or client_order_id,
                     }
                 else:
                     return None
@@ -359,7 +492,15 @@ class CoinDCXClient:
             print(f"[CoinDCX] Error fetching order status: {e}")
             return None
 
-    async def place_stop_loss(self, side: str, amount: float, stop_price: float, symbol: str) -> dict | None:
+    async def place_stop_loss(
+        self,
+        side: str,
+        amount: float,
+        stop_price: float,
+        symbol: str,
+        client_order_id: str | None = None,
+        intent_id: str | None = None,
+    ) -> ExecutionResult:
         """Places a conditional stop-loss / trigger order on CoinDCX."""
         if not self.initialized:
             await self.initialize()
@@ -372,6 +513,9 @@ class CoinDCXClient:
             amount = math.floor(amount * multiplier) / multiplier
         else:
             amount = math.floor(amount * 1000000.0) / 1000000.0
+
+        intent_id = intent_id or new_intent_id()
+        client_order_id = client_order_id or f"PS_DCX_SL_{intent_id[:18].upper()}"
 
         url = f"{self.base_url}/exchange/v1/orders/create"
         # CoinDCX conditional / stop limit order format
@@ -395,9 +539,32 @@ class CoinDCXClient:
             "total_quantity": amount,
             "price_per_unit": limit_price,
             "stop_price": stop_price,
-            "timestamp": int(time.time() * 1000)
+            "timestamp": int(time.time() * 1000),
+            "client_order_id": client_order_id,
         }
         payload_str, headers = self._sign(payload)
+
+        try:
+            self.intent_journal.create(
+                intent_id=intent_id,
+                client_order_id=client_order_id,
+                venue="COINDCX",
+                account_mode="spot",
+                symbol=market_name,
+                side=side.lower(),
+                requested_qty=amount,
+                order_role="SL",
+                price=stop_price,
+            )
+        except Exception as journal_error:
+            return ExecutionResult(
+                state=ExecutionState.NOT_SUBMITTED,
+                requested_qty=amount,
+                client_order_id=client_order_id,
+                intent_id=intent_id,
+                venue="COINDCX",
+                error=f"intent journal failed: {journal_error}",
+            )
 
         for attempt in range(3):
             try:
@@ -407,29 +574,74 @@ class CoinDCXClient:
                     if response.status == 200:
                         res = await response.json()
                         print(f"[CoinDCX Native SL] ✅ SL Order Placed Successfully! ID: {res.get('id')}")
-                        return {
-                            'id': res.get('id'),
-                            'stop_price': stop_price,
-                            'status': res.get('status', 'open').lower(),
-                            'amount': amount
-                        }
+                        result = ExecutionResult.from_exchange(
+                            {**res, 'stop_price': stop_price},
+                            requested_qty=amount,
+                            client_order_id=client_order_id,
+                            intent_id=intent_id,
+                            venue="COINDCX",
+                        )
+                        if not result.exchange_order_id:
+                            result.state = ExecutionState.SUBMISSION_UNKNOWN
+                            result.error = "successful response did not contain exchange order id"
+                        self.intent_journal.result(result)
+                        return result
                     else:
                         err_text = await response.text()
                         print(f"[CoinDCX Native SL] Error: {response.status} - {err_text}")
+                        if any(token in err_text.lower() for token in ("duplicate", "client_order_id", "already exists")):
+                            existing_sl = await self._reconcile_ambiguous_order(
+                                market_name, side, amount, payload["timestamp"] - 5000,
+                                client_order_id=client_order_id, intent_id=intent_id,
+                            )
+                            if existing_sl:
+                                self.intent_journal.result(existing_sl)
+                                return existing_sl
+                            result = ExecutionResult(
+                                state=ExecutionState.EXECUTION_UNKNOWN,
+                                requested_qty=amount,
+                                client_order_id=client_order_id,
+                                intent_id=intent_id,
+                                venue="COINDCX",
+                                error=f"duplicate client order id unresolved: {err_text}",
+                            )
+                            self.intent_journal.result(result)
+                            return result
                         if attempt < 2:
                             await asyncio.sleep(1.0 * (2 ** attempt))
             except Exception as e:
                 print(f"[CoinDCX Native SL] Exception on attempt {attempt+1}: {e}")
                 print(f"[CoinDCX Native SL TIMEOUT] Verifying exchange state for {market_name} Stop Loss before retry...")
-                existing_sl = await self._reconcile_ambiguous_order(market_name, side, amount, created_after_ts=payload["timestamp"] - 5000)
+                existing_sl = await self._reconcile_ambiguous_order(
+                    market_name, side, amount, created_after_ts=payload["timestamp"] - 5000,
+                    client_order_id=client_order_id, intent_id=intent_id,
+                )
                 if existing_sl:
-                    print(f"[CoinDCX Native SL] ✅ Discovered existing Stop Loss order {existing_sl['id']} on exchange after timeout! Adopting.")
+                    print(f"[CoinDCX Native SL] Discovered existing Stop Loss order {existing_sl['id']} on exchange after timeout; adopting.")
+                    self.intent_journal.result(existing_sl)
                     return existing_sl
-                if attempt < 2:
-                    await asyncio.sleep(1.0 * (2 ** attempt))
-        return None
+                result = ExecutionResult(
+                    state=ExecutionState.EXECUTION_UNKNOWN,
+                    requested_qty=amount,
+                    client_order_id=client_order_id,
+                    intent_id=intent_id,
+                    venue="COINDCX",
+                    error="stop-loss response lost and authoritative lookup failed",
+                )
+                self.intent_journal.result(result)
+                return result
+        result = ExecutionResult(
+            state=ExecutionState.EXECUTION_UNKNOWN,
+            requested_qty=amount,
+            client_order_id=client_order_id,
+            intent_id=intent_id,
+            venue="COINDCX",
+            error="all stop-loss submission attempts and lookups failed",
+        )
+        self.intent_journal.result(result)
+        return result
 
-    async def cancel_order(self, order_id: str) -> bool:
+    async def cancel_order(self, order_id: str) -> ExecutionResult:
         """Cancels an active order on CoinDCX."""
         url = f"{self.base_url}/exchange/v1/orders/cancel"
         payload = {
@@ -442,32 +654,60 @@ class CoinDCXClient:
             async with session.post(url, data=payload_str, headers=headers, timeout=10.0) as response:
                 if response.status == 200:
                     print(f"[CoinDCX] Cancelled order {order_id}")
-                    return True
+                    return ExecutionResult(
+                        state=ExecutionState.CANCELLED,
+                        exchange_order_id=str(order_id),
+                        venue="COINDCX",
+                    )
                 else:
                     err_text = await response.text()
                     print(f"[CoinDCX] Error cancelling order {order_id}: {err_text}")
-                    return False
+                    return ExecutionResult(
+                        state=ExecutionState.CANCEL_UNKNOWN if response.status >= 500 else ExecutionState.REJECTED,
+                        exchange_order_id=str(order_id),
+                        venue="COINDCX",
+                        error=err_text,
+                    )
         except Exception as e:
             print(f"[CoinDCX] Exception cancelling order: {e}")
-            return False
+            return ExecutionResult(
+                state=ExecutionState.CANCEL_UNKNOWN,
+                exchange_order_id=str(order_id),
+                venue="COINDCX",
+                error="cancel request outcome unknown",
+            )
 
-    async def wait_for_fill(self, order_id: str, timeout: float = 30.0) -> dict | None:
+    async def wait_for_fill(self, order_id: str, timeout: float = 30.0, requested_qty: float = 0.0, client_order_id: str | None = None, intent_id: str | None = None) -> ExecutionResult:
         """Polls CoinDCX order status until filled, cancelled, or timeout."""
         start = time.time()
         poll_interval = 1.0
         while time.time() - start < timeout:
-            status = await self.fetch_order_status(order_id)
+            status = await self.fetch_order_status(order_id=order_id, client_order_id=client_order_id)
             if status:
+                result = ExecutionResult.from_exchange(
+                    status,
+                    requested_qty=requested_qty,
+                    client_order_id=client_order_id,
+                    intent_id=intent_id,
+                    venue="COINDCX",
+                )
                 s = status.get('status', '')
-                if s in ('filled', 'completed', 'closed'):
+                if result.state in (ExecutionState.FILLED, ExecutionState.PARTIALLY_FILLED):
                     elapsed = int((time.time() - start) * 1000)
                     print(f"[CoinDCX FILL] Order {order_id} FILLED in {elapsed}ms")
-                    return status
+                    return result
                 elif s in ('cancelled', 'rejected'):
                     print(f"[CoinDCX FILL] Order {order_id} ended: {s}")
-                    return None
+                    return result
             await asyncio.sleep(poll_interval)
             poll_interval = min(poll_interval * 1.5, 3.0)
         print(f"[CoinDCX FILL] Order {order_id} TIMED OUT after {timeout}s")
-        return None
-
+        return ExecutionResult(
+            state=ExecutionState.EXECUTION_UNKNOWN,
+            requested_qty=float(requested_qty or 0.0),
+            client_order_id=client_order_id,
+            intent_id=intent_id,
+            exchange_order_id=str(order_id),
+            venue="COINDCX",
+            error="fill polling timed out or status remained unavailable",
+        )

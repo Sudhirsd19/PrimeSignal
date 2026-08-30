@@ -45,6 +45,10 @@ class PositionContext:
         # Native Exchange Order IDs
         self.entry_order_id: Optional[str] = None
         self.client_order_id: Optional[str] = None
+        self.intent_id: Optional[str] = None
+        self.execution_state: str = "NOT_SUBMITTED"
+        self.exit_order_id: Optional[str] = None
+        self.exit_client_order_id: Optional[str] = None
         self.native_sl_order_id: Optional[str] = None
         self.native_tp1_order_id: Optional[str] = None
         self.native_tp2_order_id: Optional[str] = None
@@ -63,6 +67,7 @@ class PositionContext:
         # Risk tracking for EXECUTION_UNKNOWN exposure leak fix
         self.reserved_risk_pct: float = 0.0
         self.reserved_risk_side: str = "HOLD"
+        self.reservation_id: Optional[str] = None
 
     def is_active(self) -> bool:
         """Returns True if position is currently active and not closed/idle/rejected."""
@@ -74,7 +79,7 @@ class PositionContext:
 
     def is_in_flight(self) -> bool:
         """Returns True if an order is being submitted or its outcome is unknown. Reconciliation must not interfere."""
-        return self.state in (OrderState.ORDER_INTENT_CREATED, OrderState.ORDER_SUBMITTED, OrderState.EXECUTION_UNKNOWN, OrderState.SL_PLACEMENT_PENDING)
+        return self.state in (OrderState.ORDER_INTENT_CREATED, OrderState.ORDER_SUBMITTED, OrderState.EXECUTION_UNKNOWN, OrderState.EXIT_UNKNOWN, OrderState.SL_PLACEMENT_PENDING)
 
     def transition_to(self, new_state: OrderState, reason: str = "", metadata: Optional[Dict[str, Any]] = None) -> bool:
         """
@@ -118,6 +123,10 @@ class PositionContext:
             'trailing_stop': self.trailing_stop,
             'entry_order_id': self.entry_order_id,
             'client_order_id': self.client_order_id,
+            'intent_id': self.intent_id,
+            'execution_state': self.execution_state,
+            'exit_order_id': self.exit_order_id,
+            'exit_client_order_id': self.exit_client_order_id,
             'native_sl_order_id': self.native_sl_order_id,
             'created_at': self.created_at,
             'filled_at': self.filled_at,
@@ -126,6 +135,10 @@ class PositionContext:
             'zone_id': self.zone_id,
             'exit_reason': self.exit_reason,
             'realized_pnl': self.realized_pnl,
+            'last_transition_time': self.last_transition_time,
+            'reserved_risk_pct': self.reserved_risk_pct,
+            'reserved_risk_side': self.reserved_risk_side,
+            'reservation_id': self.reservation_id,
             'history': self.history
         }
 
@@ -146,6 +159,10 @@ class PositionContext:
         ctx.trailing_stop = float(data.get('trailing_stop', 0.0))
         ctx.entry_order_id = data.get('entry_order_id')
         ctx.client_order_id = data.get('client_order_id')
+        ctx.intent_id = data.get('intent_id')
+        ctx.execution_state = data.get('execution_state', 'NOT_SUBMITTED')
+        ctx.exit_order_id = data.get('exit_order_id')
+        ctx.exit_client_order_id = data.get('exit_client_order_id')
         ctx.native_sl_order_id = data.get('native_sl_order_id')
         ctx.created_at = float(data.get('created_at', 0.0))
         ctx.filled_at = float(data.get('filled_at', 0.0))
@@ -154,6 +171,10 @@ class PositionContext:
         ctx.zone_id = data.get('zone_id')
         ctx.exit_reason = data.get('exit_reason')
         ctx.realized_pnl = float(data.get('realized_pnl', 0.0))
+        ctx.last_transition_time = float(data.get('last_transition_time', ctx.last_transition_time))
+        ctx.reserved_risk_pct = float(data.get('reserved_risk_pct', 0.0))
+        ctx.reserved_risk_side = data.get('reserved_risk_side', 'HOLD')
+        ctx.reservation_id = data.get('reservation_id')
         ctx.history = data.get('history', [])
         return ctx
 

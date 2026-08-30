@@ -1,0 +1,42 @@
+main.py:1012: ctx.native_sl_order_id = str(sl_order['id'])
+main.py:1014: add_log_message(f"[{symbol}] 🛡️ NATIVE STOP LOSS ACTIVE on exchange (ID: {ctx.native_sl_order_id}, Price: {sl:.4f})")
+main.py:1076: native_sl_id=ctx.native_sl_order_id
+main.py:1141: ctx.native_sl_order_id = str(sl_order['id'])
+main.py:1143: add_log_message(f"[{symbol}] 🛡️ NATIVE STOP LOSS ACTIVE on exchange (ID: {ctx.native_sl_order_id}, Price: {sl:.4f})")
+main.py:1205: native_sl_id=ctx.native_sl_order_id
+main.py:1399: if self.has_keys and not Config.PAPER_TRADING and ctx.native_sl_order_id:
+main.py:1482: if self.has_keys and not Config.PAPER_TRADING and ctx.native_sl_order_id:
+main.py:1628: if self.has_keys and not Config.PAPER_TRADING and ctx.native_sl_order_id:
+main.py:1711: if self.has_keys and not Config.PAPER_TRADING and ctx.native_sl_order_id:
+main.py:1920: if not ctx.native_sl_order_id:
+main.py:1923: old_sl_id = ctx.native_sl_order_id
+main.py:1949: ctx.native_sl_order_id = new_sl_id
+main.py:1952: ctx.native_sl_order_id = None
+main.py:1955: ctx.native_sl_order_id = None
+main.py:1958: ctx.native_sl_order_id = None
+main.py:1997: if ctx.native_sl_order_id and self.has_keys and not Config.PAPER_TRADING:
+main.py:1998: await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
+main.py:1999: ctx.native_sl_order_id = None
+immutable_ledger.py:61: 'native_sl_order_id': native_sl_id,
+order_state_machine.py:52: self.native_sl_order_id: Optional[str] = None
+order_state_machine.py:130: 'native_sl_order_id': self.native_sl_order_id,
+order_state_machine.py:166: ctx.native_sl_order_id = data.get('native_sl_order_id')
+reconciliation_engine.py:123: local_sl = ctx.native_sl_order_id
+reconciliation_engine.py:140: ctx.native_sl_order_id = resolved_sl
+reconciliation_engine.py:161: local_sl = ctx.native_sl_order_id
+reconciliation_engine.py:180: ctx.native_sl_order_id = resolved_sl
+reconciliation_engine.py:228: if resolved_sl: ctx.native_sl_order_id = resolved_sl
+reconciliation_engine.py:297: if ctx.native_sl_order_id:
+reconciliation_engine.py:298: is_sl_active = await exec_engine.verify_order_active(symbol, ctx.native_sl_order_id)
+reconciliation_engine.py:302: ctx.native_sl_order_id = str(sl_order['id'])
+reconciliation_engine.py:305: print(f'[RECONCILIATION] 🛡️ Native SL placed on exchange for {symbol} (ID: {ctx.native_sl_order_id})')
+reconciliation_engine.py:307: print(f'[RECONCILIATION] [NATIVE_SL] Native SL placed on exchange for {symbol} (ID: {ctx.native_sl_order_id})')
+reconciliation_engine.py:389: if resolved_sl: ctx.native_sl_order_id = resolved_sl
+reconciliation_engine.py:418: if ctx.native_sl_order_id:
+reconciliation_engine.py:423: ctx.native_sl_order_id = str(sl_order['id'])
+reconciliation_engine.py:489: if resolved_sl: ctx.native_sl_order_id = resolved_sl
+reconciliation_engine.py:518: if ctx.native_sl_order_id:
+reconciliation_engine.py:523: ctx.native_sl_order_id = str(sl_order['id'])
+reconciliation_engine.py:524: ctx.transition_to(OrderState.PROTECTED, reason=f'CoinDCX SL active (ID: {ctx.native_sl_order_id})')
+test_execution_integrity_phase1.py:192: ctx.native_sl_order_id = "SL-1"
+test_execution_integrity_phase1.py:200: self.assertEqual(ctx.native_sl_order_id, "SL-1")

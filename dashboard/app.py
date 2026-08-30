@@ -63,8 +63,10 @@ else:
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 async def verify_dashboard_key(key: Optional[str] = Depends(_api_key_header)):
-    """Only enforces auth if DASHBOARD_SECRET is set in environment."""
-    if _DASHBOARD_SECRET and key != _DASHBOARD_SECRET:
+    """Enforces auth for all environments. Fails closed if missing."""
+    if not _DASHBOARD_SECRET:
+        raise HTTPException(status_code=500, detail="CRITICAL: Dashboard secret must be set.")
+    if key != _DASHBOARD_SECRET:
         raise HTTPException(status_code=403, detail="Invalid dashboard API key. Set X-API-Key header.")
 
 # Global Memory State Store
@@ -122,9 +124,7 @@ class DashboardState:
 @app.get("/", response_class=HTMLResponse)
 async def get_dashboard(request: Request):
     """Renders the main terminal dashboard page."""
-    return templates.TemplateResponse(request, "index.html", {
-        "dashboard_api_key": _DASHBOARD_SECRET
-    })
+    return templates.TemplateResponse(request, "index.html", {})
 
 @app.post("/api/change_symbol", dependencies=[Depends(verify_dashboard_key)])
 async def change_symbol(req: SymbolRequest):
@@ -362,6 +362,8 @@ class TestTradeRequest(BaseModel):
 async def trigger_test_trade(req: Optional[TestTradeRequest] = None):
     from config import Config
     import datetime
+    if not Config.PAPER_TRADING:
+        return {"status": "error", "message": "Test trades are strictly disabled in LIVE mode"}
     symbol = (req.symbol if req and req.symbol else Config.SYMBOL) or "BTC/USDT"
     side = (req.side if req and req.side else "BUY").upper()
     is_long = (side == "BUY")

@@ -75,7 +75,6 @@ class ReconciliationEngine:
                 pass
             ctx.reserved_risk_pct = 0.0
             ctx.reserved_risk_side = 'HOLD'
-            ctx.reservation_id = None
 
     def _should_skip_reconcile_close(self, ctx, symbol: str) -> bool:
         """Returns True if local context is in-flight or closing and must NOT be force-closed/adopted yet (LOGIC-011 fix)."""
@@ -147,54 +146,7 @@ class ReconciliationEngine:
                     
         return resolved_sl
 
-
-    async def _sync_exchange_orders(self, symbol: str, ctx, exchange_qty: float, open_orders: list) -> str:
-        exec_engine = self.bot.execution
-        protective_orders = []
-        for o in open_orders:
-            o_id = str(o.get('id', ''))
-            if not o_id: continue
-            typ = str(o.get('type', '')).lower()
-            if typ in ('stop_market', 'stop', 'stop_loss_limit', 'stop_limit'):
-                protective_orders.append(o)
-                
-        local_sl = ctx.native_sl_order_id
-        resolved_sl = None
-
-        if exchange_qty < 0.0001:
-            for o in protective_orders:
-                o_id = str(o.get('id', ''))
-                try: print(f'[RECONCILIATION] Flat position - cancelling orphaned SL: {o_id}')
-                except Exception: pass
-                await exec_engine.cancel_order_safe(symbol, o_id)
-            return None
-
-        if protective_orders:
-            matched = [o for o in protective_orders if str(o.get('id', '')) == str(local_sl)]
-            if matched:
-                resolved_sl = str(matched[0].get('id'))
-            else:
-                resolved_sl = str(protective_orders[-1].get('id'))
-                try: print(f'[RECONCILIATION] Discovered existing exchange SL {resolved_sl} for {symbol}. Adopting.')
-                except Exception: pass
-                ctx.native_sl_order_id = resolved_sl
-                
-            for o in protective_orders:
-                o_id = str(o.get('id', ''))
-                if o_id != resolved_sl:
-                    try: print(f'[RECONCILIATION] Cancelling duplicate protective order: {o_id}')
-                    except Exception: pass
-                    await exec_engine.cancel_order_safe(symbol, o_id)
-                    
-        return resolved_sl
-
     async def _reconcile_live_broker_state(self):
-        if getattr(self, '_lock', None) is None: self._lock = asyncio.Lock()
-        if self._lock.locked(): return
-        async with self._lock:
-            await self._reconcile_live_broker_state_inner()
-
-    async def _reconcile_live_broker_state_inner(self):
         """Full Live Exchange Handshake and Reconciliation."""
         self.last_reconcile_time = time.time()
         exec_engine = self.bot.execution
@@ -216,18 +168,12 @@ class ReconciliationEngine:
 
     async def _reconcile_binance(self):
         exec_engine = self.bot.execution
-        try: self._global_binance_orders = await exec_engine.execute_with_retry(exec_engine.trade_client.fetch_open_orders) or []
-        except Exception: self._global_binance_orders = []
         if Config.EXCHANGE_TYPE == 'futures':
             positions = await exec_engine.execute_with_retry(exec_engine.trade_client.fetch_positions)
             pos_map = {p['symbol']: p for p in positions or [] if float(p.get('contracts') or p.get('size') or 0.0) > 0}
             for symbol in Config.SUPPORTED_SYMBOLS:
                 ctx = self.bot.order_state_machine.get_context(symbol)
                 exchange_pos = pos_map.get(symbol)
-                contracts = float(exchange_pos.get('contracts') or exchange_pos.get('size') or 0.0) if exchange_pos else 0.0
-                symbol_orders = [o for o in getattr(self, '_global_binance_orders', []) if o.get('symbol') == symbol]
-                resolved_sl = await self._sync_exchange_orders(symbol, ctx, abs(contracts), symbol_orders)
-                if resolved_sl: ctx.native_sl_order_id = resolved_sl
                 if exchange_pos:
                     contracts = float(exchange_pos.get('contracts') or exchange_pos.get('size') or 0.0)
                     side_raw = str(exchange_pos.get('side') or '').upper()
@@ -295,20 +241,12 @@ class ReconciliationEngine:
                         if self.bot.has_keys and (not Config.PAPER_TRADING):
                             sl_side = 'sell' if pos_side == 'LONG' else 'buy'
                             try:
-                                sl_status = 'INACTIVE'
+                                is_sl_active = False
                                 if ctx.native_sl_order_id:
-                                    sl_status = await exec_engine.verify_order_active(symbol, ctx.native_sl_order_id)
-                                
-                                if sl_status == 'UNKNOWN':
-                                    print(f'[RECONCILIATION] SL state for {symbol} is UNKNOWN. Quarantining.')
-                                    ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='SL state UNKNOWN during reconciliation')
-                                    self.bot.save_state()
-                                    continue
-                                
-                                if sl_status == 'INACTIVE':
-                                    ctx.native_sl_order_id = None
+                                    is_sl_active = await exec_engine.verify_order_active(symbol, ctx.native_sl_order_id)
+                                if not is_sl_active:
                                     sl_order = await exec_engine.place_native_stop_loss(symbol, sl_side, contracts, sl_price)
-                                    if sl_order is not None and sl_order.get('id') and not getattr(sl_order, 'is_unknown', False):
+                                    if sl_order and sl_order.get('id'):
                                         ctx.native_sl_order_id = str(sl_order['id'])
                                         ctx.transition_to(OrderState.PROTECTED, reason=f'Native SL confirmed on exchange @ {sl_price}')
                                         try:
@@ -328,7 +266,7 @@ class ReconciliationEngine:
                                         await self._release_reserved_risk(ctx)
                                         self.bot.save_state()
                                         continue
-                                elif sl_status == 'ACTIVE':
+                                else:
                                     ctx.transition_to(OrderState.PROTECTED, reason=f'Existing Native SL verified active @ {sl_price}')
                             except Exception as e:
                                 print(f'[RECONCILIATION] 🚨 Error placing native SL for adopted position {symbol}: {e}')
@@ -394,42 +332,187 @@ class ReconciliationEngine:
                 base_asset = symbol.split('/')[0]
                 base_qty = float(total_bal.get(base_asset, 0.0))
                 ctx = self.bot.order_state_machine.get_context(symbol)
-                symbol_orders = [o for o in getattr(self, '_global_binance_orders', []) if o.get('symbol') == symbol]
-                resolved_sl = await self._sync_exchange_orders(symbol, ctx, base_qty, symbol_orders)
-                if resolved_sl: ctx.native_sl_order_id = resolved_sl
-                should_adopt = False # LOGIC-002: Never adopt wallet balance for Spot Ownership Protection
-
-                if self.bot.in_position.get(symbol, False):
-                    if ctx.native_sl_order_id and self.bot.has_keys and not Config.PAPER_TRADING:
-                        sl_filled = await exec_engine.check_order_filled(symbol, ctx.native_sl_order_id)
-                        if sl_filled:
-                            print(f'[RECONCILIATION] Authoritative confirm: SL {ctx.native_sl_order_id} was FILLED. Closing position locally.')
-                            ctx.transition_to(OrderState.CLOSED, reason=f'Spot SL filled on exchange')
-                            self.bot.in_position[symbol] = False
-                            self.bot.position_side[symbol] = 'HOLD'
-                            self.bot.position_size[symbol] = 0.0
-                            await self._release_reserved_risk(ctx)
-                            self.bot.entry_price[symbol] = 0.0
-                            self.bot.stop_loss[symbol] = 0.0
-                            self.bot.take_profit[symbol] = 0.0
-                            self.bot.take_profit_1r[symbol] = 0.0
-                            self.bot.take_profit_2r[symbol] = 0.0
-                            self.bot.save_state()
-                            ctx.native_sl_order_id = None
-                        else:
-                            sl_status = await exec_engine.verify_order_active(symbol, ctx.native_sl_order_id)
-                            if sl_status == 'UNKNOWN':
-                                ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='SL state UNKNOWN')
-                                self.bot.save_state()
-                            elif sl_status == 'INACTIVE':
-                                ctx.native_sl_order_id = None
-                                print(f'[RECONCILIATION] SL missing but not filled. Manual cancel or rejected? Re-protecting.')
-                                sl_order = await exec_engine.place_native_stop_loss(symbol, 'sell', self.bot.position_size[symbol], self.bot.stop_loss[symbol])
+                should_adopt = not self.bot.in_position.get(symbol, False) or ctx.state == OrderState.EXECUTION_UNKNOWN or (not ctx.is_active())
+                if ctx.state in (OrderState.CLOSING, OrderState.EXIT_UNKNOWN):
+                    should_adopt = False
+                if base_qty > 0.0001 and should_adopt:
+                    entry_p = float(self.bot.pipeline.latest_prices.get(symbol, 0.0))
+                    sl_price = entry_p * 0.98 if entry_p > 0 else 0.0
+                    r_amt = abs(entry_p - sl_price)
+                    fee_adj = entry_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
+                    ctx.filled_qty = base_qty
+                    ctx.entry_price = entry_p
+                    ctx.stop_loss = sl_price
+                    ctx.side = 'LONG'
+                    self.bot.in_position[symbol] = True
+                    self.bot.position_side[symbol] = 'LONG'
+                    self.bot.position_size[symbol] = base_qty
+                    self.bot.entry_price[symbol] = entry_p
+                    self.bot.stop_loss[symbol] = sl_price
+                    self.bot.take_profit_1r[symbol] = entry_p + 1.0 * r_amt + fee_adj if entry_p > 0 else 0.0
+                    self.bot.take_profit_2r[symbol] = entry_p + 2.2 * r_amt + fee_adj if entry_p > 0 else 0.0
+                    self.bot.take_profit[symbol] = entry_p + 4.0 * r_amt + fee_adj if entry_p > 0 else 0.0
+                    self.bot.highest_price_reached[symbol] = entry_p
+                    self.bot.lowest_price_reached[symbol] = entry_p
+                    self.bot.partial_tp_taken[symbol] = False
+                    self.bot.tp2_taken[symbol] = False
+                    self.bot.entry_time[symbol] = time.time() * 1000.0
+                    if self.bot.has_keys and (not Config.PAPER_TRADING):
+                        try:
+                            is_sl_active = False
+                            if ctx.native_sl_order_id:
+                                is_sl_active = await exec_engine.verify_order_active(symbol, ctx.native_sl_order_id)
+                            if not is_sl_active:
+                                sl_order = await exec_engine.place_native_stop_loss(symbol, 'sell', base_qty, sl_price)
                                 if sl_order and sl_order.get('id'):
                                     ctx.native_sl_order_id = str(sl_order['id'])
-                                    ctx.transition_to(OrderState.PROTECTED, reason='SL re-protected')
+                                    ctx.transition_to(OrderState.PROTECTED, reason=f'Native SL confirmed on exchange @ {sl_price}')
+                                else:
+                                    print(f'[RECONCILIATION] 🚨 CRITICAL: Spot SL placement failed for {symbol}! Triggering emergency flatten.')
+                                    await exec_engine.emergency_flatten_position(symbol, 'BUY', base_qty, reason='RECON_NATIVE_SL_FAILED')
+                                    ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason='Reconciliation Native SL placement failed')
+                                    self.bot.in_position[symbol] = False
+                                    self.bot.position_side[symbol] = 'HOLD'
+                                    self.bot.position_size[symbol] = 0.0
+                                    await self._release_reserved_risk(ctx)
+                                    self.bot.save_state()
+                                    continue
                             else:
-                                ctx.transition_to(OrderState.PROTECTED, reason='SL verified active')
+                                ctx.transition_to(OrderState.PROTECTED, reason=f'Existing Native SL active @ {sl_price}')
+                        except Exception as e:
+                            print(f'[RECONCILIATION] 🚨 Error placing spot SL for {symbol}: {e}')
+                            ctx.transition_to(OrderState.PROTECTED, reason=f'Adopted spot orphan ({e})')
                     else:
-                        ctx.transition_to(OrderState.PROTECTED, reason='Spot position active without Native SL')
-                
+                        ctx.transition_to(OrderState.PROTECTED, reason=f'Spot token balance {base_qty} {base_asset} reconciled')
+                    await self._release_reserved_risk(ctx)
+                    self.bot.save_state()
+                elif not should_adopt and base_qty > 0.0001:
+                    local_qty = self.bot.position_size.get(symbol, 0.0)
+                    if not self._should_skip_reconcile_close(ctx, symbol):
+                        diff = abs(base_qty - local_qty)
+                        if diff > 0.0001:
+                            if base_qty < local_qty:
+                                print(f'[RECONCILIATION] ⚠️ Spot Partial Exit detected for {symbol}. Syncing {local_qty} -> {base_qty}')
+                                self.bot.position_size[symbol] = base_qty
+                                if ctx.state in (OrderState.CLOSING, OrderState.EXIT_UNKNOWN):
+                                    ctx.transition_to(OrderState.PROTECTED, reason='Partial spot close detected. Reverting to PROTECTED.')
+                                self.bot.save_state()
+                            else:
+                                print(f'[RECONCILIATION] 🚨 CRITICAL: Spot exposure increased for {symbol} ({local_qty} -> {base_qty}). Quarantining.')
+                                ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Spot exposure increased unexpectedly')
+                                self.bot.save_state()
+                        elif ctx.state in (OrderState.CLOSING, OrderState.EXIT_UNKNOWN):
+                            print(f'[RECONCILIATION] ⚠️ {symbol} stuck in CLOSING but spot balance remains. Reverting to PROTECTED.')
+                            ctx.transition_to(OrderState.PROTECTED, reason='CLOSING deadlock resolved. Reverting to PROTECTED.')
+                            self.bot.save_state()
+                elif base_qty <= 1e-05 and ctx.is_active():
+                    if not self._should_skip_reconcile_close(ctx, symbol):
+                        ctx.transition_to(OrderState.CLOSED, reason=f'Spot token {base_asset} depleted on exchange')
+                        self.bot.in_position[symbol] = False
+                        self.bot.position_side[symbol] = 'HOLD'
+                        self.bot.position_size[symbol] = 0.0
+                        await self._release_reserved_risk(ctx)
+                        self.bot.entry_price[symbol] = 0.0
+                        self.bot.stop_loss[symbol] = 0.0
+                        self.bot.take_profit[symbol] = 0.0
+                        self.bot.take_profit_1r[symbol] = 0.0
+                        self.bot.take_profit_2r[symbol] = 0.0
+                        self.bot.save_state()
+
+    async def _reconcile_coindcx(self):
+        exec_engine = self.bot.execution
+        balance_data = await exec_engine.coindcx_client.fetch_balance()
+        if not balance_data:
+            return
+        bal_map = {b['currency'].upper(): float(b.get('balance', 0)) + float(b.get('locked_balance', 0)) for b in balance_data}
+        for symbol in Config.SUPPORTED_SYMBOLS:
+            base_coin = symbol.split('/')[0].upper()
+            qty = bal_map.get(base_coin, 0.0)
+            ctx = self.bot.order_state_machine.get_context(symbol)
+            should_adopt = not self.bot.in_position.get(symbol, False) or ctx.state == OrderState.EXECUTION_UNKNOWN or (not ctx.is_active())
+            if ctx.state in (OrderState.CLOSING, OrderState.EXIT_UNKNOWN):
+                should_adopt = False
+            if qty > 0.0001 and should_adopt:
+                entry_p = float(self.bot.pipeline.latest_prices.get(symbol, 0.0))
+                sl_price = entry_p * 0.98 if entry_p > 0 else 0.0
+                r_amt = abs(entry_p - sl_price)
+                fee_adj = entry_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
+                ctx.filled_qty = qty
+                ctx.entry_price = entry_p
+                ctx.stop_loss = sl_price
+                ctx.side = 'LONG'
+                self.bot.in_position[symbol] = True
+                self.bot.position_side[symbol] = 'LONG'
+                self.bot.position_size[symbol] = qty
+                self.bot.entry_price[symbol] = entry_p
+                self.bot.stop_loss[symbol] = sl_price
+                self.bot.take_profit_1r[symbol] = entry_p + 1.0 * r_amt + fee_adj if entry_p > 0 else 0.0
+                self.bot.take_profit_2r[symbol] = entry_p + 2.2 * r_amt + fee_adj if entry_p > 0 else 0.0
+                self.bot.take_profit[symbol] = entry_p + 4.0 * r_amt + fee_adj if entry_p > 0 else 0.0
+                self.bot.highest_price_reached[symbol] = entry_p
+                self.bot.lowest_price_reached[symbol] = entry_p
+                self.bot.partial_tp_taken[symbol] = False
+                self.bot.tp2_taken[symbol] = False
+                self.bot.entry_time[symbol] = time.time() * 1000.0
+                if self.bot.has_keys and (not Config.PAPER_TRADING):
+                    try:
+                        is_sl_active = False
+                        if ctx.native_sl_order_id:
+                            is_sl_active = await exec_engine.verify_order_active(symbol, ctx.native_sl_order_id)
+                        if not is_sl_active:
+                            sl_order = await exec_engine.place_native_stop_loss(symbol, 'sell', qty, sl_price)
+                            if sl_order and sl_order.get('id'):
+                                ctx.native_sl_order_id = str(sl_order['id'])
+                                ctx.transition_to(OrderState.PROTECTED, reason=f'CoinDCX SL active (ID: {ctx.native_sl_order_id})')
+                            else:
+                                print(f'[RECONCILIATION] 🚨 CRITICAL: CoinDCX SL failed for {symbol}! Triggering emergency flatten.')
+                                await exec_engine.emergency_flatten_position(symbol, 'BUY', qty, reason='RECON_COINDCX_SL_FAILED')
+                                ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason='CoinDCX SL placement failed')
+                                self.bot.in_position[symbol] = False
+                                self.bot.position_side[symbol] = 'HOLD'
+                                self.bot.position_size[symbol] = 0.0
+                                await self._release_reserved_risk(ctx)
+                                self.bot.save_state()
+                                continue
+                        else:
+                            ctx.transition_to(OrderState.PROTECTED, reason=f'Existing CoinDCX SL verified active @ {sl_price}')
+                    except Exception as e:
+                        print(f'[RECONCILIATION] 🚨 Error placing CoinDCX SL for {symbol}: {e}')
+                        ctx.transition_to(OrderState.PROTECTED, reason=f'Adopted CoinDCX position ({e})')
+                else:
+                    ctx.transition_to(OrderState.PROTECTED, reason=f'CoinDCX wallet holds {qty} {base_coin}')
+                await self._release_reserved_risk(ctx)
+                self.bot.save_state()
+            elif not should_adopt and qty > 0.0001:
+                local_qty = self.bot.position_size.get(symbol, 0.0)
+                if not self._should_skip_reconcile_close(ctx, symbol):
+                    diff = abs(qty - local_qty)
+                    if diff > 0.0001:
+                        if qty < local_qty:
+                            print(f'[RECONCILIATION] ⚠️ CoinDCX Partial Exit detected for {symbol}. Syncing {local_qty} -> {qty}')
+                            self.bot.position_size[symbol] = qty
+                            if ctx.state in (OrderState.CLOSING, OrderState.EXIT_UNKNOWN):
+                                ctx.transition_to(OrderState.PROTECTED, reason='Partial CoinDCX close detected. Reverting to PROTECTED.')
+                            self.bot.save_state()
+                        else:
+                            print(f'[RECONCILIATION] 🚨 CRITICAL: CoinDCX exposure increased for {symbol} ({local_qty} -> {qty}). Quarantining.')
+                            ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='CoinDCX exposure increased unexpectedly')
+                            self.bot.save_state()
+                    elif ctx.state in (OrderState.CLOSING, OrderState.EXIT_UNKNOWN):
+                        print(f'[RECONCILIATION] ⚠️ {symbol} stuck in CLOSING but CoinDCX balance remains. Reverting to PROTECTED.')
+                        ctx.transition_to(OrderState.PROTECTED, reason='CLOSING deadlock resolved. Reverting to PROTECTED.')
+                        self.bot.save_state()
+            elif qty <= 1e-05 and ctx.is_active():
+                if not self._should_skip_reconcile_close(ctx, symbol):
+                    ctx.transition_to(OrderState.CLOSED, reason=f'CoinDCX wallet 0 {base_coin}')
+                    self.bot.in_position[symbol] = False
+                    self.bot.position_side[symbol] = 'HOLD'
+                    self.bot.position_size[symbol] = 0.0
+                    await self._release_reserved_risk(ctx)
+                    self.bot.entry_price[symbol] = 0.0
+                    self.bot.stop_loss[symbol] = 0.0
+                    self.bot.take_profit[symbol] = 0.0
+                    self.bot.take_profit_1r[symbol] = 0.0
+                    self.bot.take_profit_2r[symbol] = 0.0
+                    self.bot.save_state()
+            await self._cleanup_orphaned_orders(symbol, ctx)
