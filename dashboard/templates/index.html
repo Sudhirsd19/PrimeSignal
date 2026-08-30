@@ -1244,6 +1244,84 @@
                                 changeEl.innerText = `${pctP >= 0 ? '+' : ''}${pctP.toFixed(2)}%`;
                                 changeEl.className = `text-xs font-bold mt-1 ${pctP >= 0 ? 'text-green-400' : 'text-red-400'}`;
                             }
+
+                            // Reactive live tick position card update (Zero Latency)
+                            const posLiveEl = document.getElementById(`pos-live-${rawSym}`);
+                            if (posLiveEl && posLiveEl.dataset.entry) {
+                                const entryP = parseFloat(posLiveEl.dataset.entry);
+                                const posSize = parseFloat(posLiveEl.dataset.size || "0");
+                                const isLong = posLiveEl.dataset.side === "LONG";
+                                const isINR = posLiveEl.dataset.currency === "INR";
+                                const fxRate = parseFloat(posLiveEl.dataset.rate || "85.0");
+                                const stage = parseInt(posLiveEl.dataset.stage || "1");
+                                const t1P = parseFloat(posLiveEl.dataset.t1 || "0");
+                                const t2P = parseFloat(posLiveEl.dataset.t2 || "0");
+                                const tFinalP = parseFloat(posLiveEl.dataset.tfinal || "0");
+
+                                if (entryP > 0 && liveP > 0) {
+                                    const pnlPct = isLong ? ((liveP - entryP) / entryP * 100.0) : ((entryP - liveP) / entryP * 100.0);
+                                    const pnlUsdt = isLong ? (posSize * (liveP - entryP)) : (posSize * (entryP - liveP));
+                                    const pnlDisplay = isINR ? (pnlUsdt * fxRate) : pnlUsdt;
+                                    const sign = pnlDisplay >= 0 ? '+' : '';
+                                    const pnlClass = pnlPct > 0.001 ? "text-emerald-400" : (pnlPct < -0.001 ? "text-rose-400" : "text-slate-300");
+
+                                    posLiveEl.innerText = liveP >= 10 ? liveP.toFixed(4) : liveP.toFixed(6);
+                                    posLiveEl.className = `terminal-font font-bold ${pnlClass}`;
+
+                                    const posPnlValEl = document.getElementById(`pos-pnl-val-${rawSym}`);
+                                    if (posPnlValEl) {
+                                        const formatted = (Math.abs(pnlDisplay) >= 0.01 || pnlDisplay === 0) ? `${sign}${pnlDisplay.toFixed(2)}` : `${sign}${pnlDisplay.toFixed(4)}`;
+                                        posPnlValEl.innerText = `${formatted} ${isINR ? 'INR' : 'USDT'}`;
+                                        posPnlValEl.className = `font-extrabold terminal-font text-xs sm:text-sm ${pnlClass}`;
+                                    }
+
+                                    const posPnlPctEl = document.getElementById(`pos-pnl-pct-${rawSym}`);
+                                    if (posPnlPctEl) {
+                                        posPnlPctEl.innerText = `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`;
+                                        posPnlPctEl.className = `font-bold text-[9px] ${pnlClass}`;
+                                    }
+
+                                    const posStatusBadge = document.getElementById(`pos-status-badge-${rawSym}`);
+                                    if (posStatusBadge) {
+                                        if (pnlPct > 0.001) {
+                                            posStatusBadge.innerHTML = `<span class="text-[9px] px-1.5 py-0.5 font-extrabold rounded uppercase tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 shadow-[0_0_8px_rgba(16,185,129,0.3)] animate-pulse">🟢 PROFIT (+${pnlPct.toFixed(2)}%)</span>`;
+                                        } else if (pnlPct < -0.001) {
+                                            posStatusBadge.innerHTML = `<span class="text-[9px] px-1.5 py-0.5 font-extrabold rounded uppercase tracking-wider bg-rose-500/20 text-rose-400 border border-rose-500/40 shadow-[0_0_8px_rgba(244,63,94,0.3)]">🔴 LOSS (${pnlPct.toFixed(2)}%)</span>`;
+                                        } else {
+                                            posStatusBadge.innerHTML = `<span class="text-[9px] px-1.5 py-0.5 font-bold rounded uppercase tracking-wider bg-slate-500/20 text-slate-300 border border-slate-500/30">⚪ EVEN (0.00%)</span>`;
+                                        }
+                                    }
+
+                                    // Dynamic progress bar calculation
+                                    let stageStartP = entryP;
+                                    let stageEndP = t1P;
+                                    if (stage === 1) { stageStartP = entryP; stageEndP = t1P; }
+                                    else if (stage === 2) { stageStartP = t1P; stageEndP = t2P; }
+                                    else { stageStartP = t2P; stageEndP = tFinalP; }
+
+                                    let targetProgress = 0;
+                                    if (isLong) {
+                                        if (stageEndP > stageStartP) {
+                                            targetProgress = Math.min(Math.max(((liveP - stageStartP) / (stageEndP - stageStartP)) * 100, 0), 100);
+                                        } else { targetProgress = 100; }
+                                    } else {
+                                        if (stageStartP > stageEndP) {
+                                            targetProgress = Math.min(Math.max(((stageStartP - liveP) / (stageStartP - stageEndP)) * 100, 0), 100);
+                                        } else { targetProgress = 100; }
+                                    }
+
+                                    const progBar = document.getElementById(`pos-prog-bar-${rawSym}`);
+                                    if (progBar) {
+                                        progBar.style.width = `${targetProgress.toFixed(1)}%`;
+                                        progBar.className = `h-full ${pnlDisplay >= 0 ? 'bg-gradient-to-r from-emerald-500 to-green-400' : 'bg-gradient-to-r from-red-500 to-rose-400'} transition-all duration-300`;
+                                    }
+                                    const progPct = document.getElementById(`pos-prog-pct-${rawSym}`);
+                                    if (progPct) {
+                                        progPct.innerText = `${targetProgress.toFixed(0)}%`;
+                                        progPct.className = targetProgress >= 100 ? 'text-emerald-400 font-extrabold' : 'text-indigo-400';
+                                    }
+                                }
+                            }
                         }
                     } catch(err){}
                 };
@@ -1768,29 +1846,35 @@
                             symbols.forEach(sym => {
                                 const pos = activePosMap[sym];
                                 const isLong = pos.side === "LONG";
+                                const symSanitized = sym.replace('/', '').toLowerCase();
                                 const sideClass = isLong 
                                     ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20 shadow-[0_0_8px_rgba(16,185,129,0.15)]" 
                                     : "bg-rose-500/10 text-rose-400 border-rose-500/20 shadow-[0_0_8px_rgba(244,63,94,0.15)]";
-                                const entryP = pos.entry_price || 0;
-                                const liveP = (state.latest_prices && state.latest_prices[sym]) ? state.latest_prices[sym] : (pos.live_price || ((state.symbol === sym && state.latest_price) ? state.latest_price : entryP));
-                                const slP = pos.stop_loss || 0;
+                                const entryP = parseFloat(pos.entry_price) || 0;
+                                const liveP = (state.latest_prices && state.latest_prices[sym]) ? parseFloat(state.latest_prices[sym]) : (parseFloat(pos.live_price) || ((state.symbol === sym && state.latest_price) ? parseFloat(state.latest_price) : entryP));
+                                const slP = parseFloat(pos.stop_loss) || 0;
+                                
+                                const isINR = (state.balance_currency === "INR");
+                                const fxRate = parseFloat(state.usdt_inr_rate || 85.0);
+                                const posSize = (parseFloat(pos.position_size) && parseFloat(pos.position_size) > 0) ? parseFloat(pos.position_size) : 0.0;
                                 
                                 // Calculate exact PnL Percentage directly from Live Price vs Entry Price
-                                let pnlPct = pos.current_pnl_pct || 0.0;
+                                let pnlPct = parseFloat(pos.current_pnl_pct) || 0.0;
                                 if (entryP > 0 && liveP > 0) {
                                     pnlPct = isLong ? ((liveP - entryP) / entryP * 100.0) : ((entryP - liveP) / entryP * 100.0);
                                 }
                                 
-                                // Calculate exact PnL USDT
-                                const posSize = (pos.position_size && pos.position_size > 0) ? pos.position_size : 1.0;
-                                let pnlUsdt = pos.current_pnl_usdt || 0.0;
-                                if (entryP > 0 && liveP > 0) {
+                                // Calculate exact PnL in Account Equity Currency (INR vs USDT)
+                                let pnlUsdt = parseFloat(pos.current_pnl_usdt) || 0.0;
+                                if (entryP > 0 && liveP > 0 && posSize > 0) {
                                     pnlUsdt = isLong ? (posSize * (liveP - entryP)) : (posSize * (entryP - liveP));
                                 }
-
-                                const pnlCurr = state.balance_currency || "USDT";
+                                const pnlDisplay = isINR ? (pnlUsdt * fxRate) : pnlUsdt;
+                                const pnlCurr = state.balance_currency || (isINR ? "INR" : "USDT");
                                 const pnlClass = pnlPct > 0.001 ? "text-emerald-400" : (pnlPct < -0.001 ? "text-rose-400" : "text-slate-300");
-                                const sign = pnlPct > 0.001 ? '+' : '';
+                                const sign = pnlDisplay >= 0 ? '+' : '';
+                                
+                                const formattedPnlVal = (Math.abs(pnlDisplay) >= 0.01 || pnlDisplay === 0) ? `${sign}${pnlDisplay.toFixed(2)}` : `${sign}${pnlDisplay.toFixed(4)}`;
                                 
                                 // Status Badge for Plus / Minus (based directly on pnlPct!)
                                 let statusBadgeHTML = '';
@@ -1802,12 +1886,12 @@
                                     statusBadgeHTML = `<span class="text-[9px] px-1.5 py-0.5 font-bold rounded uppercase tracking-wider bg-slate-500/20 text-slate-300 border border-slate-500/30">⚪ EVEN (0.00%)</span>`;
                                 }
                                 
-                                const target1P = pos.target_1r || (isLong ? entryP * 1.010 : entryP * 0.990);
-                                const target2P = pos.target_2r || (isLong ? entryP * 1.025 : entryP * 0.975);
-                                const finalTargetP = pos.final_target || (isLong ? entryP * 1.040 : entryP * 0.960);
+                                const target1P = parseFloat(pos.target_1r) || (isLong ? entryP * 1.010 : entryP * 0.990);
+                                const target2P = parseFloat(pos.target_2r) || (isLong ? entryP * 1.025 : entryP * 0.975);
+                                const finalTargetP = parseFloat(pos.final_target) || (isLong ? entryP * 1.040 : entryP * 0.960);
                                 
                                 const stage = pos.target_stage || (pos.tp2_hit ? 3 : (pos.tp1_hit ? 2 : 1));
-                                const activeTargetP = pos.active_target || (stage === 1 ? target1P : (stage === 2 ? target2P : finalTargetP));
+                                const activeTargetP = parseFloat(pos.active_target) || (stage === 1 ? target1P : (stage === 2 ? target2P : finalTargetP));
                                 const activeTargetName = pos.active_target_name || (stage === 1 ? "TP1 (1.0R)" : (stage === 2 ? "TP2 (2.5R)" : "Runner Target (4.0R)"));
                                 
                                 // Check if profit is genuine locked
@@ -1853,17 +1937,18 @@
                                 }
                                 
                                 // Calculate Guaranteed Profit values
-                                const guarUsdt = pos.guaranteed_pnl_usdt !== undefined ? pos.guaranteed_pnl_usdt : (isProfitLocked ? Math.max(0.0, isLong ? posSize * (slP - entryP) : posSize * (entryP - slP)) : 0.0);
-                                const guarPct = pos.guaranteed_pnl_pct !== undefined ? pos.guaranteed_pnl_pct : (isProfitLocked && entryP > 0 ? Math.max(0.0, isLong ? (slP - entryP) / entryP * 100.0 : (entryP - slP) / entryP * 100.0) : 0.0);
+                                const rawGuarUsdt = pos.guaranteed_pnl_usdt !== undefined ? parseFloat(pos.guaranteed_pnl_usdt) : (isProfitLocked ? Math.max(0.0, isLong ? posSize * (slP - entryP) : posSize * (entryP - slP)) : 0.0);
+                                const guarDisplay = isINR ? (rawGuarUsdt * fxRate) : rawGuarUsdt;
+                                const guarPct = pos.guaranteed_pnl_pct !== undefined ? parseFloat(pos.guaranteed_pnl_pct) : (isProfitLocked && entryP > 0 ? Math.max(0.0, isLong ? (slP - entryP) / entryP * 100.0 : (entryP - slP) / entryP * 100.0) : 0.0);
 
                                 // Lock profit button or locked indicator HTML
                                 let lockControlHTML = '';
-                                if ((isProfitLocked || pos.tp1_hit) && (guarUsdt > 0.001 || pos.tp1_hit)) {
+                                if ((isProfitLocked || pos.tp1_hit) && (guarDisplay > 0.001 || pos.tp1_hit)) {
                                     lockControlHTML = `
                                         <div class="bg-gradient-to-r from-amber-500/15 via-emerald-500/15 to-amber-500/15 border border-amber-500/40 rounded-lg p-2.5 flex flex-col gap-1.5 shadow-[0_0_12px_rgba(245,158,11,0.2)]">
                                             <div class="flex justify-between items-center text-[10px] font-extrabold text-amber-300">
                                                 <span class="flex items-center gap-1">🔒 GUARANTEED PROFIT:</span>
-                                                <span class="text-emerald-400 terminal-font text-xs font-black">+${guarUsdt.toFixed(2)} ${pnlCurr} (+${guarPct.toFixed(2)}%)</span>
+                                                <span class="text-emerald-400 terminal-font text-xs font-black">+${guarDisplay.toFixed(2)} ${pnlCurr} (+${guarPct.toFixed(2)}%)</span>
                                             </div>
                                             <div class="flex justify-between items-center text-[9px] text-gray-400 font-semibold border-t border-amber-500/20 pt-1">
                                                 <span class="flex items-center gap-1">🛡️ Protected at SL: <strong class="text-amber-400 terminal-font">${slP.toFixed(4)}</strong></span>
@@ -1871,7 +1956,7 @@
                                             </div>
                                         </div>
                                     `;
-                                } else if (pnlUsdt > 0.01) {
+                                } else if (pnlDisplay > 0.01) {
                                     lockControlHTML = `
                                         <button onclick="event.stopPropagation(); lockProfitForSymbol('${sym}')" class="w-full bg-gradient-to-r from-amber-500/20 to-emerald-500/20 hover:from-amber-500/40 hover:to-emerald-500/40 text-amber-300 border border-amber-500/40 font-extrabold py-1.5 px-2.5 rounded-lg text-[10px] flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm">
                                             <span>🔒</span> Lock Profit Now (Move SL to Breakeven)
@@ -1887,7 +1972,7 @@
                                                 <span class="text-[8px] px-1 py-0.5 rounded bg-indigo-500/10 text-indigo-300 font-medium border border-indigo-500/20">Chart ↗</span>
                                             </div>
                                             <div class="flex items-center gap-1.5">
-                                                ${statusBadgeHTML}
+                                                <span id="pos-status-badge-${symSanitized}">${statusBadgeHTML}</span>
                                                 <span class="text-[9px] px-1.5 py-0.5 font-extrabold rounded uppercase tracking-wider border ${sideClass}">${pos.side}</span>
                                             </div>
                                         </div>
@@ -1908,7 +1993,7 @@
                                         <!-- Price & Target Metrics Grid -->
                                         <div class="grid grid-cols-2 gap-1 text-[10px] font-semibold bg-[#0c101c]/80 p-1.5 rounded-md border border-[#1f2937]/60">
                                             <div><span class="text-gray-400">Entry:</span> <span class="text-white terminal-font font-bold">${entryP.toFixed(4)}</span></div>
-                                            <div><span class="text-gray-400">Live:</span> <span class="terminal-font font-bold ${pnlClass}">${liveP.toFixed(4)}</span></div>
+                                            <div><span class="text-gray-400">Live:</span> <span id="pos-live-${symSanitized}" data-sym="${sym}" data-entry="${entryP}" data-size="${posSize}" data-side="${pos.side}" data-currency="${pnlCurr}" data-rate="${fxRate}" data-t1="${target1P}" data-t2="${target2P}" data-tfinal="${finalTargetP}" data-stage="${stage}" data-sl="${slP}" class="terminal-font font-bold ${pnlClass}">${liveP.toFixed(4)}</span></div>
                                             <div><span class="text-gray-400">SL:</span> <span class="text-red-400 terminal-font font-bold">${slP.toFixed(4)}</span> ${isProfitLocked ? '🔒' : ''}</div>
                                             <div><span class="text-gray-400">Next Target:</span> <span class="text-emerald-400 terminal-font font-bold">${activeTargetP.toFixed(4)}</span> <span class="text-[8px] text-indigo-400">(${activeTargetName})</span></div>
                                         </div>
@@ -1917,10 +2002,10 @@
                                         <div class="space-y-0.5">
                                             <div class="flex justify-between items-center text-[8px] font-bold uppercase tracking-wider">
                                                 ${stageBadgeHTML}
-                                                <span class="${targetProgress >= 100 ? 'text-emerald-400 font-extrabold' : 'text-indigo-400'}">${targetProgress.toFixed(0)}%</span>
+                                                <span id="pos-prog-pct-${symSanitized}" class="${targetProgress >= 100 ? 'text-emerald-400 font-extrabold' : 'text-indigo-400'}">${targetProgress.toFixed(0)}%</span>
                                             </div>
                                             <div class="w-full bg-[#0b0f19] h-1.5 rounded-full overflow-hidden border border-[#1f2937] relative">
-                                                <div class="h-full ${pnlUsdt >= 0 ? 'bg-gradient-to-r from-emerald-500 to-green-400' : 'bg-gradient-to-r from-red-500 to-rose-400'} transition-all duration-500" style="width: ${targetProgress.toFixed(1)}%"></div>
+                                                <div id="pos-prog-bar-${symSanitized}" class="h-full ${pnlDisplay >= 0 ? 'bg-gradient-to-r from-emerald-500 to-green-400' : 'bg-gradient-to-r from-red-500 to-rose-400'} transition-all duration-300" style="width: ${targetProgress.toFixed(1)}%"></div>
                                             </div>
                                         </div>
 
@@ -1931,8 +2016,8 @@
                                         <div class="flex justify-between items-end border-t border-[#1f2937]/80 pt-1.5">
                                             <span class="text-gray-400 text-[9px] font-bold uppercase tracking-wider">Running PnL</span>
                                             <div class="flex flex-col items-end">
-                                                <span class="font-extrabold terminal-font text-xs sm:text-sm ${pnlClass}">${sign}${pnlUsdt.toFixed(2)} ${pnlCurr}</span>
-                                                <span class="font-bold text-[9px] ${pnlClass}">${sign}${pnlPct.toFixed(2)}%</span>
+                                                <span id="pos-pnl-val-${symSanitized}" class="font-extrabold terminal-font text-xs sm:text-sm ${pnlClass}">${formattedPnlVal} ${pnlCurr}</span>
+                                                <span id="pos-pnl-pct-${symSanitized}" class="font-bold text-[9px] ${pnlClass}">${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%</span>
                                             </div>
                                         </div>
                                     </div>

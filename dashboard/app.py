@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import time
+import datetime
 import secrets
 from typing import Any, Optional
 from contextlib import asynccontextmanager
@@ -364,12 +365,34 @@ async def trigger_test_trade(req: Optional[TestTradeRequest] = None):
         tp_p = live_p * 1.035 if is_long else live_p * 0.965
         tp1_p = live_p * 1.015 if is_long else live_p * 0.985
         tp2_p = live_p * 1.025 if is_long else live_p * 0.975
-        pos_size = 0.05 if "BTC" in symbol else (0.5 if "ETH" in symbol else 5.0)
+
+        is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+        fx_rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
+        if fx_rate <= 0:
+            fx_rate = 85.0
+        
+        current_eq = bot_instance.calculate_total_equity() if hasattr(bot_instance, 'calculate_total_equity') else bot_instance._dry_run_balance_usdt
+        pos_size = 0.0
+        if hasattr(bot_instance, 'risk') and bot_instance.risk:
+            pos_size = bot_instance.risk.calculate_position_size(
+                account_equity=current_eq,
+                entry_price=live_p,
+                stop_loss=sl_p,
+                equity_currency="INR" if is_inr else "USDT",
+                quote_currency="USDT",
+                conversion_rate=fx_rate,
+                is_inr=is_inr
+            )
+        if pos_size <= 1e-7:
+            # Safe allocation fallback (e.g. 30% capital allocation)
+            pos_size = round((current_eq * 0.30) / (live_p * (fx_rate if is_inr else 1.0)), 6)
+        if pos_size <= 1e-7:
+            pos_size = 0.001
         
         # Deduct position cost from dry run virtual cash
-        pos_cost = pos_size * live_p
-        if hasattr(bot_instance, '_dry_run_balance_usdt') and pos_cost <= bot_instance._dry_run_balance_usdt:
-            bot_instance._dry_run_balance_usdt -= pos_cost
+        pos_cost = pos_size * live_p * (fx_rate if is_inr else 1.0)
+        if hasattr(bot_instance, '_dry_run_balance_usdt'):
+            bot_instance._dry_run_balance_usdt = max(0.0, bot_instance._dry_run_balance_usdt - pos_cost)
         
         bot_instance.in_position[symbol] = True
         bot_instance.position_side[symbol] = "LONG" if is_long else "SHORT"
@@ -379,9 +402,14 @@ async def trigger_test_trade(req: Optional[TestTradeRequest] = None):
         bot_instance.take_profit_1r[symbol] = tp1_p
         bot_instance.take_profit_2r[symbol] = tp2_p
         bot_instance.position_size[symbol] = pos_size
+        bot_instance.original_position_size[symbol] = pos_size
         bot_instance.entry_time[symbol] = int(time.time() * 1000)
         bot_instance.last_trade_time[symbol] = time.time()
         bot_instance.highest_price_reached[symbol] = live_p
+        bot_instance.lowest_price_reached[symbol] = live_p
+        bot_instance.partial_tp_taken[symbol] = False
+        bot_instance.tp2_taken[symbol] = False
+        bot_instance.realized_pnl[symbol] = 0.0
         bot_instance.trades_today += 1
         
         # Calculate true authoritative net equity
@@ -397,10 +425,18 @@ async def trigger_test_trade(req: Optional[TestTradeRequest] = None):
             'entry_price': live_p,
             'stop_loss': sl_p,
             'take_profit': tp_p,
+            'target_1r': tp1_p,
+            'target_2r': tp2_p,
+            'final_target': tp_p,
+            'active_target': tp1_p,
+            'active_target_name': "TP1 (1.0R)",
+            'target_stage': 1,
             'position_size': pos_size,
             'current_pnl_usdt': 0.0,
+            'current_pnl_currency': 0.0,
             'current_pnl_pct': 0.0,
             'guaranteed_pnl_usdt': 0.0,
+            'guaranteed_pnl_currency': 0.0,
             'guaranteed_pnl_pct': 0.0,
             'tp1_hit': False,
             'tp2_hit': False,
@@ -416,9 +452,12 @@ async def trigger_test_trade(req: Optional[TestTradeRequest] = None):
             DashboardState.entry_price = live_p
             DashboardState.stop_loss = sl_p
             DashboardState.take_profit = tp_p
+            DashboardState.position_size = pos_size
+            DashboardState.current_pnl_pct = 0.0
+            DashboardState.current_pnl_usdt = 0.0
             
         bot_instance.save_state()
-        msg = f"🚀 [MANUAL TEST TRADE TRIGGERED] {symbol} {'LONG' if is_long else 'SHORT'} @ ${live_p:,.2f} | SL: ${sl_p:,.2f} | TP: ${tp_p:,.2f}"
+        msg = f"🚀 [MANUAL TEST TRADE TRIGGERED] {symbol} {'LONG' if is_long else 'SHORT'} @ ${live_p:,.2f} | SL: ${sl_p:,.2f} | TP: ${tp_p:,.2f} | Size: {pos_size:.6f}"
         add_log_message(msg)
         return {"status": "success", "message": msg}
     else:
@@ -685,40 +724,175 @@ async def websocket_endpoint(websocket: WebSocket):
 
 def _build_state_payload():
     """Build the state dict to broadcast to WebSocket clients."""
-    live_p = bot_instance.pipeline.latest_prices.get(Config.SYMBOL, DashboardState.latest_price) if (bot_instance and hasattr(bot_instance, 'pipeline')) else DashboardState.latest_price
-    
-    # Calculate Authoritative Active Trade Metrics (Side-aware)
-    entry_p = DashboardState.entry_price or 0.0
-    sl_p = DashboardState.stop_loss or 0.0
-    tp_p = DashboardState.take_profit or 0.0
-    side = DashboardState.position_side or "HOLD"
-    in_pos = DashboardState.in_position
-    
-    live_pnl_usdt = 0.0
-    live_pnl_pct = 0.0
-    target_progress = 0.0
-    
-    if in_pos and entry_p > 0 and live_p > 0:
-        if side == "LONG":
-            live_pnl_pct = ((live_p - entry_p) / entry_p) * 100.0
-            live_pnl_usdt = (DashboardState.position_size or 1.0) * (live_p - entry_p)
-            if tp_p > entry_p:
-                target_progress = max(0.0, min(1.0, (live_p - entry_p) / (tp_p - entry_p)))
-        elif side == "SHORT":
-            live_pnl_pct = ((entry_p - live_p) / entry_p) * 100.0
-            live_pnl_usdt = (DashboardState.position_size or 1.0) * (entry_p - live_p)
-            if tp_p < entry_p:
-                target_progress = max(0.0, min(1.0, (entry_p - live_p) / (entry_p - tp_p)))
+    active_sym = Config.SYMBOL
+    live_prices = bot_instance.pipeline.latest_prices if (bot_instance and hasattr(bot_instance, 'pipeline')) else {}
+    live_p = float(live_prices.get(active_sym, DashboardState.latest_price) or DashboardState.latest_price or 0.0)
+
+    is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+    fx_rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
+    if fx_rate <= 0:
+        fx_rate = 85.0
+
+    # Build active positions dynamically from bot_instance with authoritative live PnL
+    active_pos_map = {}
+    if bot_instance and hasattr(bot_instance, 'in_position'):
+        for sym in Config.SUPPORTED_SYMBOLS:
+            if bot_instance.in_position.get(sym, False):
+                pos_sz = float(bot_instance.position_size.get(sym, 0.0) or 0.0)
+                if pos_sz <= 1e-7:
+                    continue
+                entry_val = float(bot_instance.entry_price.get(sym, 0.0) or 0.0)
+                sl_val = float(bot_instance.stop_loss.get(sym, 0.0) or 0.0)
+                side_val = str(bot_instance.position_side.get(sym, 'LONG')).upper()
+                is_long = (side_val == 'LONG')
+                
+                sym_live_p = float(live_prices.get(sym, 0.0) or (live_p if sym == active_sym else entry_val))
+                if sym_live_p <= 0:
+                    sym_live_p = entry_val
+                
+                # Exact PnL calculations
+                if entry_val > 0 and sym_live_p > 0:
+                    if is_long:
+                        p_pct = ((sym_live_p - entry_val) / entry_val) * 100.0
+                        p_usdt = pos_sz * (sym_live_p - entry_val)
+                    else:
+                        p_pct = ((entry_val - sym_live_p) / entry_val) * 100.0
+                        p_usdt = pos_sz * (entry_val - sym_live_p)
+                else:
+                    p_pct = 0.0
+                    p_usdt = 0.0
+                
+                p_currency = p_usdt * fx_rate if is_inr else p_usdt
+
+                # 3-Stage Target calculations
+                r_dist = abs(entry_val - sl_val) if abs(entry_val - sl_val) > 0 else (entry_val * 0.01)
+                t1r = float(bot_instance.take_profit_1r.get(sym, 0.0) or (entry_val + 1.0 * r_dist if is_long else entry_val - 1.0 * r_dist))
+                t2r = float(bot_instance.take_profit_2r.get(sym, 0.0) or (entry_val + 2.5 * r_dist if is_long else entry_val - 2.5 * r_dist))
+                t_final = float(bot_instance.take_profit.get(sym, 0.0) or (entry_val + 4.0 * r_dist if is_long else entry_val - 4.0 * r_dist))
+                
+                tp1_hit = bool(bot_instance.partial_tp_taken.get(sym, False))
+                tp2_hit = bool(bot_instance.tp2_taken.get(sym, False))
+                is_locked = (is_long and sl_val >= entry_val) or (not is_long and sl_val <= entry_val and sl_val > 0)
+                
+                if not tp1_hit:
+                    act_target = t1r
+                    act_name = "TP1 (1.0R)"
+                    stage = 1
+                elif not tp2_hit:
+                    act_target = t2r
+                    act_name = "TP2 (2.5R)"
+                    stage = 2
+                else:
+                    act_target = t_final
+                    act_name = "Runner Target (4.0R)"
+                    stage = 3
+                
+                # Guaranteed PnL
+                realized_pnl_val = float(bot_instance.realized_pnl.get(sym, 0.0) or 0.0)
+                runner_guar = 0.0
+                if is_locked and entry_val > 0:
+                    runner_guar = max(0.0, pos_sz * (sl_val - entry_val)) if is_long else max(0.0, pos_sz * (entry_val - sl_val))
+                guar_usdt = realized_pnl_val + runner_guar
+                guar_currency = guar_usdt * fx_rate if is_inr else guar_usdt
+                orig_sz = float(bot_instance.original_position_size.get(sym, pos_sz) or pos_sz)
+                orig_val = orig_sz * entry_val
+                guar_pct = (guar_usdt / orig_val * 100.0) if orig_val > 0 else 0.0
+
+                e_time = bot_instance.entry_time.get(sym, int(time.time() * 1000))
+                try:
+                    e_time_str = datetime.datetime.fromtimestamp(float(e_time) / (1000.0 if float(e_time) > 1e11 else 1.0)).strftime('%Y-%m-%d %H:%M:%S')
+                except Exception:
+                    e_time_str = time.strftime('%Y-%m-%d %H:%M:%S')
+
+                active_pos_map[sym] = {
+                    'symbol': sym,
+                    'side': side_val,
+                    'entry_price': entry_val,
+                    'stop_loss': sl_val,
+                    'take_profit': act_target,
+                    'target_1r': t1r,
+                    'target_2r': t2r,
+                    'final_target': t_final,
+                    'active_target': act_target,
+                    'active_target_name': act_name,
+                    'target_stage': stage,
+                    'position_size': pos_sz,
+                    'current_pnl_usdt': round(p_usdt, 4),
+                    'current_pnl_currency': round(p_currency, 2),
+                    'current_pnl_pct': round(p_pct, 2),
+                    'guaranteed_pnl_usdt': round(guar_usdt, 4),
+                    'guaranteed_pnl_currency': round(guar_currency, 2),
+                    'guaranteed_pnl_pct': round(guar_pct, 2),
+                    'tp1_hit': tp1_hit,
+                    'tp2_hit': tp2_hit,
+                    'profit_locked': is_locked,
+                    'live_price': sym_live_p,
+                    'entry_time': e_time,
+                    'entry_time_str': e_time_str
+                }
+        DashboardState.active_positions = active_pos_map
+    elif DashboardState.active_positions:
+        for sym, pos in DashboardState.active_positions.items():
+            sym_live_p = float(live_prices.get(sym, 0.0) or (live_p if sym == active_sym else pos.get('entry_price', 0.0)))
+            entry_val = float(pos.get('entry_price', 0.0) or 0.0)
+            pos_sz = float(pos.get('position_size', 1.0) or 1.0)
+            is_long = (pos.get('side', 'LONG') == 'LONG')
+            if entry_val > 0 and sym_live_p > 0:
+                p_pct = ((sym_live_p - entry_val) / entry_val * 100.0) if is_long else ((entry_val - sym_live_p) / entry_val * 100.0)
+                p_usdt = (pos_sz * (sym_live_p - entry_val)) if is_long else (pos_sz * (entry_val - sym_live_p))
+            else:
+                p_pct = 0.0
+                p_usdt = 0.0
+            pos['live_price'] = sym_live_p
+            pos['current_pnl_usdt'] = round(p_usdt, 4)
+            pos['current_pnl_currency'] = round(p_usdt * fx_rate if is_inr else p_usdt, 2)
+            pos['current_pnl_pct'] = round(p_pct, 2)
+        active_pos_map = DashboardState.active_positions
+
+    # Calculate Authoritative Active Trade Metrics for Selected active_sym
+    if active_sym in active_pos_map:
+        pos = active_pos_map[active_sym]
+        entry_p = pos['entry_price']
+        sl_p = pos['stop_loss']
+        tp_p = pos['take_profit']
+        side = pos['side']
+        in_pos = True
+        live_pnl_pct = pos['current_pnl_pct']
+        live_pnl_usdt = pos['current_pnl_currency']
+        target_progress = 0.0
+        if tp_p > entry_p if side == "LONG" else tp_p < entry_p:
+            target_progress = max(0.0, min(1.0, abs(live_p - entry_p) / max(1e-6, abs(tp_p - entry_p))))
+    else:
+        entry_p = DashboardState.entry_price or 0.0
+        sl_p = DashboardState.stop_loss or 0.0
+        tp_p = DashboardState.take_profit or 0.0
+        side = DashboardState.position_side or "HOLD"
+        in_pos = DashboardState.in_position
+        live_pnl_usdt = 0.0
+        live_pnl_pct = 0.0
+        target_progress = 0.0
+        if in_pos and entry_p > 0 and live_p > 0:
+            if side == "LONG":
+                live_pnl_pct = ((live_p - entry_p) / entry_p) * 100.0
+                raw_pnl = (DashboardState.position_size or 1.0) * (live_p - entry_p)
+                live_pnl_usdt = raw_pnl * fx_rate if is_inr else raw_pnl
+                if tp_p > entry_p:
+                    target_progress = max(0.0, min(1.0, (live_p - entry_p) / (tp_p - entry_p)))
+            elif side == "SHORT":
+                live_pnl_pct = ((entry_p - live_p) / entry_p) * 100.0
+                raw_pnl = (DashboardState.position_size or 1.0) * (entry_p - live_p)
+                live_pnl_usdt = raw_pnl * fx_rate if is_inr else raw_pnl
+                if tp_p < entry_p:
+                    target_progress = max(0.0, min(1.0, (entry_p - live_p) / (entry_p - tp_p)))
 
     # Compute authoritative held crypto quantity dynamically from open position
-    active_sym = Config.SYMBOL
     base_coin = active_sym.split('/')[0]
     held_qty = 0.0
     if bot_instance and hasattr(bot_instance, 'in_position'):
         if bot_instance.in_position.get(active_sym, False) and bot_instance.position_side.get(active_sym) == "LONG":
             held_qty = bot_instance.position_size.get(active_sym, 0.0)
-    elif active_sym in DashboardState.active_positions:
-        pos = DashboardState.active_positions[active_sym]
+    elif active_sym in active_pos_map:
+        pos = active_pos_map[active_sym]
         if pos.get('side') == 'LONG':
             held_qty = pos.get('position_size', 0.0)
     elif in_pos and side == "LONG":
@@ -744,7 +918,7 @@ def _build_state_payload():
 
     return {
         "latest_price": live_p,
-        "latest_prices": bot_instance.pipeline.latest_prices if (bot_instance and hasattr(bot_instance, 'pipeline')) else {},
+        "latest_prices": live_prices,
         "balance_usdt": DashboardState.balance_usdt,
         "balance_base": held_qty,
         "in_position": in_pos,
@@ -756,7 +930,8 @@ def _build_state_payload():
         "live_pnl_pct": round(live_pnl_pct, 2),
         "target_progress": round(target_progress, 4),
         "server_timestamp": int(time.time() * 1000),
-        "active_positions": DashboardState.active_positions,
+        "active_positions": active_pos_map,
+        "usdt_inr_rate": fx_rate,
         "daily_drawdown_pct": DashboardState.daily_drawdown_pct,
         "ml_confidence": DashboardState.ml_confidence,
         "next_candle_color": DashboardState.next_candle_color,

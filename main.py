@@ -1216,6 +1216,38 @@ class PrimeSignalBot:
                         DashboardState.entry_price = fill_price
                         DashboardState.stop_loss = sl
                         DashboardState.take_profit = self.take_profit[symbol]
+                        DashboardState.position_size = filled_amount
+                        DashboardState.current_pnl_pct = 0.0
+                        DashboardState.current_pnl_usdt = 0.0
+
+                    e_time = self.entry_time[symbol]
+                    e_time_str = datetime.datetime.fromtimestamp(e_time / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
+                    DashboardState.active_positions[symbol] = {
+                        'symbol': symbol,
+                        'side': "LONG",
+                        'entry_price': fill_price,
+                        'stop_loss': sl,
+                        'take_profit': self.take_profit_1r[symbol],
+                        'target_1r': self.take_profit_1r[symbol],
+                        'target_2r': self.take_profit_2r[symbol],
+                        'final_target': self.take_profit[symbol],
+                        'active_target': self.take_profit_1r[symbol],
+                        'active_target_name': "TP1 (1.0R)",
+                        'target_stage': 1,
+                        'position_size': filled_amount,
+                        'current_pnl_usdt': 0.0,
+                        'current_pnl_currency': 0.0,
+                        'current_pnl_pct': 0.0,
+                        'guaranteed_pnl_usdt': 0.0,
+                        'guaranteed_pnl_currency': 0.0,
+                        'guaranteed_pnl_pct': 0.0,
+                        'tp1_hit': False,
+                        'tp2_hit': False,
+                        'profit_locked': False,
+                        'live_price': fill_price,
+                        'entry_time': e_time,
+                        'entry_time_str': e_time_str
+                    }
 
                     # Record in Immutable Ledger
                     self.immutable_ledger.record_entry(
@@ -1365,6 +1397,38 @@ class PrimeSignalBot:
                         DashboardState.entry_price = fill_price
                         DashboardState.stop_loss = sl
                         DashboardState.take_profit = self.take_profit[symbol]
+                        DashboardState.position_size = filled_amount
+                        DashboardState.current_pnl_pct = 0.0
+                        DashboardState.current_pnl_usdt = 0.0
+
+                    e_time = self.entry_time[symbol]
+                    e_time_str = datetime.datetime.fromtimestamp(e_time / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
+                    DashboardState.active_positions[symbol] = {
+                        'symbol': symbol,
+                        'side': "SHORT",
+                        'entry_price': fill_price,
+                        'stop_loss': sl,
+                        'take_profit': self.take_profit_1r[symbol],
+                        'target_1r': self.take_profit_1r[symbol],
+                        'target_2r': self.take_profit_2r[symbol],
+                        'final_target': self.take_profit[symbol],
+                        'active_target': self.take_profit_1r[symbol],
+                        'active_target_name': "TP1 (1.0R)",
+                        'target_stage': 1,
+                        'position_size': filled_amount,
+                        'current_pnl_usdt': 0.0,
+                        'current_pnl_currency': 0.0,
+                        'current_pnl_pct': 0.0,
+                        'guaranteed_pnl_usdt': 0.0,
+                        'guaranteed_pnl_currency': 0.0,
+                        'guaranteed_pnl_pct': 0.0,
+                        'tp1_hit': False,
+                        'tp2_hit': False,
+                        'profit_locked': False,
+                        'live_price': fill_price,
+                        'entry_time': e_time,
+                        'entry_time_str': e_time_str
+                    }
 
                     # Record in Immutable Ledger
                     self.immutable_ledger.record_entry(
