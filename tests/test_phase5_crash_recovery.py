@@ -49,7 +49,7 @@ class TestPhase5CrashRecovery(unittest.IsolatedAsyncioTestCase):
             "partial_tp_taken": {"BTC/USDT": False},
             "tp2_taken": {"BTC/USDT": False},
             "dry_run_balance_usdt": 10000.0,
-            "daily_drawdown_reset_day": str(time.strftime("%Y-%m-%d")),
+            "daily_drawdown_reset_day": time.strftime("%Y-%m-%d"),
             "active_risk_reservations": {}
         }
         if data:

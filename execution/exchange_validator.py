@@ -28,9 +28,9 @@ class ExchangeValidator:
             rate = 85.0
 
         # Harmonize price into the account equity currency (INR vs USDT)
-        if is_inr and str(quote_currency).upper() in ("USDT", "USD"):
+        if is_inr and quote_currency.upper() in ("USDT", "USD"):
             price_equity_curr = price * rate
-        elif (not is_inr) and str(quote_currency).upper() == "INR":
+        elif (not is_inr) and quote_currency.upper() == "INR":
             price_equity_curr = price / rate
         else:
             price_equity_curr = price

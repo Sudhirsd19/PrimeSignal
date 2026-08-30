@@ -768,13 +768,13 @@ class ExecutionEngine:
                 try:
                     if inspect.iscoroutinefunction(self.trade_client.fetch_order):
                         order = await self.trade_client.fetch_order(
-                            id=None,
+                            id="",
                             symbol=symbol,
                             params={'origClientOrderId': client_order_id}
                         )
                     else:
                         order = self.trade_client.fetch_order(
-                            id=None,
+                            id="",
                             symbol=symbol,
                             params={'origClientOrderId': client_order_id}
                         )
@@ -841,7 +841,9 @@ class ExecutionEngine:
 
         print(f"[REPLAY] Found {len(unresolved)} unresolved intent(s) in journal. Reconciling with exchange...")
         for intent in unresolved:
-            intent_id = intent.get('intent_id')
+            intent_id = str(intent.get('intent_id') or '')
+            if not intent_id:
+                continue
             client_order_id = intent.get('client_order_id')
             qty = float(intent.get('requested_qty', 0.0))
             venue = intent.get('venue', 'BINANCE')

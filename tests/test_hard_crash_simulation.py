@@ -32,7 +32,7 @@ class TestHardCrashProcessSimulation(unittest.TestCase):
             "partial_tp_taken": {"BTC/USDT": False},
             "tp2_taken": {"BTC/USDT": False},
             "dry_run_balance_usdt": 10000.0,
-            "daily_drawdown_reset_day": str(time.strftime("%Y-%m-%d")),
+            "daily_drawdown_reset_day": time.strftime("%Y-%m-%d"),
             "active_risk_reservations": {}
         }
         with open(self.state_file, "w", encoding="utf-8") as f:
@@ -80,13 +80,15 @@ for i in range(10000):
         
         # Read until child indicates it has written state
         started = False
-        while True:
-            line = proc.stdout.readline()
-            if not line:
-                break
-            if "STARTED_WRITING" in line:
-                started = True
-                break
+        self.assertIsNotNone(proc.stdout)
+        if proc.stdout:
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                if "STARTED_WRITING" in line:
+                    started = True
+                    break
 
         self.assertTrue(started, "Child process failed to start writing")
         
@@ -155,13 +157,15 @@ time.sleep(10) # Wait to be killed
         
         # Wait until child has written intent to journal
         started = False
-        while True:
-            line = proc.stdout.readline()
-            if not line:
-                break
-            if 'INTENT_WRITTEN' in line:
-                started = True
-                break
+        self.assertIsNotNone(proc.stdout)
+        if proc.stdout:
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                if 'INTENT_WRITTEN' in line:
+                    started = True
+                    break
 
         self.assertTrue(started, "Child failed to write intent record")
         

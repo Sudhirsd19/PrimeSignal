@@ -295,7 +295,7 @@ class ReconciliationEngine:
         return resolved_sl
 
     async def _reconcile_live_broker_state(self):
-        if getattr(self, '_lock', None) is None:
+        if self._lock is None:
             self._lock = asyncio.Lock()
         if self._lock.locked():
             return
@@ -351,7 +351,7 @@ class ReconciliationEngine:
                 if resolved_sl:
                     ctx.native_sl_order_id = resolved_sl
 
-                if contracts > 1e-05:
+                if contracts > 1e-05 and exchange_pos is not None:
                     should_adopt = not self.bot.in_position.get(symbol, False)
                     if should_adopt:
                         print(f'[RECONCILIATION] 🚨 Orphan position detected on exchange for {symbol} ({contracts} contracts). Adopting into bot management.')

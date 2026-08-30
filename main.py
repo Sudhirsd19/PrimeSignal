@@ -7,6 +7,7 @@ import uvicorn
 import time
 import datetime
 import json
+from typing import Any, Optional, Dict, List, cast
 import pandas as pd
 from pathlib import Path
 
@@ -261,7 +262,7 @@ class PrimeSignalBot:
 
             try:
                 # Helper to safely load dict state, falling back to default if new symbols were added
-                def safe_load(key: str, default_val: object) -> dict[str, object]:
+                def safe_load(key: str, default_val: Any) -> dict[str, Any]:
                     loaded_dict = state.get(key, {}) if isinstance(state, dict) else {}
                     if not isinstance(loaded_dict, dict):
                         return {sym: default_val for sym in Config.SUPPORTED_SYMBOLS}
@@ -287,7 +288,7 @@ class PrimeSignalBot:
                 self.tp_cooldown_until = {k: float(v or 0.0) for k, v in safe_load('tp_cooldown_until', 0.0).items()}
                 self.position_mode = {k: str(v) for k, v in safe_load('position_mode', 'STRICT').items()}
                 self.last_trade_time = {k: float(v or 0.0) for k, v in safe_load('last_trade_time', 0.0).items()}
-                self.last_zone_traded = safe_load('last_zone_traded', None)
+                self.last_zone_traded = {k: (str(v) if v is not None else None) for k, v in safe_load('last_zone_traded', None).items()}
                 
                 # Restore closed trades history
                 saved_trades = state.get('closed_trades', []) if isinstance(state, dict) else []
@@ -1043,7 +1044,7 @@ class PrimeSignalBot:
                     if inspect.isawaitable(dynamic_rate):
                         dynamic_rate = await dynamic_rate
                 try:
-                    dynamic_rate_val = float(dynamic_rate) if dynamic_rate is not None else None
+                    dynamic_rate_val = dynamic_rate if isinstance(dynamic_rate, float) else (float(dynamic_rate) if dynamic_rate is not None else None)
                 except (TypeError, ValueError):
                     dynamic_rate_val = None
                 if dynamic_rate_val is None or dynamic_rate_val <= 0:

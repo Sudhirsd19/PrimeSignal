@@ -19,6 +19,7 @@ class CoinDCXClient:
         self.initialized = False
         # FIX G: Reuse a persistent session to avoid per-request TCP overhead
         self._session = None
+        self._usdt_inr_cache: tuple[float, dict[str, float]] | None = None
         self.intent_journal = ExecutionIntentJournal(intent_journal_path)
 
     async def _get_session(self):
@@ -217,7 +218,7 @@ class CoinDCXClient:
         last_p = float(data.get('last') or 0.0)
         bid_p = float(data.get('bid') or 0.0)
         ask_p = float(data.get('ask') or 0.0)
-        if str(side).upper() in ('BUY', 'LONG'):
+        if side.upper() in ('BUY', 'LONG'):
             rate = ask_p if ask_p > 0 else last_p
         else:
             rate = bid_p if bid_p > 0 else last_p

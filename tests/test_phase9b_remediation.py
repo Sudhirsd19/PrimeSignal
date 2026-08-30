@@ -143,7 +143,7 @@ class TestPhase9BRemediation(unittest.IsolatedAsyncioTestCase):
             exchange_order_id="SL_REAL_ACCEPTED_999"
         )
 
-        bot.execution.create_order = AsyncMock(return_value=entry_res)
+        bot.execution.place_order = AsyncMock(return_value=entry_res)
         bot.execution.place_native_stop_loss = AsyncMock(return_value=sl_res)
         bot.execution.emergency_flatten_position = AsyncMock()
 
@@ -314,12 +314,16 @@ class TestPhase9BRemediation(unittest.IsolatedAsyncioTestCase):
         }
 
         res = await ee.reconcile_intent_on_exchange(intent)
+        self.assertIsNotNone(res)
+        assert res is not None
         self.assertEqual(res.state, ExecutionState.FILLED)
         self.assertEqual(res.exchange_order_id, 'EX_TARGET_123')
 
         # 2. Authoritative absence (OrderNotFound) -> Marked REJECTED
         ee.trade_client.fetch_order = AsyncMock(side_effect=ccxt.OrderNotFound("Order not found"))
         res_absent = await ee.reconcile_intent_on_exchange(intent)
+        self.assertIsNotNone(res_absent)
+        assert res_absent is not None
         self.assertEqual(res_absent.state, ExecutionState.REJECTED)
 
         # 3. Unresolved / Ambiguous without authoritative confirmation -> Quarantined in EXECUTION_UNKNOWN
@@ -328,6 +332,8 @@ class TestPhase9BRemediation(unittest.IsolatedAsyncioTestCase):
         ee.trade_client.fetch_closed_orders = AsyncMock(return_value=[])
 
         res_unknown = await ee.reconcile_intent_on_exchange(intent)
+        self.assertIsNotNone(res_unknown)
+        assert res_unknown is not None
         self.assertEqual(res_unknown.state, ExecutionState.EXECUTION_UNKNOWN)
         self.assertTrue(res_unknown.is_unknown)
 

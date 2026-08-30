@@ -61,7 +61,7 @@ class RiskManager:
                 'reservation_id': res_id,
                 'symbol': symbol,
                 'side': side.upper(),
-                'risk_pct': float(proposed_risk_pct),
+                'risk_pct': proposed_risk_pct,
                 'timestamp': time.time(),
                 'state': 'ACTIVE'
             }
@@ -82,7 +82,7 @@ class RiskManager:
                 # Fallback to releasing first matching anonymous reservation
                 matched_id = None
                 for r_id, r_data in list(self.active_reservations.items()):
-                    if r_data.get('state') == 'ACTIVE' and abs(float(r_data.get('risk_pct', 0.0)) - float(risk_pct)) < 1e-6:
+                    if r_data.get('state') == 'ACTIVE' and abs(float(r_data.get('risk_pct', 0.0)) - risk_pct) < 1e-6:
                         matched_id = r_id
                         break
                 if matched_id:
@@ -103,8 +103,8 @@ class RiskManager:
         if isinstance(reservations_data, dict):
             for r_id, data in reservations_data.items():
                 if isinstance(data, dict) and data.get('state', 'ACTIVE') == 'ACTIVE':
-                    self.active_reservations[str(r_id)] = {
-                        'reservation_id': str(r_id),
+                    self.active_reservations[r_id] = {
+                        'reservation_id': r_id,
                         'symbol': str(data.get('symbol', '')),
                         'side': str(data.get('side', 'BUY')).upper(),
                         'risk_pct': float(data.get('risk_pct', 0.0)),
@@ -145,10 +145,10 @@ class RiskManager:
 
         # Convert entry_price and stop_loss into the Account Equity currency
         # If equity is INR and price is in USDT (standard Binance stream price):
-        if effective_equity_curr == "INR" and str(quote_currency).upper() in ("USDT", "USD"):
+        if effective_equity_curr == "INR" and quote_currency.upper() in ("USDT", "USD"):
             entry_price_equity_curr = entry_price * rate
             stop_loss_equity_curr = stop_loss * rate
-        elif effective_equity_curr == "USDT" and str(quote_currency).upper() == "INR":
+        elif effective_equity_curr == "USDT" and quote_currency.upper() == "INR":
             entry_price_equity_curr = entry_price / rate
             stop_loss_equity_curr = stop_loss / rate
         else:
