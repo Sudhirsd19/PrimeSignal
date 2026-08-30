@@ -2,7 +2,7 @@ import ccxt.async_support as ccxt
 import asyncio
 import inspect
 import time
-from typing import Any, cast
+from typing import Any, cast, Optional
 from config import Config
 from execution.execution_result import (
     ExecutionIntentJournal,
