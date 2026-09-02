@@ -655,6 +655,18 @@ async def get_analytics():
             })
         coin_pnl_list.sort(key=lambda x: x["total_pnl"], reverse=True)
         
+        # --- PROFIT-BASED LOGIC: Advanced performance analytics ---
+        # Filter out TRADE_LIFECYCLE records for basic stats (they would double-count)
+        non_lifecycle_trades = [t for t in trades if t.get('type') != 'TRADE_LIFECYCLE']
+        lifecycle_trades = [t for t in trades if t.get('type') == 'TRADE_LIFECYCLE']
+        
+        try:
+            from core.performance_analytics import calculate_advanced_metrics
+            advanced_metrics = calculate_advanced_metrics(non_lifecycle_trades)
+        except Exception as adv_err:
+            print(f"[ANALYTICS] Advanced metrics calculation failed: {adv_err}")
+            advanced_metrics = {}
+        
         return {
             "status": "success",
             "wins": wins,
@@ -665,7 +677,22 @@ async def get_analytics():
             "avg_duration": avg_dur_str,
             "equity_curve": equity_curve,
             "coin_pnl": coin_pnl_list,
-            "history": list(reversed(formatted_history))[:100]
+            "history": list(reversed(formatted_history))[:100],
+            # Advanced institutional metrics
+            "advanced_metrics": advanced_metrics,
+            # Consolidated trade lifecycles
+            "lifecycle_trades": list(reversed([{
+                "trade_id": lt.get("trade_id", ""),
+                "symbol": lt.get("symbol", ""),
+                "side": lt.get("side", ""),
+                "entry_price": lt.get("entry_price", 0),
+                "final_exit_price": lt.get("final_exit_price", 0),
+                "total_pnl_net": lt.get("total_pnl_net", 0),
+                "total_fees": lt.get("total_fees", 0),
+                "stages_completed": lt.get("stages_completed", []),
+                "exit_reason": lt.get("exit_reason", ""),
+                "duration": lt.get("duration", ""),
+            } for lt in lifecycle_trades]))[:50],
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}

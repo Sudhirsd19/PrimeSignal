@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 import inspect
 import os
 import threading
@@ -117,6 +118,14 @@ class PrimeSignalBot:
         self.cluster_risk_penalty = False
         self.global_last_trade_time: float = 0.0
         self.traded_zones_cache = {}
+
+        # ─── PROFIT-BASED LOGIC: New state tracking ───
+        # Trade lifecycle ID for consolidated PnL grouping (TP1+TP2+Runner = 1 trade)
+        self.current_trade_id: dict[str, str] = {sym: "" for sym in Config.SUPPORTED_SYMBOLS}
+        # FX rate lock at entry time for CoinDCX INR trades
+        self.entry_fx_rate: dict[str, float] = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
+        # Accumulated fees per trade lifecycle (entry + partial exits)
+        self.accumulated_fees: dict[str, float] = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
 
         # Dry-run virtual balance (used for paper trading & dry-run simulation)
         starting_bal = getattr(Config, 'PAPER_STARTING_BALANCE', 2000.0 if getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' else 10000.0)
@@ -1199,6 +1208,11 @@ class PrimeSignalBot:
                     self.realized_pnl[symbol] = 0.0
                     self.entry_time[symbol] = time.time() * 1000.0
                     self.last_trade_time[symbol] = time.time()
+                    # --- PROFIT-BASED LOGIC: Trade lifecycle init ---
+                    self.current_trade_id[symbol] = f"TRADE_{symbol.replace('/', '')}_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
+                    self.entry_fx_rate[symbol] = float(getattr(Config, 'USDT_INR_RATE', 85.0))
+                    entry_fee = filled_amount * fill_price * Config.FEE_RATE
+                    self.accumulated_fees[symbol] = entry_fee
                     self.position_mode[symbol] = str(metadata.get('mode') or 'STRICT')
                     zone_id_raw = metadata.get('zone_id')
                     zone_id = str(zone_id_raw) if zone_id_raw is not None else None
@@ -1380,6 +1394,11 @@ class PrimeSignalBot:
                     self.realized_pnl[symbol] = 0.0
                     self.entry_time[symbol] = time.time() * 1000.0
                     self.last_trade_time[symbol] = time.time()
+                    # --- PROFIT-BASED LOGIC: Trade lifecycle init ---
+                    self.current_trade_id[symbol] = f"TRADE_{symbol.replace('/', '')}_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
+                    self.entry_fx_rate[symbol] = float(getattr(Config, 'USDT_INR_RATE', 85.0))
+                    entry_fee = filled_amount * fill_price * Config.FEE_RATE
+                    self.accumulated_fees[symbol] = entry_fee
                     self.position_mode[symbol] = str(metadata.get('mode') or 'STRICT')
                     zone_id_raw = metadata.get('zone_id')
                     zone_id = str(zone_id_raw) if zone_id_raw is not None else None
@@ -1600,6 +1619,10 @@ class PrimeSignalBot:
                                     
                                     # Log partial TP1 trade record for accurate PnL tracking
                                     tp1_pnl_usdt = tp1_size * (curr_price - self.entry_price[symbol])
+                                    # --- PROFIT-BASED LOGIC: Net fee deduction ---
+                                    tp1_fee = tp1_size * self.entry_price[symbol] * Config.FEE_RATE + tp1_size * curr_price * Config.FEE_RATE
+                                    tp1_pnl_usdt -= tp1_fee
+                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + tp1_fee
                                     tp1_pnl_pct = (curr_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
                                     self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp1_pnl_usdt
                                     
@@ -1609,6 +1632,7 @@ class PrimeSignalBot:
                                     dur_str = f"{dur_secs // 60}m {dur_secs % 60}s" if dur_secs >= 60 else f"{dur_secs}s"
                                     
                                     tp1_record = {
+                                        'trade_id': self.current_trade_id.get(symbol, ''),
                                         'symbol': symbol,
                                         'side': 'LONG',
                                         'type': 'TP1_PARTIAL',
@@ -1690,6 +1714,10 @@ class PrimeSignalBot:
                                     
                                     # Log partial TP2 trade record for accurate PnL tracking
                                     tp2_pnl_usdt = tp2_size * (curr_price - self.entry_price[symbol])
+                                    # --- PROFIT-BASED LOGIC: Net fee deduction ---
+                                    tp2_fee = tp2_size * self.entry_price[symbol] * Config.FEE_RATE + tp2_size * curr_price * Config.FEE_RATE
+                                    tp2_pnl_usdt -= tp2_fee
+                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + tp2_fee
                                     tp2_pnl_pct = (curr_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
                                     self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp2_pnl_usdt
                                     
@@ -1840,6 +1868,10 @@ class PrimeSignalBot:
                                     
                                     # Log partial TP1 trade record for accurate PnL tracking
                                     tp1_pnl_usdt = tp1_size * (self.entry_price[symbol] - curr_price)
+                                    # --- PROFIT-BASED LOGIC: Net fee deduction ---
+                                    tp1_fee = tp1_size * self.entry_price[symbol] * Config.FEE_RATE + tp1_size * curr_price * Config.FEE_RATE
+                                    tp1_pnl_usdt -= tp1_fee
+                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + tp1_fee
                                     tp1_pnl_pct = (self.entry_price[symbol] - curr_price) / self.entry_price[symbol] * 100.0
                                     self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp1_pnl_usdt
                                     
@@ -1849,6 +1881,7 @@ class PrimeSignalBot:
                                     dur_str = f"{dur_secs // 60}m {dur_secs % 60}s" if dur_secs >= 60 else f"{dur_secs}s"
                                     
                                     tp1_record = {
+                                        'trade_id': self.current_trade_id.get(symbol, ''),
                                         'symbol': symbol,
                                         'side': 'SHORT',
                                         'type': 'TP1_PARTIAL',
@@ -1931,6 +1964,10 @@ class PrimeSignalBot:
                                     
                                     # Log partial TP2 trade record for accurate PnL tracking
                                     tp2_pnl_usdt = tp2_size * (self.entry_price[symbol] - curr_price)
+                                    # --- PROFIT-BASED LOGIC: Net fee deduction ---
+                                    tp2_fee = tp2_size * self.entry_price[symbol] * Config.FEE_RATE + tp2_size * curr_price * Config.FEE_RATE
+                                    tp2_pnl_usdt -= tp2_fee
+                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + tp2_fee
                                     tp2_pnl_pct = (self.entry_price[symbol] - curr_price) / self.entry_price[symbol] * 100.0
                                     self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp2_pnl_usdt
                                     
@@ -2286,6 +2323,14 @@ class PrimeSignalBot:
                     pnl_usdt = actual_exit * (self.entry_price[symbol] - exit_price)
                     if not self.has_keys or Config.PAPER_TRADING:
                         self._dry_run_balance_usdt += ((actual_exit * self.entry_price[symbol]) + pnl_usdt) * (rate if is_inr else 1.0)
+
+                # --- PROFIT-BASED LOGIC: Net fee deduction ---
+                exit_fee = actual_exit * exit_price * Config.FEE_RATE
+                entry_fee_for_exit = actual_exit * self.entry_price[symbol] * Config.FEE_RATE
+                pnl_usdt_gross = pnl_usdt
+                pnl_usdt -= (exit_fee + entry_fee_for_exit)
+                pnl_pct = pnl_usdt / (actual_exit * self.entry_price[symbol]) * 100.0 if (actual_exit * self.entry_price[symbol]) > 0 else 0.0
+                self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + exit_fee + entry_fee_for_exit
                     
                 entry_ts = self.entry_time.get(symbol, int(time.time() * 1000))
                 exit_ts = int(time.time() * 1000)
@@ -2298,11 +2343,16 @@ class PrimeSignalBot:
                 exit_dt_str = datetime.datetime.fromtimestamp(exit_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
 
                 trade_record = {
+                    'trade_id': self.current_trade_id.get(symbol, ''),
                     'symbol': symbol,
                     'side': self.position_side[symbol],
                     'entry_price': self.entry_price[symbol],
                     'exit_price': exit_price,
                     'pnl_usdt': round(pnl_usdt, 4),
+                    'pnl_usdt_gross': round(pnl_usdt_gross, 4),
+                    'total_fees': round(self.accumulated_fees.get(symbol, 0.0), 4),
+                    'entry_fx_rate': self.entry_fx_rate.get(symbol, 0.0),
+                    'exit_fx_rate': float(getattr(Config, 'USDT_INR_RATE', 85.0)),
                     'pnl_pct': round(pnl_pct, 2),
                     'entry_time': entry_ts,
                     'exit_time': exit_ts,
@@ -2399,6 +2449,41 @@ class PrimeSignalBot:
                     self.tp_cooldown_until[symbol] = now_exit + (post_exit_mins * 60.0)
                     add_log_message(f"[{symbol}] ⏱️ Position closed. Post-exit cooldown active for {post_exit_mins}m.")
 
+                # --- PROFIT-BASED LOGIC: Consolidated trade lifecycle record ---
+                if is_full_close:
+                    total_lifecycle_pnl = self.realized_pnl.get(symbol, 0.0) + pnl_usdt
+                    total_lifecycle_fees = self.accumulated_fees.get(symbol, 0.0)
+                    stages = []
+                    if self.partial_tp_taken.get(symbol, False): stages.append('TP1')
+                    if self.tp2_taken.get(symbol, False): stages.append('TP2')
+                    stages.append(reason)
+                    lifecycle_record = {
+                        'trade_id': self.current_trade_id.get(symbol, ''),
+                        'type': 'TRADE_LIFECYCLE',
+                        'symbol': symbol,
+                        'side': self.position_side[symbol],
+                        'entry_price': self.entry_price[symbol],
+                        'final_exit_price': exit_price,
+                        'original_size': self.original_position_size.get(symbol, 0),
+                        'total_pnl_net': round(total_lifecycle_pnl, 4),
+                        'total_fees': round(total_lifecycle_fees, 4),
+                        'stages_completed': stages,
+                        'exit_reason': reason,
+                        'duration': duration_str,
+                        'entry_time': entry_ts,
+                        'exit_time': exit_ts,
+                        'entry_fx_rate': self.entry_fx_rate.get(symbol, 0.0),
+                        'exit_fx_rate': float(getattr(Config, 'USDT_INR_RATE', 85.0)),
+                    }
+                    DashboardState.trades.append(lifecycle_record)
+                    try:
+                        log_dir = Path("data")
+                        log_dir.mkdir(parents=True, exist_ok=True)
+                        with open(log_dir / "trade_logs.jsonl", "a", encoding="utf-8") as f:
+                            f.write(json.dumps(lifecycle_record) + "\n")
+                    except Exception as e:
+                        print(f"[LOG] Failed to write lifecycle log: {e}")
+
                 if is_full_close:
                     self.in_position[symbol] = False
                     self.position_side[symbol] = "HOLD"
@@ -2412,6 +2497,9 @@ class PrimeSignalBot:
                     self.take_profit_2r[symbol] = 0.0
                     self.partial_tp_taken[symbol] = False
                     self.tp2_taken[symbol] = False
+                    self.current_trade_id[symbol] = ""
+                    self.entry_fx_rate[symbol] = 0.0
+                    self.accumulated_fees[symbol] = 0.0
 
                     if symbol in DashboardState.active_positions:
                         new_positions = DashboardState.active_positions.copy()

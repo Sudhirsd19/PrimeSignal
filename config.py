@@ -19,6 +19,12 @@ class Config:
     MAX_TRADE_ALLOCATION_PCT = float(os.getenv("MAX_TRADE_ALLOCATION_PCT", "0.35")) # Max 35% of total wallet equity per trade
     DYNAMIC_BE_BUFFER_PCT = float(os.getenv("DYNAMIC_BE_BUFFER_PCT", "0.0030")) # Dynamic Roundtrip Fee (0.20%) + Slippage Buffer (0.10%)
     MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "2.0"))
+    # Daily Profit Lock: Auto-pause after reaching daily profit target to protect gains
+    MAX_DAILY_PROFIT_PCT = float(os.getenv("MAX_DAILY_PROFIT_PCT", "4.0"))
+    ENABLE_DAILY_PROFIT_LOCK = os.getenv("ENABLE_DAILY_PROFIT_LOCK", "True").lower() in ("true", "1", "yes")
+    # Dynamic Kelly Criterion Position Sizing
+    ENABLE_KELLY_SIZING = os.getenv("ENABLE_KELLY_SIZING", "False").lower() in ("true", "1", "yes")
+    KELLY_LOOKBACK_TRADES = int(os.getenv("KELLY_LOOKBACK_TRADES", "20"))
     CONSECUTIVE_LOSS_LIMIT = int(os.getenv("CONSECUTIVE_LOSS_LIMIT", "2"))
     MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "2"))
     MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "6"))

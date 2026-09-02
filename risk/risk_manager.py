@@ -9,6 +9,7 @@ class RiskManager:
     def __init__(self):
         self.daily_starting_equity = None
         self.current_drawdown_pct = 0.0
+        self.daily_profit_locked = False
         self.reserved_risk_pct = 0.0 # Atomic risk tracker for pending orders
         self.reserved_open_count = 0
         self.reserved_longs_count = 0
@@ -225,6 +226,22 @@ class RiskManager:
                 enc = sys.stdout.encoding or 'utf-8'
                 print(msg.encode(enc, errors='replace').decode(enc))
             return False
+
+        # Daily Profit Lock: Auto-pause after hitting daily profit target to protect gains
+        if getattr(Config, 'ENABLE_DAILY_PROFIT_LOCK', True):
+            max_profit = getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0)
+            if self.current_drawdown_pct >= max_profit:
+                self.daily_profit_locked = True
+                msg = f"🎯 PROFIT LOCK: Daily gain target hit (+{self.current_drawdown_pct:.2f}% >= +{max_profit:.1f}%). Locking profits, no new entries until midnight UTC."
+                try:
+                    print(msg)
+                except UnicodeEncodeError:
+                    import sys
+                    enc = sys.stdout.encoding or 'utf-8'
+                    print(msg.encode(enc, errors='replace').decode(enc))
+                return False
+            else:
+                self.daily_profit_locked = False
             
         return True
 
@@ -256,3 +273,48 @@ class RiskManager:
             return new_stop if new_stop < stop_loss else stop_loss
 
         return stop_loss
+
+    def calculate_kelly_risk_pct(self, recent_trades: list[dict], base_risk: float = None) -> float:
+        """
+        Half-Kelly Criterion position sizing based on rolling trade performance.
+        Kelly% = W - [(1-W) / R]  where W=win_rate, R=avg_win/avg_loss
+        Uses HALF Kelly for safety (fractional Kelly).
+        
+        Returns dynamic risk percentage (floored at 0.2%, capped at 2.0%).
+        """
+        base = base_risk or Config.RISK_PCT
+        lookback = getattr(Config, 'KELLY_LOOKBACK_TRADES', 20)
+        
+        # Use only the most recent N trades
+        trades = recent_trades[-lookback:] if len(recent_trades) > lookback else recent_trades
+        
+        if len(trades) < 10:
+            return base  # Not enough data, use default fixed risk
+        
+        wins = [t for t in trades if float(t.get('pnl_usdt', 0) or t.get('pnl', 0) or 0) > 0]
+        losses = [t for t in trades if float(t.get('pnl_usdt', 0) or t.get('pnl', 0) or 0) < 0]
+        
+        if not losses:
+            return min(base * 1.5, 2.0)  # All wins, moderate increase capped at 2%
+        
+        if not wins:
+            return max(0.2, base * 0.25)  # All losses, heavily reduce but floor at 0.2%
+        
+        W = len(wins) / len(trades)
+        avg_win = sum(float(t.get('pnl_usdt', 0) or t.get('pnl', 0) or 0) for t in wins) / len(wins)
+        avg_loss = abs(sum(float(t.get('pnl_usdt', 0) or t.get('pnl', 0) or 0) for t in losses) / len(losses))
+        R = avg_win / avg_loss if avg_loss > 0 else 1.0
+        
+        # Kelly Formula: f* = W - (1-W)/R
+        kelly = W - ((1 - W) / R)
+        
+        # Half Kelly for safety
+        half_kelly = kelly * 0.5
+        
+        # Floor at 0.2%, cap at 2.0%
+        dynamic_risk = max(0.2, min(half_kelly * 100, 2.0))
+        
+        print(f"[KELLY] Win Rate: {W*100:.1f}%, Avg Win/Loss Ratio: {R:.2f}, Kelly%: {kelly*100:.2f}%, Half-Kelly Risk: {dynamic_risk:.2f}%")
+        
+        return round(dynamic_risk, 2)
+
