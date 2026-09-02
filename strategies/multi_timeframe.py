@@ -481,9 +481,9 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
 
                 risk        = max(curr_price - stop_loss, 1e-9)
                 fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
-                take_profit_1r = curr_price + (risk * 1.0) + fee_adj
-                take_profit_2r = curr_price + (risk * getattr(Config, 'MIN_RISK_REWARD_RATIO', 2.2)) + fee_adj
-                take_profit_3r = curr_price + (risk * getattr(Config, 'RISK_REWARD_RATIO', 4.0)) + fee_adj
+                take_profit_1r = curr_price + (risk * getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)) + fee_adj
+                take_profit_2r = curr_price + (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.5)) + fee_adj
+                take_profit_3r = curr_price + (risk * 4.0) + fee_adj
 
                 metadata['stop_loss']  = stop_loss
                 metadata['take_profit_1r'] = take_profit_1r
@@ -671,9 +671,9 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
 
                 risk        = max(stop_loss - curr_price, 1e-9)
                 fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
-                take_profit_1r = curr_price - (risk * 1.0) - fee_adj
-                take_profit_2r = curr_price - (risk * getattr(Config, 'MIN_RISK_REWARD_RATIO', 2.2)) - fee_adj
-                take_profit_3r = curr_price - (risk * getattr(Config, 'RISK_REWARD_RATIO', 4.0)) - fee_adj
+                take_profit_1r = curr_price - (risk * getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)) - fee_adj
+                take_profit_2r = curr_price - (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.5)) - fee_adj
+                take_profit_3r = curr_price - (risk * 4.0) - fee_adj
 
                 metadata['stop_loss']  = stop_loss
                 metadata['take_profit_1r'] = take_profit_1r

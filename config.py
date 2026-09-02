@@ -23,16 +23,16 @@ class Config:
     MAX_DAILY_PROFIT_PCT = float(os.getenv("MAX_DAILY_PROFIT_PCT", "4.0"))
     ENABLE_DAILY_PROFIT_LOCK = os.getenv("ENABLE_DAILY_PROFIT_LOCK", "True").lower() in ("true", "1", "yes")
     # Dynamic Kelly Criterion Position Sizing
-    ENABLE_KELLY_SIZING = os.getenv("ENABLE_KELLY_SIZING", "False").lower() in ("true", "1", "yes")
+    ENABLE_KELLY_SIZING = os.getenv("ENABLE_KELLY_SIZING", "True").lower() in ("true", "1", "yes")
     KELLY_LOOKBACK_TRADES = int(os.getenv("KELLY_LOOKBACK_TRADES", "20"))
     CONSECUTIVE_LOSS_LIMIT = int(os.getenv("CONSECUTIVE_LOSS_LIMIT", "2"))
     MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "2"))
-    MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "6"))
+    MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "3"))
     TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015")) # Deprecated in favor of ATR
     TRAILING_ATR_MULT = float(os.getenv("TRAILING_ATR_MULT", "1.5"))
-    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "0.75")) # Zero-Risk Breakeven Lock at +0.75R
-    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.5")) # TP1 60% scale-out at 1.5R
-    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.5")) # TP2 40% runner at 2.5R
+    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.0")) # Zero-Risk Breakeven Lock at +1.0R
+    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.5")) # TP1 50% scale-out at 1.5R
+    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.5")) # TP2 30% scale-out at 2.5R
     ML_CONFIDENCE_THRESHOLD = float(os.getenv("ML_CONFIDENCE_THRESHOLD", "0.60"))
     
     # ─── ULTIMATE SHIELD: 5 Advanced Institutional Protection Parameters ───

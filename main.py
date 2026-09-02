@@ -1215,9 +1215,10 @@ class PrimeSignalBot:
                     self.partial_tp_taken[symbol] = False
                     self.tp2_taken[symbol] = False
                     r_amount = abs(sl - fill_price)
-                    fee_adj = fill_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
-                    self.take_profit_1r[symbol] = float(fill_price + (1.0 * r_amount) + fee_adj)
-                    self.take_profit_2r[symbol] = float(fill_price + (2.2 * r_amount) + fee_adj)
+                    tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5))
+                    tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.5))
+                    self.take_profit_1r[symbol] = float(fill_price + (tp1_mult * r_amount) + fee_adj)
+                    self.take_profit_2r[symbol] = float(fill_price + (tp2_mult * r_amount) + fee_adj)
                     self.take_profit[symbol] = float(fill_price + (4.0 * r_amount) + fee_adj)
                     
                     self.highest_price_reached[symbol] = fill_price
@@ -1305,8 +1306,8 @@ class PrimeSignalBot:
                         f"Setup Type: {metadata.get('setup_type', 'NONE')}\n"
                         f"Entry: {fill_price:.4f}\n"
                         f"Stop Loss: {sl:.4f} (NATIVE PROTECTED)\n"
-                        f"TP1 (1.0R - 50%): {self.take_profit_1r[symbol]:.4f}\n"
-                        f"TP2 (2.2R - 30%): {self.take_profit_2r[symbol]:.4f}\n"
+                        f"TP1 ({tp1_mult:.1f}R - 50%): {self.take_profit_1r[symbol]:.4f}\n"
+                        f"TP2 ({tp2_mult:.1f}R - 30%): {self.take_profit_2r[symbol]:.4f}\n"
                         f"Runner (4.0R - 20%): {self.take_profit[symbol]:.4f}\n"
                         f"Position Size: {filled_amount:.6f}\n"
                         f"Confidence: {prob:.2f}\n"
@@ -1401,9 +1402,10 @@ class PrimeSignalBot:
                     self.partial_tp_taken[symbol] = False
                     self.tp2_taken[symbol] = False
                     r_amount = abs(sl - fill_price)
-                    fee_adj = fill_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
-                    self.take_profit_1r[symbol] = float(fill_price - (1.0 * r_amount) - fee_adj)
-                    self.take_profit_2r[symbol] = float(fill_price - (2.2 * r_amount) - fee_adj)
+                    tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5))
+                    tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.5))
+                    self.take_profit_1r[symbol] = float(fill_price - (tp1_mult * r_amount) - fee_adj)
+                    self.take_profit_2r[symbol] = float(fill_price - (tp2_mult * r_amount) - fee_adj)
                     self.take_profit[symbol] = float(fill_price - (4.0 * r_amount) - fee_adj)
                     
                     self.lowest_price_reached[symbol] = fill_price
@@ -1490,8 +1492,8 @@ class PrimeSignalBot:
                         f"Setup Type: {metadata.get('setup_type', 'NONE')}\n"
                         f"Entry: {fill_price:.4f}\n"
                         f"Stop Loss: {sl:.4f} (NATIVE PROTECTED)\n"
-                        f"TP1 (1.0R - 50%): {self.take_profit_1r[symbol]:.4f}\n"
-                        f"TP2 (2.2R - 30%): {self.take_profit_2r[symbol]:.4f}\n"
+                        f"TP1 ({tp1_mult:.1f}R - 50%): {self.take_profit_1r[symbol]:.4f}\n"
+                        f"TP2 ({tp2_mult:.1f}R - 30%): {self.take_profit_2r[symbol]:.4f}\n"
                         f"Runner (4.0R - 20%): {self.take_profit[symbol]:.4f}\n"
                         f"Position Size: {filled_amount:.6f}\n"
                         f"Confidence: {prob:.2f}\n"
@@ -1572,7 +1574,8 @@ class PrimeSignalBot:
                             # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven
                             fee_buffer_pct = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
                             fee_offset = self.entry_price[symbol] * fee_buffer_pct
-                            min_required_profit = max(0.50 * r_dist, fee_offset * 1.15)
+                            tsl_activation = float(getattr(Config, 'TSL_ACTIVATION_R', 1.0))
+                            min_required_profit = max(tsl_activation * r_dist, fee_offset * 1.15)
                             
                             if self.highest_price_reached[symbol] >= self.entry_price[symbol] + min_required_profit:
                                 be_sl = min(curr_price * 0.9995, self.entry_price[symbol] + fee_offset)
@@ -1699,20 +1702,22 @@ class PrimeSignalBot:
                                     orig_val = orig_sz * self.entry_price[symbol]
                                     guar_pnl_pct = (guar_pnl_usdt / orig_val * 100.0) if orig_val > 0 else 0.0
                                     
+                                    tp2_rr = getattr(Config, 'RISK_REWARD_RATIO', 2.5)
                                     add_log_message(f"[{symbol}] 🔒 PROFIT LOCKED at Stop Loss: {self.stop_loss[symbol]:.4f} (+{guar_pnl_usdt:.2f} USDT total locked). New Target: TP2 @ {self.take_profit_2r[symbol]:.4f}")
                                     await self.notifier.send_message(
                                         f"🔒 *PROFIT LOCKED ({symbol})*\n"
                                         f"🎯 TP1 Hit! 50% profit booked (+{tp1_pnl_usdt:.2f} USDT).\n"
                                         f"🔒 Total Guaranteed Locked Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
-                                        f"🎯 New Active Target: TP2 (2.2R) @ {self.take_profit_2r[symbol]:.4f}"
+                                        f"🎯 New Active Target: TP2 ({tp2_rr:.1f}R) @ {self.take_profit_2r[symbol]:.4f}"
                                     )
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP1 order REJECTED by exchange. State NOT updated.")
                                     
-                            # TP2 (30% Scale-Out at 2.2R -> Leaves 20% Runner)
+                            # TP2 (30% Scale-Out -> Leaves 20% Runner)
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price >= self.take_profit_2r[symbol]:
-                                add_log_message(f"[{symbol}] 🎯 Target 2 (2.2R) hit! Booking 30% profit. 20% Runner active.")
+                                tp2_rr = getattr(Config, 'RISK_REWARD_RATIO', 2.5)
+                                add_log_message(f"[{symbol}] 🎯 Target 2 ({tp2_rr:.1f}R) hit! Booking 30% profit. 20% Runner active.")
                                 tp2_size = self.position_size[symbol] * 0.60  # 60% of remaining 50% = 30% of original
                                 tp2_success = False
                                 tp2_order = None
@@ -1821,7 +1826,8 @@ class PrimeSignalBot:
                             # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven
                             fee_buffer_pct = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
                             fee_offset = self.entry_price[symbol] * fee_buffer_pct
-                            min_required_profit = max(0.50 * r_dist, fee_offset * 1.15)
+                            tsl_activation = float(getattr(Config, 'TSL_ACTIVATION_R', 1.0))
+                            min_required_profit = max(tsl_activation * r_dist, fee_offset * 1.15)
                             
                             if self.lowest_price_reached[symbol] <= self.entry_price[symbol] - min_required_profit:
                                 be_sl = max(curr_price * 1.0005, self.entry_price[symbol] - fee_offset)
@@ -1949,20 +1955,22 @@ class PrimeSignalBot:
                                     orig_val = orig_sz * self.entry_price[symbol]
                                     guar_pnl_pct = (guar_pnl_usdt / orig_val * 100.0) if orig_val > 0 else 0.0
                                     
+                                    tp2_rr = getattr(Config, 'RISK_REWARD_RATIO', 2.5)
                                     add_log_message(f"[{symbol}] 🔒 PROFIT LOCKED at Stop Loss: {self.stop_loss[symbol]:.4f} (+{guar_pnl_usdt:.2f} USDT total locked). New Target: TP2 @ {self.take_profit_2r[symbol]:.4f}")
                                     await self.notifier.send_message(
                                         f"🔒 *PROFIT LOCKED ({symbol})*\n"
                                         f"🎯 TP1 Hit! 50% profit booked (+{tp1_pnl_usdt:.2f} USDT).\n"
                                         f"🔒 Total Guaranteed Locked Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
-                                        f"🎯 New Active Target: TP2 (2.2R) @ {self.take_profit_2r[symbol]:.4f}"
+                                        f"🎯 New Active Target: TP2 ({tp2_rr:.1f}R) @ {self.take_profit_2r[symbol]:.4f}"
                                     )
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP1 order REJECTED by exchange. State NOT updated.")
                                     
-                            # TP2 (30% Scale-Out at 2.2R -> Leaves 20% Runner)
+                            # TP2 (30% Scale-Out -> Leaves 20% Runner)
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price <= self.take_profit_2r[symbol]:
-                                add_log_message(f"[{symbol}] 🎯 Target 2 (2.2R) hit! Booking 30% profit. 20% Runner active.")
+                                tp2_rr = getattr(Config, 'RISK_REWARD_RATIO', 2.5)
+                                add_log_message(f"[{symbol}] 🎯 Target 2 ({tp2_rr:.1f}R) hit! Booking 30% profit. 20% Runner active.")
                                 tp2_size = self.position_size[symbol] * 0.60  # 60% of remaining 50% = 30% of original
                                 tp2_success = False
                                 tp2_order = None
