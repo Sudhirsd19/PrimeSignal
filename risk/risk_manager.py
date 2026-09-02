@@ -249,6 +249,7 @@ class RiskManager:
         """Reset starting balance for the day (run at UTC midnight)."""
         self.daily_starting_equity = current_equity
         self.current_drawdown_pct = 0.0
+        self.daily_profit_locked = False
         eq_val = current_equity if (current_equity is not None and not math.isnan(current_equity)) else 0.0
         print(f"[RISK] Daily equity checkpoint reset to {eq_val:.2f} USDT")
 

@@ -520,6 +520,10 @@ async def get_analytics():
                 unique_trades.append(t)
         trades = unique_trades
             
+        # Separate lifecycle summary records from individual execution records
+        raw_trades = [t for t in trades if t.get('type') != 'TRADE_LIFECYCLE']
+        lifecycle_trades = [t for t in trades if t.get('type') == 'TRADE_LIFECYCLE']
+
         wins = 0
         losses = 0
         cumulative_pnl = 0.0
@@ -533,7 +537,7 @@ async def get_analytics():
         formatted_history = []
         import datetime
 
-        for t in trades:
+        for t in raw_trades:
             pnl = float(t.get("pnl_usdt") if t.get("pnl_usdt") is not None else (t.get("pnl", 0) or 0))
             symbol = t.get("symbol", "UNKNOWN")
             
@@ -656,13 +660,11 @@ async def get_analytics():
         coin_pnl_list.sort(key=lambda x: x["total_pnl"], reverse=True)
         
         # --- PROFIT-BASED LOGIC: Advanced performance analytics ---
-        # Filter out TRADE_LIFECYCLE records for basic stats (they would double-count)
-        non_lifecycle_trades = [t for t in trades if t.get('type') != 'TRADE_LIFECYCLE']
-        lifecycle_trades = [t for t in trades if t.get('type') == 'TRADE_LIFECYCLE']
-        
         try:
             from core.performance_analytics import calculate_advanced_metrics
-            advanced_metrics = calculate_advanced_metrics(non_lifecycle_trades)
+            # Prefer consolidated lifecycle trades for true position-level metrics, fallback to raw trades
+            metrics_source = lifecycle_trades if len(lifecycle_trades) >= 5 else raw_trades
+            advanced_metrics = calculate_advanced_metrics(metrics_source)
         except Exception as adv_err:
             print(f"[ANALYTICS] Advanced metrics calculation failed: {adv_err}")
             advanced_metrics = {}

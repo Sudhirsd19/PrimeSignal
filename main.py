@@ -180,6 +180,9 @@ class PrimeSignalBot:
                 'position_mode': self.position_mode,
                 'last_trade_time': self.last_trade_time,
                 'last_zone_traded': self.last_zone_traded,
+                'current_trade_id': self.current_trade_id,
+                'entry_fx_rate': self.entry_fx_rate,
+                'accumulated_fees': self.accumulated_fees,
                 'closed_trades': list(DashboardState.trades[-100:]),
                 'order_state_machine': self.order_state_machine.serialize_all(),
                 'active_risk_reservations': self.risk.serialize_reservations() if hasattr(self, 'risk') else {},
@@ -298,6 +301,9 @@ class PrimeSignalBot:
                 self.position_mode = {k: str(v) for k, v in safe_load('position_mode', 'STRICT').items()}
                 self.last_trade_time = {k: float(v or 0.0) for k, v in safe_load('last_trade_time', 0.0).items()}
                 self.last_zone_traded = {k: (str(v) if v is not None else None) for k, v in safe_load('last_zone_traded', None).items()}
+                self.current_trade_id = {k: str(v or '') for k, v in safe_load('current_trade_id', '').items()}
+                self.entry_fx_rate = {k: float(v or 0.0) for k, v in safe_load('entry_fx_rate', 0.0).items()}
+                self.accumulated_fees = {k: float(v or 0.0) for k, v in safe_load('accumulated_fees', 0.0).items()}
                 
                 # Restore closed trades history
                 saved_trades = state.get('closed_trades', []) if isinstance(state, dict) else []
@@ -641,10 +647,16 @@ class PrimeSignalBot:
         current_equity = DashboardState.balance_usdt if (self.has_keys and not Config.PAPER_TRADING) else self.calculate_total_equity()
             
         if not self.risk.check_circuit_breaker(current_equity):
-            DashboardState.signal_light = "RED"
-            DashboardState.signal_light_reason = f"🚨 SLEEP MODE ACTIVE: Daily loss limit hit ({self.risk.current_drawdown_pct:.2f}%). Trading suspended until 00:00 UTC."
-            add_log_message(f"🚨 SLEEP MODE / CIRCUIT BREAKER TRIGGERED: Daily loss limit reached ({self.risk.current_drawdown_pct:.2f}%). All entries suspended.")
-            await self.notifier.send_message(f"🚨 *SLEEP MODE ACTIVATED*\nDaily loss circuit breaker triggered ({self.risk.current_drawdown_pct:.2f}%). All new trades suspended until 00:00 UTC.")
+            if getattr(self.risk, 'daily_profit_locked', False):
+                DashboardState.signal_light = "GREEN"
+                DashboardState.signal_light_reason = f"🎯 PROFIT LOCK ACTIVE: Daily profit target hit (+{self.risk.current_drawdown_pct:.2f}%). Trading locked to secure gains until 00:00 UTC."
+                add_log_message(f"🎯 PROFIT LOCK TRIGGERED: Daily profit target reached (+{self.risk.current_drawdown_pct:.2f}% >= +{getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0):.1f}%). All new entries suspended.")
+                await self.notifier.send_message(f"🎯 *PROFIT LOCK ACTIVATED*\nDaily profit target hit (+{self.risk.current_drawdown_pct:.2f}%). Capital secured; all new trades paused until 00:00 UTC.")
+            else:
+                DashboardState.signal_light = "RED"
+                DashboardState.signal_light_reason = f"🚨 SLEEP MODE ACTIVE: Daily loss limit hit ({self.risk.current_drawdown_pct:.2f}%). Trading suspended until 00:00 UTC."
+                add_log_message(f"🚨 SLEEP MODE / CIRCUIT BREAKER TRIGGERED: Daily loss limit reached ({self.risk.current_drawdown_pct:.2f}%). All entries suspended.")
+                await self.notifier.send_message(f"🚨 *SLEEP MODE ACTIVATED*\nDaily loss circuit breaker triggered ({self.risk.current_drawdown_pct:.2f}%). All new trades suspended until 00:00 UTC.")
             return
 
         DashboardState.daily_drawdown_pct = self.risk.current_drawdown_pct
@@ -918,6 +930,12 @@ class PrimeSignalBot:
         if score >= 4.5: trade_risk_pct = 0.0125
         elif score >= 3.5: trade_risk_pct = 0.01
         else: trade_risk_pct = 0.0075
+        
+        # Dynamic Kelly Criterion Sizing (when enabled)
+        if getattr(Config, 'ENABLE_KELLY_SIZING', False):
+            dynamic_risk = self.risk.calculate_kelly_risk_pct(DashboardState.trades, base_risk=trade_risk_pct * 100.0)
+            trade_risk_pct = dynamic_risk / 100.0
+            add_log_message(f"[{symbol}] Kelly Dynamic Sizing: Risk scaled to {dynamic_risk:.2f}%.")
         
         if getattr(self, 'cluster_risk_penalty', False):
             trade_risk_pct *= 0.5
@@ -1622,7 +1640,7 @@ class PrimeSignalBot:
                                     # --- PROFIT-BASED LOGIC: Net fee deduction ---
                                     tp1_fee = tp1_size * self.entry_price[symbol] * Config.FEE_RATE + tp1_size * curr_price * Config.FEE_RATE
                                     tp1_pnl_usdt -= tp1_fee
-                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + tp1_fee
+                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + (tp1_size * curr_price * Config.FEE_RATE)
                                     tp1_pnl_pct = (curr_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
                                     self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp1_pnl_usdt
                                     
@@ -1717,7 +1735,7 @@ class PrimeSignalBot:
                                     # --- PROFIT-BASED LOGIC: Net fee deduction ---
                                     tp2_fee = tp2_size * self.entry_price[symbol] * Config.FEE_RATE + tp2_size * curr_price * Config.FEE_RATE
                                     tp2_pnl_usdt -= tp2_fee
-                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + tp2_fee
+                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + (tp2_size * curr_price * Config.FEE_RATE)
                                     tp2_pnl_pct = (curr_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
                                     self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp2_pnl_usdt
                                     
@@ -1727,6 +1745,7 @@ class PrimeSignalBot:
                                     dur_str = f"{dur_secs // 60}m {dur_secs % 60}s" if dur_secs >= 60 else f"{dur_secs}s"
                                     
                                     tp2_record = {
+                                        'trade_id': self.current_trade_id.get(symbol, ''),
                                         'symbol': symbol,
                                         'side': 'LONG',
                                         'type': 'TP2_PARTIAL',
@@ -1871,7 +1890,7 @@ class PrimeSignalBot:
                                     # --- PROFIT-BASED LOGIC: Net fee deduction ---
                                     tp1_fee = tp1_size * self.entry_price[symbol] * Config.FEE_RATE + tp1_size * curr_price * Config.FEE_RATE
                                     tp1_pnl_usdt -= tp1_fee
-                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + tp1_fee
+                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + (tp1_size * curr_price * Config.FEE_RATE)
                                     tp1_pnl_pct = (self.entry_price[symbol] - curr_price) / self.entry_price[symbol] * 100.0
                                     self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp1_pnl_usdt
                                     
@@ -1967,7 +1986,7 @@ class PrimeSignalBot:
                                     # --- PROFIT-BASED LOGIC: Net fee deduction ---
                                     tp2_fee = tp2_size * self.entry_price[symbol] * Config.FEE_RATE + tp2_size * curr_price * Config.FEE_RATE
                                     tp2_pnl_usdt -= tp2_fee
-                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + tp2_fee
+                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + (tp2_size * curr_price * Config.FEE_RATE)
                                     tp2_pnl_pct = (self.entry_price[symbol] - curr_price) / self.entry_price[symbol] * 100.0
                                     self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp2_pnl_usdt
                                     
@@ -1977,6 +1996,7 @@ class PrimeSignalBot:
                                     dur_str = f"{dur_secs // 60}m {dur_secs % 60}s" if dur_secs >= 60 else f"{dur_secs}s"
                                     
                                     tp2_record = {
+                                        'trade_id': self.current_trade_id.get(symbol, ''),
                                         'symbol': symbol,
                                         'side': 'SHORT',
                                         'type': 'TP2_PARTIAL',
@@ -2330,7 +2350,7 @@ class PrimeSignalBot:
                 pnl_usdt_gross = pnl_usdt
                 pnl_usdt -= (exit_fee + entry_fee_for_exit)
                 pnl_pct = pnl_usdt / (actual_exit * self.entry_price[symbol]) * 100.0 if (actual_exit * self.entry_price[symbol]) > 0 else 0.0
-                self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + exit_fee + entry_fee_for_exit
+                self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + exit_fee
                     
                 entry_ts = self.entry_time.get(symbol, int(time.time() * 1000))
                 exit_ts = int(time.time() * 1000)

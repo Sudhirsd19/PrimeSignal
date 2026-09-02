@@ -16,7 +16,7 @@ def calculate_advanced_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
 
     pnl_values: list[float] = []
     for t in trades:
-        pnl = t.get("pnl_usdt") if t.get("pnl_usdt") is not None else t.get("pnl", 0)
+        pnl = t.get("total_pnl_net") if t.get("total_pnl_net") is not None else (t.get("pnl_usdt") if t.get("pnl_usdt") is not None else t.get("pnl", 0))
         pnl_values.append(float(pnl or 0))
 
     if not pnl_values:
@@ -72,7 +72,8 @@ def calculate_advanced_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
         "expectancy": round(expectancy, 4), "best_trade": round(best_trade, 4),
         "worst_trade": round(worst_trade, 4), "max_drawdown": round(max_drawdown, 4),
         "max_drawdown_pct": round(max_drawdown_pct, 2), "sharpe_ratio": round(sharpe_ratio, 3),
-        "sortino_ratio": round(sortino_ratio, 3), "max_consecutive_wins": max_consec_wins,
+        "sortino_ratio": round(sortino_ratio, 3) if not math.isinf(sortino_ratio) else "inf",
+        "max_consecutive_wins": max_consec_wins,
         "max_consecutive_losses": max_consec_losses, "current_streak": current_streak,
         "current_streak_type": current_streak_type,
     }
