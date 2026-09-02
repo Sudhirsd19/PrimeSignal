@@ -1618,10 +1618,11 @@ class PrimeSignalBot:
                                         await self.exit_position(symbol, "EARLY_STRUCTURAL_INVALIDATION")
                                         continue
                             
-                            # TP1 (50% Scale-Out at 1.2R)
+                            # TP1 Scale-Out (80% at 2.0R)
                             if not self.partial_tp_taken[symbol] and curr_price >= self.take_profit_1r[symbol]:
-                                add_log_message(f"[{symbol}] 🎯 Target 1 hit! Booking 50% profit.")
-                                tp1_size = self.position_size[symbol] * 0.50
+                                tp1_pct = float(getattr(Config, 'TP1_SCALE_OUT_PCT', 0.80))
+                                add_log_message(f"[{symbol}] 🎯 Target 1 hit! Booking {int(tp1_pct*100)}% profit.")
+                                tp1_size = self.position_size[symbol] * tp1_pct
                                 tp1_success = False
                                 tp1_order = None
                                 if self.has_keys and not Config.PAPER_TRADING:
@@ -1714,11 +1715,11 @@ class PrimeSignalBot:
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP1 order REJECTED by exchange. State NOT updated.")
                                     
-                            # TP2 (30% Scale-Out -> Leaves 20% Runner)
+                            # TP2 (Remaining Runner Scale-Out at 3.0R)
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price >= self.take_profit_2r[symbol]:
-                                tp2_rr = getattr(Config, 'RISK_REWARD_RATIO', 2.5)
-                                add_log_message(f"[{symbol}] 🎯 Target 2 ({tp2_rr:.1f}R) hit! Booking 30% profit. 20% Runner active.")
-                                tp2_size = self.position_size[symbol] * 0.60  # 60% of remaining 50% = 30% of original
+                                tp2_rr = getattr(Config, 'RISK_REWARD_RATIO', 3.0)
+                                add_log_message(f"[{symbol}] 🎯 Target 2 ({tp2_rr:.1f}R) hit! Booking remaining runner.")
+                                tp2_size = self.position_size[symbol]
                                 tp2_success = False
                                 tp2_order = None
                                 if self.has_keys and not Config.PAPER_TRADING:
@@ -1870,10 +1871,11 @@ class PrimeSignalBot:
                                         await self.exit_position(symbol, "EARLY_STRUCTURAL_INVALIDATION")
                                         continue
                             
-                            # TP1 (50% Scale-Out at 1.2R)
+                            # TP1 Scale-Out (80% at 2.0R)
                             if not self.partial_tp_taken[symbol] and curr_price <= self.take_profit_1r[symbol]:
-                                add_log_message(f"[{symbol}] 🎯 Target 1 hit! Booking 50% profit.")
-                                tp1_size = self.position_size[symbol] * 0.50
+                                tp1_pct = float(getattr(Config, 'TP1_SCALE_OUT_PCT', 0.80))
+                                add_log_message(f"[{symbol}] 🎯 Target 1 hit! Booking {int(tp1_pct*100)}% profit.")
+                                tp1_size = self.position_size[symbol] * tp1_pct
                                 tp1_success = False
                                 tp1_order = None
                                 if self.has_keys and not Config.PAPER_TRADING:
@@ -1967,11 +1969,11 @@ class PrimeSignalBot:
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP1 order REJECTED by exchange. State NOT updated.")
                                     
-                            # TP2 (30% Scale-Out -> Leaves 20% Runner)
+                            # TP2 (Remaining Runner Scale-Out at 3.0R)
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price <= self.take_profit_2r[symbol]:
-                                tp2_rr = getattr(Config, 'RISK_REWARD_RATIO', 2.5)
-                                add_log_message(f"[{symbol}] 🎯 Target 2 ({tp2_rr:.1f}R) hit! Booking 30% profit. 20% Runner active.")
-                                tp2_size = self.position_size[symbol] * 0.60  # 60% of remaining 50% = 30% of original
+                                tp2_rr = getattr(Config, 'RISK_REWARD_RATIO', 3.0)
+                                add_log_message(f"[{symbol}] 🎯 Target 2 ({tp2_rr:.1f}R) hit! Booking remaining runner.")
+                                tp2_size = self.position_size[symbol]
                                 tp2_success = False
                                 tp2_order = None
                                 if self.has_keys and not Config.PAPER_TRADING:
