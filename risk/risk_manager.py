@@ -275,7 +275,7 @@ class RiskManager:
 
         return stop_loss
 
-    def calculate_kelly_risk_pct(self, recent_trades: list[dict], base_risk: float = None) -> float:
+    def calculate_kelly_risk_pct(self, recent_trades: list[dict], base_risk: float | None = None) -> float:
         """
         Half-Kelly Criterion position sizing based on rolling trade performance.
         Kelly% = W - [(1-W) / R]  where W=win_rate, R=avg_win/avg_loss
