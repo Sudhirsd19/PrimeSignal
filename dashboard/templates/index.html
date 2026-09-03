@@ -1457,6 +1457,21 @@
                                     posLiveEl.innerText = liveP >= 10 ? liveP.toFixed(4) : liveP.toFixed(6);
                                     posLiveEl.className = `terminal-font font-bold ${pnlClass}`;
 
+                                    const invested = parseFloat(posLiveEl.dataset.invested || "0");
+                                    const currentVal = invested > 0 ? (invested + pnlDisplay) : (posSize * liveP * (isINR ? fxRate : 1.0));
+                                    const currPrefix = isINR ? '₹' : '$';
+
+                                    const posCurValEl = document.getElementById(`pos-curval-${rawSym}`);
+                                    if (posCurValEl) {
+                                        posCurValEl.innerText = `${currPrefix}${currentVal.toFixed(2)} ${isINR ? 'INR' : 'USDT'}`;
+                                        posCurValEl.className = `terminal-font font-bold text-xs ${pnlClass}`;
+                                    }
+                                    const posDiffEl = document.getElementById(`pos-diff-${rawSym}`);
+                                    if (posDiffEl) {
+                                        posDiffEl.innerText = `${pnlDisplay >= 0 ? '▲ +' : '▼ -'}${currPrefix}${Math.abs(pnlDisplay).toFixed(2)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`;
+                                        posDiffEl.className = `text-[9px] ${pnlClass} font-bold block`;
+                                    }
+
                                     const posPnlValEl = document.getElementById(`pos-pnl-val-${rawSym}`);
                                     if (posPnlValEl) {
                                         const formatted = (Math.abs(pnlDisplay) >= 0.01 || pnlDisplay === 0) ? `${sign}${pnlDisplay.toFixed(2)}` : `${sign}${pnlDisplay.toFixed(4)}`;
@@ -2115,6 +2130,9 @@
                                 const sign = pnlDisplay >= 0 ? '+' : '';
                                 
                                 const formattedPnlVal = (Math.abs(pnlDisplay) >= 0.01 || pnlDisplay === 0) ? `${sign}${pnlDisplay.toFixed(2)}` : `${sign}${pnlDisplay.toFixed(4)}`;
+                                const currPrefix = isINR ? '₹' : '$';
+                                const investedDisplay = pos.invested_amount_currency !== undefined ? parseFloat(pos.invested_amount_currency) : (posSize * entryP * (isINR ? fxRate : 1.0));
+                                const currValDisplay = pos.live_value_currency !== undefined ? parseFloat(pos.live_value_currency) : (investedDisplay + pnlDisplay);
                                 
                                 // Status Badge for Plus / Minus (based directly on pnlPct!)
                                 let statusBadgeHTML = '';
@@ -2233,9 +2251,28 @@
                                         <!-- Price & Target Metrics Grid -->
                                         <div class="grid grid-cols-2 gap-1 text-[10px] font-semibold bg-[#0c101c]/80 p-1.5 rounded-md border border-[#1f2937]/60">
                                             <div><span class="text-gray-400">Entry:</span> <span class="text-white terminal-font font-bold">${entryP.toFixed(4)}</span></div>
-                                            <div><span class="text-gray-400">Live:</span> <span id="pos-live-${symSanitized}" data-sym="${sym}" data-entry="${entryP}" data-size="${posSize}" data-side="${pos.side}" data-currency="${pnlCurr}" data-rate="${fxRate}" data-t1="${target1P}" data-t2="${target2P}" data-tfinal="${finalTargetP}" data-stage="${stage}" data-sl="${slP}" class="terminal-font font-bold ${pnlClass}">${liveP.toFixed(4)}</span></div>
+                                            <div><span class="text-gray-400">Live:</span> <span id="pos-live-${symSanitized}" data-sym="${sym}" data-entry="${entryP}" data-size="${posSize}" data-invested="${investedDisplay.toFixed(2)}" data-side="${pos.side}" data-currency="${pnlCurr}" data-rate="${fxRate}" data-t1="${target1P}" data-t2="${target2P}" data-tfinal="${finalTargetP}" data-stage="${stage}" data-sl="${slP}" class="terminal-font font-bold ${pnlClass}">${liveP.toFixed(4)}</span></div>
                                             <div><span class="text-gray-400">SL:</span> <span class="text-red-400 terminal-font font-bold">${slP.toFixed(4)}</span> ${isProfitLocked ? '🔒' : ''}</div>
                                             <div><span class="text-gray-400">Next Target:</span> <span class="text-emerald-400 terminal-font font-bold">${activeTargetP.toFixed(4)}</span> <span class="text-[8px] text-indigo-400">(${activeTargetName})</span></div>
+                                        </div>
+
+                                        <!-- Capital Allocation & Live Movement Valuation Box -->
+                                        <div class="bg-gradient-to-r from-[#0d1424] via-[#0f172a] to-[#0d1424] p-2 rounded-lg border border-[#1f2937] flex flex-col gap-1.5 shadow-inner">
+                                            <div class="flex justify-between items-center text-[9px] uppercase tracking-wider text-gray-400 font-bold border-b border-[#1f2937]/60 pb-1">
+                                                <span class="flex items-center gap-1">💰 Trade Capital</span>
+                                                <span class="text-indigo-300 font-semibold lowercase">qty: <strong class="text-white terminal-font font-bold">${posSize.toFixed(4)}</strong> ${sym.split('/')[0]}</span>
+                                            </div>
+                                            <div class="grid grid-cols-2 gap-2">
+                                                <div>
+                                                    <span class="text-gray-400 text-[9px] block">Invested (Cost):</span>
+                                                    <span id="pos-invested-${symSanitized}" class="text-white terminal-font font-bold text-xs">${currPrefix}${investedDisplay.toFixed(2)} ${pnlCurr}</span>
+                                                </div>
+                                                <div class="text-right">
+                                                    <span class="text-gray-400 text-[9px] block">Live Value (Now):</span>
+                                                    <span id="pos-curval-${symSanitized}" class="terminal-font font-bold text-xs ${pnlClass}">${currPrefix}${currValDisplay.toFixed(2)} ${pnlCurr}</span>
+                                                    <span id="pos-diff-${symSanitized}" class="text-[9px] ${pnlClass} font-bold block">${pnlDisplay >= 0 ? '▲ +' : '▼ -'}${currPrefix}${Math.abs(pnlDisplay).toFixed(2)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</span>
+                                                </div>
+                                            </div>
                                         </div>
 
                                         <!-- Target Progress Bar & Stage Indicator -->
@@ -2254,7 +2291,10 @@
 
                                         <!-- Running PnL Footer -->
                                         <div class="flex justify-between items-end border-t border-[#1f2937]/80 pt-1.5">
-                                            <span class="text-gray-400 text-[9px] font-bold uppercase tracking-wider">Running PnL</span>
+                                            <div>
+                                                <span class="text-gray-400 text-[9px] font-bold uppercase tracking-wider block">Net Movement</span>
+                                                <span class="text-[8px] text-gray-500 font-medium">Real-Time M2M PnL</span>
+                                            </div>
                                             <div class="flex flex-col items-end">
                                                 <span id="pos-pnl-val-${symSanitized}" class="font-extrabold terminal-font text-xs sm:text-sm ${pnlClass}">${formattedPnlVal} ${pnlCurr}</span>
                                                 <span id="pos-pnl-pct-${symSanitized}" class="font-bold text-[9px] ${pnlClass}">${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%</span>

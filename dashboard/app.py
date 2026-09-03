@@ -466,6 +466,10 @@ async def trigger_test_trade(req: Optional[TestTradeRequest] = None):
             'active_target_name': "TP1 (1.0R)",
             'target_stage': 1,
             'position_size': pos_size,
+            'invested_amount_usdt': round(pos_size * live_p, 4),
+            'invested_amount_currency': round(pos_size * live_p * (float(getattr(Config, 'USDT_INR_RATE', 85.0)) if (getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)) else 1.0), 2),
+            'live_value_usdt': round(pos_size * live_p, 4),
+            'live_value_currency': round(pos_size * live_p * (float(getattr(Config, 'USDT_INR_RATE', 85.0)) if (getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)) else 1.0), 2),
             'current_pnl_usdt': 0.0,
             'current_pnl_currency': 0.0,
             'current_pnl_pct': 0.0,
@@ -887,6 +891,11 @@ def _build_state_payload():
                 except Exception:
                     e_time_str = time.strftime('%Y-%m-%d %H:%M:%S')
 
+                invested_u = pos_sz * entry_val
+                invested_c = invested_u * fx_rate if is_inr else invested_u
+                live_val_u = invested_u + p_usdt
+                live_val_c = invested_c + p_currency
+
                 active_pos_map[sym] = {
                     'symbol': sym,
                     'side': side_val,
@@ -900,6 +909,10 @@ def _build_state_payload():
                     'active_target_name': act_name,
                     'target_stage': stage,
                     'position_size': pos_sz,
+                    'invested_amount_usdt': round(invested_u, 4),
+                    'invested_amount_currency': round(invested_c, 2),
+                    'live_value_usdt': round(live_val_u, 4),
+                    'live_value_currency': round(live_val_c, 2),
                     'current_pnl_usdt': round(p_usdt, 4),
                     'current_pnl_currency': round(p_currency, 2),
                     'current_pnl_pct': round(p_pct, 2),
@@ -926,9 +939,16 @@ def _build_state_payload():
             else:
                 p_pct = 0.0
                 p_usdt = 0.0
+            invested_u = pos_sz * entry_val
+            invested_c = invested_u * fx_rate if is_inr else invested_u
+            p_curr = p_usdt * fx_rate if is_inr else p_usdt
             pos['live_price'] = sym_live_p
+            pos['invested_amount_usdt'] = round(invested_u, 4)
+            pos['invested_amount_currency'] = round(invested_c, 2)
+            pos['live_value_usdt'] = round(invested_u + p_usdt, 4)
+            pos['live_value_currency'] = round(invested_c + p_curr, 2)
             pos['current_pnl_usdt'] = round(p_usdt, 4)
-            pos['current_pnl_currency'] = round(p_usdt * fx_rate if is_inr else p_usdt, 2)
+            pos['current_pnl_currency'] = round(p_curr, 2)
             pos['current_pnl_pct'] = round(p_pct, 2)
         active_pos_map = DashboardState.active_positions
 
