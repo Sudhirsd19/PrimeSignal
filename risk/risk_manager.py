@@ -10,6 +10,8 @@ class RiskManager:
         self.daily_starting_equity = None
         self.current_drawdown_pct = 0.0
         self.daily_profit_locked = False
+        self.max_daily_profit_pct = float(getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0))
+        self.daily_profit_unlocked_manual = False
         self.reserved_risk_pct = 0.0 # Atomic risk tracker for pending orders
         self.reserved_open_count = 0
         self.reserved_longs_count = 0
@@ -229,8 +231,10 @@ class RiskManager:
 
         # Daily Profit Lock: Auto-pause after hitting daily profit target to protect gains
         if getattr(Config, 'ENABLE_DAILY_PROFIT_LOCK', True):
-            max_profit = getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0)
-            if self.current_drawdown_pct >= max_profit:
+            max_profit = getattr(self, 'max_daily_profit_pct', getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0))
+            if getattr(self, 'daily_profit_unlocked_manual', False):
+                self.daily_profit_locked = False
+            elif self.current_drawdown_pct >= max_profit:
                 self.daily_profit_locked = True
                 msg = f"🎯 PROFIT LOCK: Daily gain target hit (+{self.current_drawdown_pct:.2f}% >= +{max_profit:.1f}%). Locking profits, no new entries until midnight UTC."
                 try:
@@ -245,11 +249,37 @@ class RiskManager:
             
         return True
 
+    def unlock_daily_profit(self) -> dict:
+        """Manually overrides and clears the daily profit lock immediately."""
+        self.daily_profit_locked = False
+        self.daily_profit_unlocked_manual = True
+        msg = "🔓 [RISK] Daily Profit Lock manually overridden and unlocked. Trading resumed."
+        try:
+            print(msg)
+        except Exception:
+            pass
+        return {"status": "success", "locked": False, "message": msg}
+
+    def set_daily_profit_target(self, target_pct: float) -> dict:
+        """Dynamically sets new profit lock target % at runtime without restart."""
+        self.max_daily_profit_pct = max(0.1, float(target_pct))
+        Config.MAX_DAILY_PROFIT_PCT = self.max_daily_profit_pct
+        if self.current_drawdown_pct < self.max_daily_profit_pct:
+            self.daily_profit_locked = False
+            self.daily_profit_unlocked_manual = False
+        msg = f"🎯 [RISK] Daily profit target updated to {self.max_daily_profit_pct:.2f}%."
+        try:
+            print(msg)
+        except Exception:
+            pass
+        return {"status": "success", "max_daily_profit_pct": self.max_daily_profit_pct, "locked": self.daily_profit_locked}
+
     def reset_daily_equity(self, current_equity: float):
         """Reset starting balance for the day (run at UTC midnight)."""
         self.daily_starting_equity = current_equity
         self.current_drawdown_pct = 0.0
         self.daily_profit_locked = False
+        self.daily_profit_unlocked_manual = False
         eq_val = current_equity if (current_equity is not None and not math.isnan(current_equity)) else 0.0
         print(f"[RISK] Daily equity checkpoint reset to {eq_val:.2f} USDT")
 

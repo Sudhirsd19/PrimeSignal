@@ -94,6 +94,9 @@ class DashboardState:
     signal_progress = 0
     
     daily_drawdown_pct = 0.0
+    daily_profit_locked = False
+    max_daily_profit_pct = float(getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0))
+    daily_gain_pct = 0.0
     ml_confidence = 0.5
     next_candle_color = "GREEN"
     next_candle_prob = 50.0
@@ -271,6 +274,35 @@ async def lock_profit(req: LockProfitRequest):
         return {"status": "success", "message": msg}
     else:
         return {"status": "error", "message": msg}
+
+class DailyProfitTargetRequest(BaseModel):
+    target_pct: float
+
+@app.post("/api/set_daily_profit_target", dependencies=[Depends(verify_dashboard_key)])
+async def set_daily_profit_target(req: DailyProfitTargetRequest):
+    val = float(req.target_pct)
+    if val <= 0.05:
+        raise HTTPException(status_code=400, detail="Target percentage must be at least 0.1%.")
+    Config.MAX_DAILY_PROFIT_PCT = val
+    DashboardState.max_daily_profit_pct = val
+    if bot_instance and hasattr(bot_instance, 'risk'):
+        res = bot_instance.risk.set_daily_profit_target(val)
+        add_log_message(f"🎯 Daily Profit Lock target set to {val:.2f}%")
+        return res
+    add_log_message(f"🎯 Daily Profit Lock target set to {val:.2f}% (Config)")
+    return {"status": "success", "max_daily_profit_pct": val}
+
+@app.post("/api/unlock_daily_profit", dependencies=[Depends(verify_dashboard_key)])
+async def unlock_daily_profit():
+    DashboardState.daily_profit_locked = False
+    if bot_instance and hasattr(bot_instance, 'risk'):
+        res = bot_instance.risk.unlock_daily_profit()
+        add_log_message("🔓 Daily Profit Lock manually unlocked by user! Trading resumed.")
+        if hasattr(bot_instance, 'notifier') and bot_instance.notifier:
+            asyncio.create_task(bot_instance.notifier.send_message("🔓 *PROFIT LOCK MANUALLY OVERRIDDEN*\nDaily profit lock has been unlocked via Dashboard. All trade entries resumed."))
+        return res
+    add_log_message("🔓 Daily Profit Lock manually unlocked.")
+    return {"status": "success", "locked": False, "message": "Daily Profit Lock manually unlocked."}
 
 class ChangeCurrencyRequest(BaseModel):
     currency: str
@@ -717,6 +749,9 @@ async def get_state():
         "trades_count": len(DashboardState.trades),
         "trades_today": bot_instance.trades_today if bot_instance else 0,
         "max_daily_trades": getattr(Config, 'MAX_DAILY_TRADES', 6),
+        "daily_profit_locked": getattr(bot_instance.risk, 'daily_profit_locked', DashboardState.daily_profit_locked) if (bot_instance and hasattr(bot_instance, 'risk')) else DashboardState.daily_profit_locked,
+        "max_daily_profit_pct": getattr(bot_instance.risk, 'max_daily_profit_pct', getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0)) if (bot_instance and hasattr(bot_instance, 'risk')) else getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0),
+        "daily_gain_pct": round(getattr(bot_instance.risk, 'current_drawdown_pct', DashboardState.daily_drawdown_pct), 2) if (bot_instance and hasattr(bot_instance, 'risk')) else DashboardState.daily_drawdown_pct,
         "signal_light": DashboardState.signal_light,
         "signal_light_reason": DashboardState.signal_light_reason,
         "signal_progress": DashboardState.signal_progress
@@ -979,6 +1014,9 @@ def _build_state_payload():
         "trades": DashboardState.trades[-5:],  # Last 5 trades
         "trades_today": bot_instance.trades_today if bot_instance else 0,
         "max_daily_trades": getattr(Config, 'MAX_DAILY_TRADES', 6),
+        "daily_profit_locked": getattr(bot_instance.risk, 'daily_profit_locked', DashboardState.daily_profit_locked) if (bot_instance and hasattr(bot_instance, 'risk')) else DashboardState.daily_profit_locked,
+        "max_daily_profit_pct": getattr(bot_instance.risk, 'max_daily_profit_pct', getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0)) if (bot_instance and hasattr(bot_instance, 'risk')) else getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0),
+        "daily_gain_pct": round(getattr(bot_instance.risk, 'current_drawdown_pct', DashboardState.daily_drawdown_pct), 2) if (bot_instance and hasattr(bot_instance, 'risk')) else DashboardState.daily_drawdown_pct,
         "logs": DashboardState.logs[-10:],     # Last 10 logs
         "chart_history": DashboardState.chart_history,
         "coindcx_profile": DashboardState.coindcx_profile,

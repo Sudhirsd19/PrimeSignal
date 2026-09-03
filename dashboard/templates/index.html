@@ -326,6 +326,41 @@
                         <div class="w-9 h-5 bg-[#1f2937] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
                     </label>
                 </div>
+
+                <!-- 4. Daily Profit Lock Target & Manual Unlock Control -->
+                <div class="bg-[#171e2e] border border-[#1f2937] p-3 rounded-xl space-y-2.5">
+                    <div class="flex justify-between items-center">
+                        <div>
+                            <span class="text-xs font-bold text-gray-300 flex items-center gap-1.5">
+                                <span>🎯</span> Daily Profit Target
+                            </span>
+                            <p class="text-[10px] text-gray-500">Lock profit when % hit</p>
+                        </div>
+                        <span id="sidebar-profit-lock-status" class="text-[10px] px-2 py-0.5 rounded-full font-bold bg-slate-800 text-slate-400">
+                            Monitoring
+                        </span>
+                    </div>
+
+                    <div class="flex items-center gap-2">
+                        <div class="flex items-center bg-[#111827] border border-[#374151] rounded-lg px-2 py-1 flex-1">
+                            <input id="sidebar-profit-target-input" type="number" step="0.5" min="0.5" max="50.0" value="4.0" 
+                                   class="w-full bg-transparent text-white font-black text-xs focus:outline-none text-right pr-1" />
+                            <span class="text-gray-400 text-xs font-bold">%</span>
+                        </div>
+                        <button onclick="saveProfitLockTarget()" id="btn-save-profit-target" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer shadow-sm">
+                            Save
+                        </button>
+                    </div>
+                    <div id="profit-target-msg" class="text-[10px] text-emerald-400 font-bold hidden flex items-center gap-1">
+                        <span>✓</span> Target updated!
+                    </div>
+
+                    <div id="sidebar-unlock-container" class="hidden pt-1">
+                        <button onclick="unlockDailyProfit()" class="w-full py-1.5 px-3 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow">
+                            <span>🔓</span> Unlock & Resume Trading
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -441,6 +476,23 @@
         <!-- TOP 20 COINS MINI-SCANNER / QUICK TICKER BAR -->
         <div id="top-20-ticker-bar" class="flex items-center gap-1.5 overflow-x-auto py-2 px-2 bg-[#0d121f]/95 border border-[#1f2937] rounded-xl scrollbar-thin shadow-inner mb-4 select-none">
             <!-- 20 pairs rendered via JS -->
+        </div>
+
+        <!-- DAILY PROFIT LOCK NOTIFICATION BANNER -->
+        <div id="daily-profit-lock-banner" class="hidden mb-4 p-4 rounded-xl bg-gradient-to-r from-amber-500/20 via-emerald-500/15 to-amber-500/20 border-2 border-amber-500/50 shadow-[0_0_25px_rgba(245,158,11,0.25)] flex flex-col sm:flex-row items-center justify-between gap-3 animate-pulse">
+            <div class="flex items-center gap-3">
+                <span class="text-3xl">🎯</span>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h3 class="text-sm sm:text-base font-black text-amber-300 uppercase tracking-wide">Daily Profit Locked!</h3>
+                        <span id="banner-profit-badge" class="text-xs font-black bg-amber-400 text-slate-950 px-2.5 py-0.5 rounded-full shadow">+4.0% Secured</span>
+                    </div>
+                    <p class="text-xs text-slate-300 mt-0.5">Capital is secured! Daily profit target reached. New entries paused until unlocked or 00:00 UTC.</p>
+                </div>
+            </div>
+            <button onclick="unlockDailyProfit()" class="w-full sm:w-auto px-5 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs uppercase tracking-wider shadow-lg hover:scale-105 active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-1.5">
+                <span>🔓</span> Unlock & Resume Trading
+            </button>
         </div>
 
         <!-- STATS GRID: 4 CLEAN HERO CARDS -->
@@ -1709,6 +1761,39 @@
                             const sbMax = document.getElementById('sidebar-max-trades');
                             if (sbMax) sbMax.innerText = state.max_daily_trades;
                         }
+
+                        // Daily Profit Lock State Sync
+                        if (state.daily_profit_locked !== undefined) {
+                            const banner = document.getElementById('daily-profit-lock-banner');
+                            const bannerBadge = document.getElementById('banner-profit-badge');
+                            const sbStatus = document.getElementById('sidebar-profit-lock-status');
+                            const sbUnlock = document.getElementById('sidebar-unlock-container');
+                            const targetInput = document.getElementById('sidebar-profit-target-input');
+                            
+                            const targetVal = state.max_daily_profit_pct !== undefined ? state.max_daily_profit_pct : 4.0;
+                            const gainVal = state.daily_gain_pct !== undefined ? state.daily_gain_pct : 0.0;
+                            
+                            if (targetInput && document.activeElement !== targetInput) {
+                                targetInput.value = targetVal;
+                            }
+                            
+                            if (state.daily_profit_locked) {
+                                if (banner) banner.classList.remove('hidden');
+                                if (bannerBadge) bannerBadge.innerText = `+${gainVal.toFixed(2)}% (Target: ${targetVal}%)`;
+                                if (sbStatus) {
+                                    sbStatus.className = "text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-500/20 text-amber-400 border border-amber-500/40 animate-pulse";
+                                    sbStatus.innerText = `LOCKED (+${gainVal.toFixed(1)}%)`;
+                                }
+                                if (sbUnlock) sbUnlock.classList.remove('hidden');
+                            } else {
+                                if (banner) banner.classList.add('hidden');
+                                if (sbStatus) {
+                                    sbStatus.className = "text-[10px] px-2 py-0.5 rounded-full font-bold bg-slate-800 text-slate-400";
+                                    sbStatus.innerText = `Active (${targetVal}%)`;
+                                }
+                                if (sbUnlock) sbUnlock.classList.add('hidden');
+                            }
+                        }
                         
                         // ML display
                         const mlVal = (state.ml_confidence || 0.5) * 100;
@@ -2806,6 +2891,62 @@
                 });
             } catch (err) {
                 console.error("Error updating max daily trades:", err);
+            }
+        }
+
+        // --- 8. DAILY PROFIT LOCK & MANUAL UNLOCK HANDLERS ---
+        async function saveProfitLockTarget() {
+            const input = document.getElementById('sidebar-profit-target-input');
+            const val = parseFloat(input ? input.value : 4.0);
+            if (isNaN(val) || val <= 0) {
+                alert("Please enter a valid positive profit percentage.");
+                return;
+            }
+            try {
+                const res = await fetch('/api/set_daily_profit_target', {
+                    method: 'POST',
+                    headers: getApiHeaders(),
+                    body: JSON.stringify({ target_pct: val })
+                });
+                const data = await res.json();
+                if (data.status === 'success' || data.max_daily_profit_pct !== undefined) {
+                    const msg = document.getElementById('profit-target-msg');
+                    if (msg) {
+                        msg.classList.remove('hidden');
+                        setTimeout(() => msg.classList.add('hidden'), 3000);
+                    }
+                } else {
+                    alert(data.message || "Failed to update target.");
+                }
+            } catch (e) {
+                console.error("Error saving profit target:", e);
+                alert("Failed to update target. Check server connection.");
+            }
+        }
+
+        async function unlockDailyProfit() {
+            if (!confirm("Are you sure you want to unlock Profit Lock and resume trade scanning immediately?")) {
+                return;
+            }
+            try {
+                const res = await fetch('/api/unlock_daily_profit', {
+                    method: 'POST',
+                    headers: getApiHeaders()
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    const banner = document.getElementById('daily-profit-lock-banner');
+                    if (banner) banner.classList.add('hidden');
+                    const sbUnlock = document.getElementById('sidebar-unlock-container');
+                    if (sbUnlock) sbUnlock.classList.add('hidden');
+                    const statusBadge = document.getElementById('sidebar-profit-lock-status');
+                    if (statusBadge) {
+                        statusBadge.className = "text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
+                        statusBadge.innerText = "Unlocked / Active";
+                    }
+                }
+            } catch (e) {
+                console.error("Error unlocking profit lock:", e);
             }
         }
 

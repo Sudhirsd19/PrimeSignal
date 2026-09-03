@@ -648,17 +648,27 @@ class PrimeSignalBot:
             
         if not self.risk.check_circuit_breaker(current_equity):
             if getattr(self.risk, 'daily_profit_locked', False):
+                DashboardState.daily_profit_locked = True
                 DashboardState.signal_light = "GREEN"
-                DashboardState.signal_light_reason = f"🎯 PROFIT LOCK ACTIVE: Daily profit target hit (+{self.risk.current_drawdown_pct:.2f}%). Trading locked to secure gains until 00:00 UTC."
-                add_log_message(f"🎯 PROFIT LOCK TRIGGERED: Daily profit target reached (+{self.risk.current_drawdown_pct:.2f}% >= +{getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0):.1f}%). All new entries suspended.")
-                await self.notifier.send_message(f"🎯 *PROFIT LOCK ACTIVATED*\nDaily profit target hit (+{self.risk.current_drawdown_pct:.2f}%). Capital secured; all new trades paused until 00:00 UTC.")
+                curr_target = getattr(self.risk, 'max_daily_profit_pct', getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0))
+                DashboardState.signal_light_reason = f"🎯 PROFIT LOCK ACTIVE: Daily profit target hit (+{self.risk.current_drawdown_pct:.2f}% >= +{curr_target:.1f}%). Trading locked to secure gains until unlocked or 00:00 UTC."
+                if not getattr(self, '_profit_lock_alert_sent', False):
+                    self._profit_lock_alert_sent = True
+                    add_log_message(f"🎯 PROFIT LOCK TRIGGERED: Daily profit target reached (+{self.risk.current_drawdown_pct:.2f}% >= +{curr_target:.1f}%). All new entries suspended.")
+                    await self.notifier.send_message(f"🎯 *PROFIT LOCK ACTIVATED*\nDaily profit target hit (+{self.risk.current_drawdown_pct:.2f}%). Capital secured; all new trades paused until 00:00 UTC.")
             else:
+                DashboardState.daily_profit_locked = False
                 DashboardState.signal_light = "RED"
                 DashboardState.signal_light_reason = f"🚨 SLEEP MODE ACTIVE: Daily loss limit hit ({self.risk.current_drawdown_pct:.2f}%). Trading suspended until 00:00 UTC."
-                add_log_message(f"🚨 SLEEP MODE / CIRCUIT BREAKER TRIGGERED: Daily loss limit reached ({self.risk.current_drawdown_pct:.2f}%). All entries suspended.")
-                await self.notifier.send_message(f"🚨 *SLEEP MODE ACTIVATED*\nDaily loss circuit breaker triggered ({self.risk.current_drawdown_pct:.2f}%). All new trades suspended until 00:00 UTC.")
+                if not getattr(self, '_circuit_breaker_alert_sent', False):
+                    self._circuit_breaker_alert_sent = True
+                    add_log_message(f"🚨 SLEEP MODE / CIRCUIT BREAKER TRIGGERED: Daily loss limit reached ({self.risk.current_drawdown_pct:.2f}%). All entries suspended.")
+                    await self.notifier.send_message(f"🚨 *SLEEP MODE ACTIVATED*\nDaily loss circuit breaker triggered ({self.risk.current_drawdown_pct:.2f}%). All new trades suspended until 00:00 UTC.")
             return
 
+        self._profit_lock_alert_sent = False
+        self._circuit_breaker_alert_sent = False
+        DashboardState.daily_profit_locked = False
         DashboardState.daily_drawdown_pct = self.risk.current_drawdown_pct
 
         ltf_df = prepare_dataframe(self.pipeline.ltf_candles[symbol])
