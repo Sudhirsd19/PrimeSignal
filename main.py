@@ -2401,6 +2401,8 @@ class PrimeSignalBot:
                     'entry_price': self.entry_price[symbol],
                     'exit_price': exit_price,
                     'pnl_usdt': round(pnl_usdt, 4),
+                    'pnl_currency': round(pnl_usdt * (rate if is_inr else 1.0), 2),
+                    'currency': 'INR' if is_inr else 'USDT',
                     'pnl_usdt_gross': round(pnl_usdt_gross, 4),
                     'total_fees': round(self.accumulated_fees.get(symbol, 0.0), 4),
                     'entry_fx_rate': self.entry_fx_rate.get(symbol, 0.0),

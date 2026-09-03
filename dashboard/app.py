@@ -571,8 +571,18 @@ async def get_analytics():
         formatted_history = []
         import datetime
 
+        is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+        fx_rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
+        currency = getattr(Config, 'PAPER_CURRENCY', 'INR' if getattr(Config, 'COINDCX_TRADE_INR', False) else 'USDT')
+
         for t in raw_trades:
-            pnl = float(t.get("pnl_usdt") if t.get("pnl_usdt") is not None else (t.get("pnl", 0) or 0))
+            raw_pnl = float(t.get("pnl_usdt") if t.get("pnl_usdt") is not None else (t.get("pnl", 0) or 0))
+            if t.get("pnl_currency") is not None and t.get("currency") == currency:
+                pnl = float(t.get("pnl_currency"))
+            elif is_inr:
+                pnl = raw_pnl * fx_rate
+            else:
+                pnl = raw_pnl
             symbol = t.get("symbol", "UNKNOWN")
             
             if pnl > 0:
@@ -656,7 +666,10 @@ async def get_analytics():
                 "side": t.get("side", "LONG"),
                 "entry_price": ent_p,
                 "exit_price": ext_p,
-                "pnl_usdt": round(pnl, 4),
+                "pnl": round(pnl, 2),
+                "pnl_currency": round(pnl, 2),
+                "pnl_usdt": round(raw_pnl, 4),
+                "currency": currency,
                 "pnl_pct": round(pnl_pct_val, 2),
                 "entry_time": e_ts,
                 "exit_time": x_ts,
@@ -705,6 +718,7 @@ async def get_analytics():
         
         return {
             "status": "success",
+            "currency": currency,
             "wins": wins,
             "losses": losses,
             "total_trades": total,

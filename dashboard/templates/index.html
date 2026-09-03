@@ -2685,7 +2685,9 @@
                     
                     const pnlEl = document.getElementById('analytics-pnl-text');
                     const totalPnl = data.total_pnl;
-                    pnlEl.textContent = (totalPnl >= 0 ? '+' : '') + totalPnl.toFixed(2) + ' USDT';
+                    const activeCurrency = data.currency || (window.currentCurrency || 'INR');
+                    const currSign = activeCurrency === 'INR' ? '₹' : '$';
+                    pnlEl.textContent = (totalPnl >= 0 ? '+' : '-') + currSign + Math.abs(totalPnl).toFixed(2) + ' ' + activeCurrency;
                     pnlEl.className = `text-lg font-bold ${totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
                     
                     // Win Rate Donut Chart
@@ -2811,9 +2813,12 @@
                             durTd.className = 'py-2 px-1.5 text-center text-gray-300 terminal-font';
                             durTd.textContent = t.duration || 'N/A';
                             
+                            const activeCurr = data.currency || (window.currentCurrency || 'INR');
+                            const currPrefix = activeCurr === 'INR' ? '₹' : '$';
+                            const tradePnl = t.pnl_currency !== undefined ? t.pnl_currency : (t.pnl !== undefined ? t.pnl : (t.pnl_usdt || 0));
                             const pnlTd = document.createElement('td');
                             pnlTd.className = `py-2 px-2 text-right font-bold terminal-font ${pnlColor}`;
-                            pnlTd.innerHTML = `<div>${pnlSign}${(t.pnl_usdt || 0).toFixed(2)} USDT</div><div class="text-[9px]">${pnlSign}${(t.pnl_pct || 0).toFixed(2)}%</div>`;
+                            pnlTd.innerHTML = `<div>${pnlSign}${currPrefix}${Math.abs(tradePnl).toFixed(2)} ${activeCurr}</div><div class="text-[9px]">${pnlSign}${(t.pnl_pct || 0).toFixed(2)}%</div>`;
                             
                             tr.appendChild(timeTd);
                             tr.appendChild(symTd);
