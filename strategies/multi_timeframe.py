@@ -372,15 +372,24 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                     zone_top = vwap_hi
                     zone_ts = ltf_df.index[-2]
                     reason = f"Dynamic Setup: VWAP Bounce"
-                # EMA 50 Trend Pullback
+                # EMA 21 / 50 Trend Pullback
                 else:
-                    ema_lo = curr_ema_50 - zone_half_band
-                    ema_hi = curr_ema_50 + zone_half_band
-                    if in_bounds(curr_price, ema_lo, ema_hi):
+                    ema21_lo = curr_long - zone_half_band
+                    ema21_hi = curr_long + zone_half_band
+                    ema50_lo = curr_ema_50 - zone_half_band
+                    ema50_hi = curr_ema_50 + zone_half_band
+                    if in_bounds(curr_price, ema21_lo, ema21_hi):
                         in_zone = True
                         entry_type = "EMA"
-                        zone_bottom = ema_lo
-                        zone_top = ema_hi
+                        zone_bottom = ema21_lo
+                        zone_top = ema21_hi
+                        zone_ts = ltf_df.index[-2]
+                        reason = f"Dynamic Setup: EMA 21 Pullback"
+                    elif in_bounds(curr_price, ema50_lo, ema50_hi):
+                        in_zone = True
+                        entry_type = "EMA"
+                        zone_bottom = ema50_lo
+                        zone_top = ema50_hi
                         zone_ts = ltf_df.index[-2]
                         reason = f"Dynamic Setup: EMA 50 Pullback"
 
@@ -388,7 +397,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
 
             rsi_trigger       = (prev_rsi < Config.RSI_OVERSOLD) or ((prev_rsi < Config.RSI_OVERSOLD + 5) and (curr_rsi >= Config.RSI_OVERSOLD))
             crossover_trigger = (prev_short <= prev_long) and (curr_short > curr_long)
-            wick_trigger      = (candle_range > 0) and ((min(trigger_open, trigger_close) - trigger_low) / candle_range >= 0.4)
+            wick_trigger      = (candle_range > 0) and ((min(trigger_open, trigger_close) - trigger_low) / candle_range >= 0.35)
             engulfing_trigger = (trigger_close > trigger_open) and (ltf_df.iloc[-3]['close'] < ltf_df.iloc[-3]['open']) and (trigger_close > ltf_df.iloc[-3]['open'])
             trigger_pass      = rsi_trigger or crossover_trigger or wick_trigger or engulfing_trigger
             metadata['debug_checks']['trigger'] = 'PASS' if trigger_pass else 'FAIL'
@@ -563,15 +572,24 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                     zone_top = vwap_hi
                     zone_ts = ltf_df.index[-2]
                     reason = f"Dynamic Setup: VWAP Bounce"
-                # EMA 50 Trend Pullback
+                # EMA 21 / 50 Trend Pullback
                 else:
-                    ema_lo = curr_ema_50 - zone_half_band
-                    ema_hi = curr_ema_50 + zone_half_band
-                    if in_bounds(curr_price, ema_lo, ema_hi):
+                    ema21_lo = curr_long - zone_half_band
+                    ema21_hi = curr_long + zone_half_band
+                    ema50_lo = curr_ema_50 - zone_half_band
+                    ema50_hi = curr_ema_50 + zone_half_band
+                    if in_bounds(curr_price, ema21_lo, ema21_hi):
                         in_zone = True
                         entry_type = "EMA"
-                        zone_bottom = ema_lo
-                        zone_top = ema_hi
+                        zone_bottom = ema21_lo
+                        zone_top = ema21_hi
+                        zone_ts = ltf_df.index[-2]
+                        reason = f"Dynamic Setup: EMA 21 Pullback"
+                    elif in_bounds(curr_price, ema50_lo, ema50_hi):
+                        in_zone = True
+                        entry_type = "EMA"
+                        zone_bottom = ema50_lo
+                        zone_top = ema50_hi
                         zone_ts = ltf_df.index[-2]
                         reason = f"Dynamic Setup: EMA 50 Pullback"
 
@@ -579,7 +597,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
 
             rsi_trigger       = (prev_rsi > Config.RSI_OVERBOUGHT) or ((prev_rsi > Config.RSI_OVERBOUGHT - 5) and (curr_rsi <= Config.RSI_OVERBOUGHT))
             crossover_trigger = (prev_short >= prev_long) and (curr_short < curr_long)
-            wick_trigger      = (candle_range > 0) and ((trigger_high - max(trigger_open, trigger_close)) / candle_range >= 0.4)
+            wick_trigger      = (candle_range > 0) and ((trigger_high - max(trigger_open, trigger_close)) / candle_range >= 0.35)
             engulfing_trigger = (trigger_close < trigger_open) and (ltf_df.iloc[-3]['close'] > ltf_df.iloc[-3]['open']) and (trigger_close < ltf_df.iloc[-3]['open'])
             trigger_pass      = rsi_trigger or crossover_trigger or wick_trigger or engulfing_trigger
             metadata['debug_checks']['trigger'] = 'PASS' if trigger_pass else 'FAIL'

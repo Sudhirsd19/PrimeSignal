@@ -27,13 +27,13 @@ class Config:
     KELLY_LOOKBACK_TRADES = int(os.getenv("KELLY_LOOKBACK_TRADES", "20"))
     CONSECUTIVE_LOSS_LIMIT = int(os.getenv("CONSECUTIVE_LOSS_LIMIT", "2"))
     MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "2"))
-    MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "3"))
+    MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "6"))
     TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015")) # Deprecated in favor of ATR
     TRAILING_ATR_MULT = float(os.getenv("TRAILING_ATR_MULT", "1.5"))
-    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.6")) # Breakeven Lock at +1.6R (gives room to hit 2.0R)
-    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "2.0")) # Target 2.0R (Clean 1:2 R:R Payoff)
-    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.0")) # Target 2.0R
-    TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "1.0")) # 100% full exit at 2.0R target
+    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.4")) # Breakeven Lock at +1.4R (gives room to hit 1.8R target)
+    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.8")) # Target 1.8R (Optimal 1:1.8 R:R Payoff)
+    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "1.8")) # Target 1.8R
+    TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "1.0")) # 100% full exit at 1.8R target
     ML_CONFIDENCE_THRESHOLD = float(os.getenv("ML_CONFIDENCE_THRESHOLD", "0.60"))
     
     # ─── ULTIMATE SHIELD: 5 Advanced Institutional Protection Parameters ───
@@ -83,7 +83,7 @@ class Config:
     # Strategy settings
     HTF_TIMEFRAME = os.getenv("HTF_TIMEFRAME", "1h")
     LTF_TIMEFRAME = os.getenv("LTF_TIMEFRAME", "15m")
-    ADX_MIN_THRESHOLD = float(os.getenv("ADX_MIN_THRESHOLD", "22.0"))
+    ADX_MIN_THRESHOLD = float(os.getenv("ADX_MIN_THRESHOLD", "20.0"))
     SHORT_EMA = int(os.getenv("SHORT_EMA", "9"))
     LONG_EMA = int(os.getenv("LONG_EMA", "21"))
     TREND_EMA = int(os.getenv("TREND_EMA", "200"))
