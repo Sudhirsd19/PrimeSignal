@@ -75,6 +75,8 @@ class DashboardState:
     latest_price = 0.0
     balance_currency = getattr(Config, 'PAPER_CURRENCY', 'INR')
     balance_usdt = float(getattr(Config, 'PAPER_STARTING_BALANCE', 2000.0 if getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' else 10000.0))
+    total_equity = float(getattr(Config, 'PAPER_STARTING_BALANCE', 2000.0 if getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' else 10000.0))
+    in_trade_margin = 0.0
     balance_base = 0.0
     
     in_position = False
@@ -737,6 +739,9 @@ async def get_state():
     return {
         "latest_price": DashboardState.latest_price,
         "balance_usdt": DashboardState.balance_usdt,
+        "available_balance": DashboardState.balance_usdt,
+        "total_equity": getattr(DashboardState, 'total_equity', DashboardState.balance_usdt),
+        "in_trade_margin": getattr(DashboardState, 'in_trade_margin', 0.0),
         "balance_base": DashboardState.balance_base,
         "active_positions": DashboardState.active_positions,
         "daily_drawdown_pct": DashboardState.daily_drawdown_pct,
@@ -975,15 +980,32 @@ def _build_state_payload():
     if not found_coin and base_coin not in ('USDT', 'INR'):
         coindcx_bals.append({'currency': base_coin, 'available': round(float(held_qty), 6), 'locked': 0.0})
 
-    # Dynamic real-time calculation of portfolio equity
-    if bot_instance and hasattr(bot_instance, 'calculate_total_equity'):
+    # Dynamic real-time calculation of portfolio equity and available cash balance
+    available_bal = DashboardState.balance_usdt
+    total_eq = available_bal
+    in_trade_cost = 0.0
+
+    if bot_instance:
         if not bot_instance.has_keys or Config.PAPER_TRADING:
-            DashboardState.balance_usdt = round(bot_instance.calculate_total_equity(), 2)
+            available_bal = round(getattr(bot_instance, '_dry_run_balance_usdt', 0.0), 2)
+            total_eq = round(bot_instance.calculate_total_equity(), 2)
+            in_trade_cost = max(0.0, round(total_eq - available_bal, 2))
+            DashboardState.balance_usdt = available_bal
+            DashboardState.total_equity = total_eq
+            DashboardState.in_trade_margin = in_trade_cost
+        else:
+            available_bal = round(DashboardState.balance_usdt, 2)
+            total_eq = available_bal
+            DashboardState.total_equity = total_eq
+            DashboardState.in_trade_margin = 0.0
 
     return {
         "latest_price": live_p,
         "latest_prices": live_prices,
-        "balance_usdt": DashboardState.balance_usdt,
+        "balance_usdt": available_bal,
+        "available_balance": available_bal,
+        "total_equity": total_eq,
+        "in_trade_margin": in_trade_cost,
         "balance_base": held_qty,
         "in_position": in_pos,
         "position_side": side,

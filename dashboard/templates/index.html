@@ -534,18 +534,21 @@
             <!-- 1. TOTAL PORTFOLIO BALANCE -->
             <div class="bg-[#111827] border border-[#1f2937] p-5 rounded-2xl flex flex-col justify-between h-36 relative overflow-hidden shadow-lg hover:border-blue-500/40 transition-all">
                 <div class="flex justify-between items-center">
-                    <span class="text-xs font-bold uppercase tracking-wider text-slate-400">💰 Account Balance</span>
+                    <span class="text-xs font-bold uppercase tracking-wider text-slate-400">💰 Available Balance</span>
                     <span id="today-pnl-badge" class="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Today: +$0.00 | 0W 0L</span>
                 </div>
                 <div class="flex flex-col my-1">
-                    <span id="balance-usdt" class="text-2xl font-black text-white terminal-font">0.00 USDT</span>
+                    <div class="flex items-baseline gap-2">
+                        <span id="balance-usdt" class="text-2xl font-black text-white terminal-font">0.00 USDT</span>
+                        <span class="text-[10px] text-emerald-400 font-bold uppercase bg-emerald-500/15 border border-emerald-500/30 px-1.5 py-0.5 rounded">Available</span>
+                    </div>
                     <div class="flex items-center justify-between text-xs text-slate-400 mt-1">
-                        <span>Holding: <span id="balance-base" class="text-slate-200 font-bold">0.000000 <span id="base-coin-label">BTC</span></span></span>
-                        <span class="text-emerald-400 font-bold">● Protected</span>
+                        <span>In Trade: <span id="in-trade-margin" class="text-amber-400 font-bold">0.00 USDT</span></span>
+                        <span>Total Equity: <span id="total-equity" class="text-indigo-300 font-bold">0.00 USDT</span></span>
                     </div>
                 </div>
                 <div class="w-full bg-[#1f2937] h-1.5 rounded-full overflow-hidden">
-                    <div class="h-full bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full" style="width: 100%;"></div>
+                    <div id="balance-ratio-bar" class="h-full bg-gradient-to-r from-emerald-500 via-blue-500 to-indigo-500 rounded-full transition-all duration-500" style="width: 100%;"></div>
                 </div>
             </div>
 
@@ -1835,23 +1838,25 @@
                             priceChangEl.className = `text-xs font-bold mt-1 ${priceDiffPct >= 0 ? 'text-green-400' : 'text-red-400'}`;
                         }
 
-                        // Balance display — dynamic base coin name from symbol
+                        // Balance display — Available Cash, In-Trade Margin & Total Equity
                         const balCurr = state.balance_currency || "USDT";
+                        const availBal = state.available_balance !== undefined ? state.available_balance : (state.balance_usdt || 0.0);
+                        const totalEq = state.total_equity !== undefined ? state.total_equity : availBal;
+                        const inTradeCost = state.in_trade_margin !== undefined ? state.in_trade_margin : Math.max(0, totalEq - availBal);
+
                         const balUsdtEl = document.getElementById('balance-usdt');
-                        if (balUsdtEl) balUsdtEl.innerText = `${state.balance_usdt ? state.balance_usdt.toFixed(2) : "0.00"} ${balCurr}`;
+                        if (balUsdtEl) balUsdtEl.innerText = `${availBal.toFixed(2)} ${balCurr}`;
                         
-                        const baseCoin = state.symbol ? state.symbol.split('/')[0] : 'BTC';
-                        const baseCoinLabel = document.getElementById('base-coin-label');
-                        if (baseCoinLabel) baseCoinLabel.innerText = baseCoin;
+                        const inTradeEl = document.getElementById('in-trade-margin');
+                        if (inTradeEl) inTradeEl.innerText = `${inTradeCost.toFixed(2)} ${balCurr}`;
                         
-                        const baseBalEl = document.getElementById('balance-base');
-                        if (baseBalEl) {
-                            const spans = baseBalEl.querySelectorAll('span');
-                            if (spans.length === 0) {
-                                baseBalEl.childNodes[0].textContent = `${state.balance_base ? state.balance_base.toFixed(6) : "0.000000"} `;
-                            } else {
-                                baseBalEl.firstChild.textContent = `${state.balance_base ? state.balance_base.toFixed(6) : "0.000000"} `;
-                            }
+                        const totalEqEl = document.getElementById('total-equity');
+                        if (totalEqEl) totalEqEl.innerText = `${totalEq.toFixed(2)} ${balCurr}`;
+
+                        const ratioBar = document.getElementById('balance-ratio-bar');
+                        if (ratioBar && totalEq > 0) {
+                            const availRatio = Math.max(0, Math.min(100, (availBal / totalEq) * 100));
+                            ratioBar.style.width = `${availRatio}%`;
                         }
 
                         // Drawdown display with danger color when > 50% of limit
