@@ -280,7 +280,7 @@ class DailyProfitTargetRequest(BaseModel):
 
 @app.post("/api/set_daily_profit_target", dependencies=[Depends(verify_dashboard_key)])
 async def set_daily_profit_target(req: DailyProfitTargetRequest):
-    val = float(req.target_pct)
+    val = req.target_pct
     if val <= 0.05:
         raise HTTPException(status_code=400, detail="Target percentage must be at least 0.1%.")
     Config.MAX_DAILY_PROFIT_PCT = val

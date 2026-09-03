@@ -262,7 +262,7 @@ class RiskManager:
 
     def set_daily_profit_target(self, target_pct: float) -> dict:
         """Dynamically sets new profit lock target % at runtime without restart."""
-        self.max_daily_profit_pct = max(0.1, float(target_pct))
+        self.max_daily_profit_pct = max(0.1, target_pct)
         Config.MAX_DAILY_PROFIT_PCT = self.max_daily_profit_pct
         if self.current_drawdown_pct < self.max_daily_profit_pct:
             self.daily_profit_locked = False
