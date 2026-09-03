@@ -1,3 +1,4 @@
+# PrimeSignal v2.5.0 - Institutional Strategy Engine (1.8R Payoff, 20.0 ADX, EMA 21 Pullback, Max 6 Daily Trades)
 import os
 from dotenv import load_dotenv
 
