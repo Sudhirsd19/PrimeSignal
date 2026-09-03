@@ -1628,9 +1628,13 @@ class PrimeSignalBot:
                                         await self.exit_position(symbol, "EARLY_STRUCTURAL_INVALIDATION")
                                         continue
                             
-                            # TP1 Scale-Out (80% at 2.0R)
+                            # TP1 Scale-Out (80% at 2.0R, or 100% Full Exit)
                             if not self.partial_tp_taken[symbol] and curr_price >= self.take_profit_1r[symbol]:
                                 tp1_pct = float(getattr(Config, 'TP1_SCALE_OUT_PCT', 0.80))
+                                if tp1_pct >= 0.999:
+                                    add_log_message(f"[{symbol}] 🎯 Target 1 hit! Full 100% profit booking initiated.")
+                                    await self.exit_position(symbol, "TAKE_PROFIT_1")
+                                    continue
                                 add_log_message(f"[{symbol}] 🎯 Target 1 hit! Booking {int(tp1_pct*100)}% profit.")
                                 tp1_size = self.position_size[symbol] * tp1_pct
                                 tp1_success = False
@@ -1881,9 +1885,13 @@ class PrimeSignalBot:
                                         await self.exit_position(symbol, "EARLY_STRUCTURAL_INVALIDATION")
                                         continue
                             
-                            # TP1 Scale-Out (80% at 2.0R)
+                            # TP1 Scale-Out (80% at 2.0R, or 100% Full Exit)
                             if not self.partial_tp_taken[symbol] and curr_price <= self.take_profit_1r[symbol]:
                                 tp1_pct = float(getattr(Config, 'TP1_SCALE_OUT_PCT', 0.80))
+                                if tp1_pct >= 0.999:
+                                    add_log_message(f"[{symbol}] 🎯 Target 1 hit! Full 100% profit booking initiated.")
+                                    await self.exit_position(symbol, "TAKE_PROFIT_1")
+                                    continue
                                 add_log_message(f"[{symbol}] 🎯 Target 1 hit! Booking {int(tp1_pct*100)}% profit.")
                                 tp1_size = self.position_size[symbol] * tp1_pct
                                 tp1_success = False
