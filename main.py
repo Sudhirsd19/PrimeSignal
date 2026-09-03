@@ -1074,7 +1074,7 @@ class PrimeSignalBot:
             tp = float(metadata['take_profit']) if metadata.get('take_profit') is not None else (entry_price * 1.04)
             
             is_inr = getattr(Config, 'COINDCX_TRADE_INR', False) if not Config.PAPER_TRADING else (getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR')
-            quote_curr = "INR" if is_inr else "USDT"
+            quote_curr = symbol.split('/')[1] if '/' in symbol else "USDT"
             conversion_rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
             if is_inr and not Config.PAPER_TRADING and hasattr(self.execution, 'fetch_usdt_inr_rate'):
                 if inspect.iscoroutinefunction(self.execution.fetch_usdt_inr_rate):
@@ -1163,13 +1163,23 @@ class PrimeSignalBot:
                 else:
                     min_paper_cost = 50.0 if is_inr else 1.0
                     cur_sym = "₹" if is_inr else "$"
+                    max_alloc_pct = getattr(Config, 'MAX_TRADE_ALLOCATION_PCT', 0.35)
+                    max_allowed_cost = current_equity * max_alloc_pct
                     entry_cost_equity_curr = pos_size * entry_price * (conversion_rate if is_inr else 1.0)
+
+                    if entry_cost_equity_curr > max_allowed_cost:
+                        pos_size = max_allowed_cost / (entry_price * (conversion_rate if is_inr else 1.0))
+                        entry_cost_equity_curr = max_allowed_cost
+
                     if entry_cost_equity_curr <= self._dry_run_balance_usdt:
                         self._dry_run_balance_usdt -= entry_cost_equity_curr
                         order = {'id': f'MOCK_BUY_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
                     elif self._dry_run_balance_usdt >= min_paper_cost:
-                        pos_size = self._dry_run_balance_usdt / (entry_price * (conversion_rate if is_inr else 1.0))
-                        self._dry_run_balance_usdt = 0.0
+                        usable_cash = min(self._dry_run_balance_usdt, self._dry_run_balance_usdt * max_alloc_pct)
+                        if usable_cash < min_paper_cost:
+                            usable_cash = self._dry_run_balance_usdt
+                        pos_size = usable_cash / (entry_price * (conversion_rate if is_inr else 1.0))
+                        self._dry_run_balance_usdt -= usable_cash
                         order = {'id': f'MOCK_BUY_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
                     else:
                         add_log_message(f"[{symbol}] ⚠️ Paper trading wallet balance depleted ({cur_sym}{self._dry_run_balance_usdt:.2f}). Reset wallet to continue.")
@@ -1350,13 +1360,23 @@ class PrimeSignalBot:
                 else:
                     min_paper_cost = 50.0 if is_inr else 1.0
                     cur_sym = "₹" if is_inr else "$"
+                    max_alloc_pct = getattr(Config, 'MAX_TRADE_ALLOCATION_PCT', 0.35)
+                    max_allowed_cost = current_equity * max_alloc_pct
                     collateral_equity_curr = pos_size * entry_price * (conversion_rate if is_inr else 1.0)
+
+                    if collateral_equity_curr > max_allowed_cost:
+                        pos_size = max_allowed_cost / (entry_price * (conversion_rate if is_inr else 1.0))
+                        collateral_equity_curr = max_allowed_cost
+
                     if collateral_equity_curr <= self._dry_run_balance_usdt:
                         self._dry_run_balance_usdt -= collateral_equity_curr
                         order = {'id': f'MOCK_SELL_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
                     elif self._dry_run_balance_usdt >= min_paper_cost:
-                        pos_size = self._dry_run_balance_usdt / (entry_price * (conversion_rate if is_inr else 1.0))
-                        self._dry_run_balance_usdt = 0.0
+                        usable_cash = min(self._dry_run_balance_usdt, self._dry_run_balance_usdt * max_alloc_pct)
+                        if usable_cash < min_paper_cost:
+                            usable_cash = self._dry_run_balance_usdt
+                        pos_size = usable_cash / (entry_price * (conversion_rate if is_inr else 1.0))
+                        self._dry_run_balance_usdt -= usable_cash
                         order = {'id': f'MOCK_SELL_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
                     else:
                         add_log_message(f"[{symbol}] ⚠️ Paper trading wallet balance depleted ({cur_sym}{self._dry_run_balance_usdt:.2f}). Reset wallet to continue.")
