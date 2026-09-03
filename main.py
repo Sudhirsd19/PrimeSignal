@@ -1003,15 +1003,17 @@ class PrimeSignalBot:
                 add_log_message(f"[{symbol}] Trade skipped: Max 2 SHORT positions already open/reserved ({effective_shorts} in-flight).")
                 return
             
-            # Task 10: Priority Ranking
-            priority_score = (score * 0.7) + (prob * 0.3)
+            # Task 10: Priority Ranking (prob scaled 0..5 to align with score 0..5)
+            priority_score = (score * 0.7) + (prob * 5.0 * 0.3)
             
-            if priority_score < 3.5 and effective_total_risk + trade_risk_pct > max_risk_cap - 0.04:
-                add_log_message(f"[{symbol}] Trade skipped: Priority score {priority_score:.1f} < 3.5. Reserving cap space.")
-                return
-            if priority_score < 4.5 and effective_total_risk + trade_risk_pct > max_risk_cap - 0.02:
-                add_log_message(f"[{symbol}] Trade skipped: Priority score {priority_score:.1f} < 4.5. Reserving cap space.")
-                return
+            # Only reserve cap space when portfolio already has active positions
+            if effective_open_count >= 1:
+                if priority_score < 3.0 and effective_total_risk + trade_risk_pct > max_risk_cap - 0.02:
+                    add_log_message(f"[{symbol}] Trade skipped: Priority score {priority_score:.1f} < 3.0. Reserving cap space.")
+                    return
+                if priority_score < 4.0 and effective_total_risk + trade_risk_pct > max_risk_cap - 0.01:
+                    add_log_message(f"[{symbol}] Trade skipped: Priority score {priority_score:.1f} < 4.0. Reserving cap space.")
+                    return
             if effective_total_risk + trade_risk_pct > max_risk_cap:
                 add_log_message(f"[{symbol}] Trade blocked: Absolute exposure limit reached ({effective_total_risk*100:.2f}% + {trade_risk_pct*100:.2f}% > {max_risk_cap*100:.2f}%).")
                 return

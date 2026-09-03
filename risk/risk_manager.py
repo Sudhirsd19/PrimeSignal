@@ -17,8 +17,8 @@ class RiskManager:
         self.reserved_longs_count = 0
         self.reserved_shorts_count = 0
         self.active_reservations: dict[str, dict[str, Any]] = {}
-        # Canonical decimal representation: 1.2% = 0.012
-        raw_cap = float(getattr(Config, 'MAX_CORRELATED_RISK_PCT', 0.012))
+        # Canonical decimal representation: 6.0% portfolio cap = 0.06
+        raw_cap = float(getattr(Config, 'MAX_PORTFOLIO_RISK_PCT', getattr(Config, 'MAX_CORRELATED_RISK_PCT', 0.06)))
         self.max_correlated_risk_pct = raw_cap / 100.0 if raw_cap > 0.2 else raw_cap
         self._lock = asyncio.Lock()
         # Portfolio-level lock for atomic risk reservation across concurrent entry tasks
