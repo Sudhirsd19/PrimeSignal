@@ -97,7 +97,7 @@ class DashboardState:
     
     daily_drawdown_pct = 0.0
     daily_profit_locked = False
-    max_daily_profit_pct = float(getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0))
+    max_daily_profit_pct = float(getattr(Config, 'MAX_DAILY_PROFIT_PCT', 10.0))
     daily_gain_pct = 0.0
     ml_confidence = 0.5
     next_candle_color = "GREEN"
@@ -132,7 +132,9 @@ async def get_dashboard(request: Request):
     """Renders the main terminal dashboard page."""
     secret = os.getenv("DASHBOARD_SECRET", _DASHBOARD_SECRET) or "primesignal_secret_key"
     return templates.TemplateResponse(request, "index.html", {
-        "dashboard_secret": secret
+        "dashboard_secret": secret,
+        "dashboard_api_key": secret,
+        "request": request
     })
 
 @app.post("/api/change_symbol", dependencies=[Depends(verify_dashboard_key)])
@@ -773,7 +775,7 @@ async def get_state():
         "trades_today": bot_instance.trades_today if bot_instance else 0,
         "max_daily_trades": getattr(Config, 'MAX_DAILY_TRADES', 6),
         "daily_profit_locked": getattr(bot_instance.risk, 'daily_profit_locked', DashboardState.daily_profit_locked) if (bot_instance and hasattr(bot_instance, 'risk')) else DashboardState.daily_profit_locked,
-        "max_daily_profit_pct": getattr(bot_instance.risk, 'max_daily_profit_pct', getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0)) if (bot_instance and hasattr(bot_instance, 'risk')) else getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0),
+        "max_daily_profit_pct": getattr(bot_instance.risk, 'max_daily_profit_pct', getattr(Config, 'MAX_DAILY_PROFIT_PCT', 10.0)) if (bot_instance and hasattr(bot_instance, 'risk')) else getattr(Config, 'MAX_DAILY_PROFIT_PCT', 10.0),
         "daily_gain_pct": round(getattr(bot_instance.risk, 'current_drawdown_pct', DashboardState.daily_drawdown_pct), 2) if (bot_instance and hasattr(bot_instance, 'risk')) else DashboardState.daily_drawdown_pct,
         "signal_light": DashboardState.signal_light,
         "signal_light_reason": DashboardState.signal_light_reason,
@@ -1071,7 +1073,7 @@ def _build_state_payload():
         "trades_today": bot_instance.trades_today if bot_instance else 0,
         "max_daily_trades": getattr(Config, 'MAX_DAILY_TRADES', 6),
         "daily_profit_locked": getattr(bot_instance.risk, 'daily_profit_locked', DashboardState.daily_profit_locked) if (bot_instance and hasattr(bot_instance, 'risk')) else DashboardState.daily_profit_locked,
-        "max_daily_profit_pct": getattr(bot_instance.risk, 'max_daily_profit_pct', getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0)) if (bot_instance and hasattr(bot_instance, 'risk')) else getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0),
+        "max_daily_profit_pct": getattr(bot_instance.risk, 'max_daily_profit_pct', getattr(Config, 'MAX_DAILY_PROFIT_PCT', 10.0)) if (bot_instance and hasattr(bot_instance, 'risk')) else getattr(Config, 'MAX_DAILY_PROFIT_PCT', 10.0),
         "daily_gain_pct": round(getattr(bot_instance.risk, 'current_drawdown_pct', DashboardState.daily_drawdown_pct), 2) if (bot_instance and hasattr(bot_instance, 'risk')) else DashboardState.daily_drawdown_pct,
         "logs": DashboardState.logs[-10:],     # Last 10 logs
         "chart_history": DashboardState.chart_history,

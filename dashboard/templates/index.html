@@ -488,7 +488,7 @@
                     <div class="flex items-center gap-2">
                         <span class="text-xs font-black uppercase tracking-wider text-slate-200">Daily Profit Lock:</span>
                         <span id="main-profit-lock-badge" class="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
-                            Monitoring (Target: 4.0%)
+                            Monitoring (Target: 10.0%)
                         </span>
                     </div>
                     <p class="text-[11px] text-slate-400 mt-0.5">Auto-pause new entries when profit % is reached to secure capital.</p>
@@ -498,7 +498,7 @@
             <div class="flex items-center gap-2 w-full md:w-auto justify-end">
                 <div class="flex items-center bg-[#171e2e] border border-[#374151] rounded-lg px-2.5 py-1">
                     <span class="text-[10px] text-slate-400 mr-1.5 font-bold">TARGET:</span>
-                    <input id="main-profit-target-input" type="number" step="0.5" min="0.5" max="50.0" value="4.0" 
+                    <input id="main-profit-target-input" type="number" step="0.5" min="1.0" max="50.0" value="10.0" 
                            class="w-14 bg-transparent text-white font-black text-xs focus:outline-none text-right pr-0.5" />
                     <span class="text-slate-400 text-xs font-bold">%</span>
                 </div>
@@ -518,7 +518,7 @@
                 <div>
                     <div class="flex items-center gap-2">
                         <h3 class="text-sm sm:text-base font-black text-amber-300 uppercase tracking-wide">Daily Profit Locked!</h3>
-                        <span id="banner-profit-badge" class="text-xs font-black bg-amber-400 text-slate-950 px-2.5 py-0.5 rounded-full shadow">+4.0% Secured</span>
+                        <span id="banner-profit-badge" class="text-xs font-black bg-amber-400 text-slate-950 px-2.5 py-0.5 rounded-full shadow">+10.0% Secured</span>
                     </div>
                     <p class="text-xs text-slate-300 mt-0.5">Capital is secured! Daily profit target reached. New entries paused until unlocked or 00:00 UTC.</p>
                 </div>
@@ -995,7 +995,7 @@
         }
 
         function getDashboardApiKey() {
-            return localStorage.getItem('dashboard_api_key') || window.DASHBOARD_API_KEY || '';
+            return localStorage.getItem('dashboard_api_key') || window.DASHBOARD_API_KEY || 'primesignal_secret_key';
         }
 
         function getApiHeaders() {
@@ -1927,7 +1927,7 @@
                             const mainBadge = document.getElementById('main-profit-lock-badge');
                             const mainUnlockBtn = document.getElementById('main-unlock-btn');
                             
-                            const targetVal = state.max_daily_profit_pct !== undefined ? state.max_daily_profit_pct : 4.0;
+                            const targetVal = state.max_daily_profit_pct !== undefined ? state.max_daily_profit_pct : 10.0;
                             const gainVal = state.daily_gain_pct !== undefined ? state.daily_gain_pct : 0.0;
                             
                             if (targetInput && document.activeElement !== targetInput) {
@@ -3126,10 +3126,15 @@
 
         async function saveMainProfitTarget() {
             const input = document.getElementById('main-profit-target-input');
-            const val = parseFloat(input ? input.value : 4.0);
+            const val = parseFloat(input ? input.value : 10.0);
             if (isNaN(val) || val <= 0) {
                 alert("Please enter a valid positive profit percentage.");
                 return;
+            }
+            const btn = event ? event.target : null;
+            if (btn) {
+                btn.disabled = true;
+                btn.innerText = "Saving...";
             }
             try {
                 const res = await fetch('/api/set_daily_profit_target', {
@@ -3139,6 +3144,8 @@
                 });
                 const data = await res.json();
                 if (data.status === 'success' || data.max_daily_profit_pct !== undefined) {
+                    if (latestStateRef) latestStateRef.max_daily_profit_pct = val;
+                    localStorage.setItem('dashboard_daily_profit_target', val);
                     const badge = document.getElementById('main-profit-lock-badge');
                     if (badge) {
                         badge.innerText = `Target: ${val.toFixed(1)}% (Saved!)`;
@@ -3148,12 +3155,23 @@
                             badge.className = "text-[10px] font-black px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700";
                         }, 2500);
                     }
+                    if (btn) {
+                        btn.innerText = "Saved! ✓";
+                        btn.className = "px-3.5 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer shadow-sm";
+                        setTimeout(() => {
+                            btn.disabled = false;
+                            btn.innerText = "Set Target";
+                            btn.className = "px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer shadow-sm";
+                        }, 2000);
+                    }
                 } else {
-                    alert(data.message || "Failed to update target.");
+                    alert(data.message || data.detail || "Failed to update target.");
+                    if (btn) { btn.disabled = false; btn.innerText = "Set Target"; }
                 }
             } catch (e) {
                 console.error("Error saving main profit target:", e);
                 alert("Failed to update target. Check server connection.");
+                if (btn) { btn.disabled = false; btn.innerText = "Set Target"; }
             }
         }
 

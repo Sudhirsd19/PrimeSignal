@@ -21,7 +21,7 @@ class Config:
     DYNAMIC_BE_BUFFER_PCT = float(os.getenv("DYNAMIC_BE_BUFFER_PCT", "0.0030")) # Dynamic Roundtrip Fee (0.20%) + Slippage Buffer (0.10%)
     MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "2.0"))
     # Daily Profit Lock: Auto-pause after reaching daily profit target to protect gains
-    MAX_DAILY_PROFIT_PCT = float(os.getenv("MAX_DAILY_PROFIT_PCT", "4.0"))
+    MAX_DAILY_PROFIT_PCT = float(os.getenv("MAX_DAILY_PROFIT_PCT", "10.0"))
     ENABLE_DAILY_PROFIT_LOCK = os.getenv("ENABLE_DAILY_PROFIT_LOCK", "True").lower() in ("true", "1", "yes")
     # Dynamic Kelly Criterion Position Sizing
     ENABLE_KELLY_SIZING = os.getenv("ENABLE_KELLY_SIZING", "True").lower() in ("true", "1", "yes")

@@ -10,7 +10,7 @@ class RiskManager:
         self.daily_starting_equity = None
         self.current_drawdown_pct = 0.0
         self.daily_profit_locked = False
-        self.max_daily_profit_pct = float(getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0))
+        self.max_daily_profit_pct = float(getattr(Config, 'MAX_DAILY_PROFIT_PCT', 10.0))
         self.daily_profit_unlocked_manual = False
         self.reserved_risk_pct = 0.0 # Atomic risk tracker for pending orders
         self.reserved_open_count = 0
@@ -231,7 +231,7 @@ class RiskManager:
 
         # Daily Profit Lock: Auto-pause after hitting daily profit target to protect gains
         if getattr(Config, 'ENABLE_DAILY_PROFIT_LOCK', True):
-            max_profit = getattr(self, 'max_daily_profit_pct', getattr(Config, 'MAX_DAILY_PROFIT_PCT', 4.0))
+            max_profit = getattr(self, 'max_daily_profit_pct', getattr(Config, 'MAX_DAILY_PROFIT_PCT', 10.0))
             if getattr(self, 'daily_profit_unlocked_manual', False):
                 self.daily_profit_locked = False
             elif self.current_drawdown_pct >= max_profit:
