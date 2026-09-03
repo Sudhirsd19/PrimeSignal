@@ -711,6 +711,13 @@ class PrimeSignalBot:
                 add_log_message(f"[{symbol}] Trade skipped: Execution delay ({delay:.1f}s) > 120s. Stale signal protection.")
                 return
             
+        # Reset daily trades at UTC midnight
+        current_date = datetime.datetime.now(datetime.timezone.utc).date()
+        if current_date != self.last_trade_day:
+            self.trades_today = 0
+            self.relaxed_trades_today = 0
+            self.last_trade_day = current_date
+            
         signal, metadata = self.strategy.generate_signal(
             htf_df,
             ltf_df,
@@ -721,12 +728,6 @@ class PrimeSignalBot:
         # Dual-Pass Execution
         if signal == "HOLD":
             open_count, _, _, _ = await self.get_open_positions_info()
-            
-            # Reset daily trades
-            current_date = datetime.datetime.now(datetime.timezone.utc).date()
-            if current_date != self.last_trade_day:
-                self.trades_today = 0
-                self.last_trade_day = current_date
                 
             if open_count < 2 and (time.time() - self.global_last_trade_time) >= 20 * 60 and time.time() > self.global_pause_until:
                 if self.relaxed_trades_today < 2 and time.time() > self.relaxed_disabled_until:
@@ -1545,8 +1546,11 @@ class PrimeSignalBot:
                 if now_utc.date() != self._last_reset_date:
                     current_eq = DashboardState.balance_usdt if self.has_keys else self.calculate_total_equity()
                     self.risk.reset_daily_equity(current_eq)
+                    self.trades_today = 0
+                    self.relaxed_trades_today = 0
+                    self.last_trade_day = now_utc.date()
                     self._last_reset_date = now_utc.date()
-                    add_log_message(f"[RISK] Daily equity checkpoint reset at UTC midnight.")
+                    add_log_message(f"[RISK] Daily equity & trades checkpoint reset at UTC midnight.")
 
                 # --- 🚀 INSTITUTIONAL MULTI-SYMBOL REAL-TIME SCANNER ---
                 self._fast_scan_counter = getattr(self, '_fast_scan_counter', 0) + 1
