@@ -456,7 +456,7 @@ async def trigger_test_trade(req: Optional[TestTradeRequest] = None):
         if is_long:
             DashboardState.balance_base = pos_size
         
-        entry_dt_str = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+        entry_dt_str = datetime.datetime.now(IST).strftime("%d-%m-%Y %H:%M:%S")
         
         DashboardState.active_positions[symbol] = {
             'symbol': symbol,
@@ -623,14 +623,14 @@ async def get_analytics():
             e_time_str = t.get("entry_time_str")
             if not e_time_str and e_ts:
                 try:
-                    e_time_str = datetime.datetime.fromtimestamp(float(e_ts) / (1000.0 if float(e_ts) > 1e11 else 1.0), tz=IST).strftime('%Y-%m-%d %H:%M:%S')
+                    e_time_str = datetime.datetime.fromtimestamp(float(e_ts) / (1000.0 if float(e_ts) > 1e11 else 1.0), tz=IST).strftime('%d-%m-%Y %H:%M:%S')
                 except Exception:
                     e_time_str = str(e_ts)
             
             x_time_str = t.get("exit_time_str")
             if not x_time_str and x_ts:
                 try:
-                    x_time_str = datetime.datetime.fromtimestamp(float(x_ts) / (1000.0 if float(x_ts) > 1e11 else 1.0), tz=IST).strftime('%Y-%m-%d %H:%M:%S')
+                    x_time_str = datetime.datetime.fromtimestamp(float(x_ts) / (1000.0 if float(x_ts) > 1e11 else 1.0), tz=IST).strftime('%d-%m-%Y %H:%M:%S')
                 except Exception:
                     x_time_str = str(x_ts)
                     
@@ -895,9 +895,9 @@ def _build_state_payload():
 
                 e_time = bot_instance.entry_time.get(sym, int(time.time() * 1000))
                 try:
-                    e_time_str = datetime.datetime.fromtimestamp(float(e_time) / (1000.0 if float(e_time) > 1e11 else 1.0), tz=IST).strftime('%Y-%m-%d %H:%M:%S')
+                    e_time_str = datetime.datetime.fromtimestamp(float(e_time) / (1000.0 if float(e_time) > 1e11 else 1.0), tz=IST).strftime('%d-%m-%Y %H:%M:%S')
                 except Exception:
-                    e_time_str = datetime.datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')
+                    e_time_str = datetime.datetime.now(IST).strftime('%d-%m-%Y %H:%M:%S')
 
                 invested_u = pos_sz * entry_val
                 invested_c = invested_u * fx_rate if is_inr else invested_u

@@ -1372,14 +1372,37 @@
         }
 
         function formatExecutionDate(entry_ts, fallbackStr) {
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
             if (entry_ts) {
                 const ts = parseFloat(entry_ts) > 1e11 ? parseFloat(entry_ts) : (parseFloat(entry_ts) * 1000);
                 const d = new Date(ts);
                 if (!isNaN(d.getTime())) {
-                    return d.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric' });
+                    // Unambiguous Indian Date Format: 04 Sep 2026 (DD MMM YYYY)
+                    const day = String(d.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit' })).padStart(2, '0');
+                    const month = d.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', month: 'short' });
+                    const year = d.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', year: 'numeric' });
+                    return `${day} ${month} ${year}`;
                 }
             }
-            return fallbackStr ? (fallbackStr.split(' ')[0] || '') : '';
+            if (fallbackStr) {
+                const raw = fallbackStr.trim().split(' ')[0];
+                const parts = raw.split(/[-/]/);
+                if (parts.length === 3) {
+                    if (parts[0].length === 4) {
+                        const mIdx = parseInt(parts[1], 10) - 1;
+                        const mName = months[mIdx] || parts[1];
+                        return `${parts[2]} ${mName} ${parts[0]}`;
+                    }
+                    if (parts[2].length === 4) {
+                        const mIdx = parseInt(parts[1], 10) - 1;
+                        const mName = months[mIdx] || parts[1];
+                        return `${parts[0]} ${mName} ${parts[2]}`;
+                    }
+                    return `${parts[0]}-${parts[1]}-${parts[2]}`;
+                }
+                return raw;
+            }
+            return '';
         }
 
         function formatOpenDuration(entry_ts) {
@@ -2466,9 +2489,10 @@
 
             // Today's date in Indian Standard Time (Asia/Kolkata) => YYYY-MM-DD
             const todayIST = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+            const todayLabel = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' }).format(new Date());
 
             if (!trades || trades.length === 0) {
-                badge.innerText = `Today: ${curUnit}0.00 | 0W 0L`;
+                badge.innerText = `Today (${todayLabel}): ${curUnit}0.00 | 0W 0L`;
                 badge.className = "text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-slate-500/20 text-slate-400 border border-slate-500/30";
                 return;
             }
@@ -2497,6 +2521,9 @@
                             } else {
                                 tradeDateIST = cleanStr.slice(0, 10);
                             }
+                        } else if (cleanStr.match(/^\d{2}[-/]\d{2}[-/]\d{4}/)) {
+                            const p = cleanStr.split(/[-/]/);
+                            tradeDateIST = `${p[2]}-${p[1]}-${p[0]}`;
                         }
                     }
                 }
@@ -2536,7 +2563,7 @@
                     ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30 shadow-[0_0_8px_rgba(16,185,129,0.2)]" 
                     : "bg-rose-500/15 text-rose-400 border-rose-500/30 shadow-[0_0_8px_rgba(244,63,94,0.2)]");
             
-            badge.innerText = `Today: ${sign}${curUnit}${todayPnL.toFixed(2)} | ${wins}W ${losses}L${totalCount > 0 ? ` (${winRate}%)` : ''}`;
+            badge.innerText = `Today (${todayLabel}): ${sign}${curUnit}${todayPnL.toFixed(2)} | ${wins}W ${losses}L${totalCount > 0 ? ` (${winRate}%)` : ''}`;
             badge.className = `text-[10px] font-extrabold px-2 py-0.5 rounded-full border ${colorClass}`;
         }
 
@@ -2860,12 +2887,16 @@
                             
                             const extractDT = (val) => {
                                 if (!val || val === 'N/A') return null;
+                                const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
                                 const num = parseFloat(val);
                                 if (!isNaN(num) && num > 1e8) {
                                     const dt = new Date(num > 1e11 ? num : num * 1000);
                                     if (!isNaN(dt.getTime())) {
+                                        const day = String(dt.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit' })).padStart(2, '0');
+                                        const month = dt.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', month: 'short' });
+                                        const year = dt.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', year: 'numeric' });
                                         return {
-                                            date: dt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric' }),
+                                            date: `${day} ${month} ${year}`,
                                             time: dt.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
                                         };
                                     }
@@ -2875,15 +2906,32 @@
                                     if (cleanStr.includes('T') || cleanStr.match(/^\d{4}-\d{2}-\d{2}/)) {
                                         const dt = new Date(cleanStr.replace(' ', 'T'));
                                         if (!isNaN(dt.getTime())) {
+                                            const day = String(dt.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit' })).padStart(2, '0');
+                                            const month = dt.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', month: 'short' });
+                                            const year = dt.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', year: 'numeric' });
                                             return {
-                                                date: dt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric' }),
+                                                date: `${day} ${month} ${year}`,
                                                 time: dt.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
                                             };
                                         }
                                     }
                                     if (cleanStr.includes(' ')) {
                                         const parts = cleanStr.split(' ');
-                                        return { date: parts[0], time: (parts[1] || '').slice(0, 8) };
+                                        const rawDate = parts[0];
+                                        const dParts = rawDate.split(/[-/]/);
+                                        let fmtDate = rawDate;
+                                        if (dParts.length === 3) {
+                                            if (dParts[0].length === 4) {
+                                                const mIdx = parseInt(dParts[1], 10) - 1;
+                                                const mName = months[mIdx] || dParts[1];
+                                                fmtDate = `${dParts[2]} ${mName} ${dParts[0]}`;
+                                            } else if (dParts[2].length === 4) {
+                                                const mIdx = parseInt(dParts[1], 10) - 1;
+                                                const mName = months[mIdx] || dParts[1];
+                                                fmtDate = `${dParts[0]} ${mName} ${dParts[2]}`;
+                                            }
+                                        }
+                                        return { date: fmtDate, time: (parts[1] || '').slice(0, 8) };
                                     }
                                 }
                                 return null;
@@ -2892,7 +2940,8 @@
                             const eDT = extractDT(t.entry_time_str) || extractDT(t.entry_time);
                             const xDT = extractDT(t.exit_time_str) || extractDT(t.exit_time) || extractDT(t.timestamp) || extractDT(t.time) || extractDT(t.ts);
                             
-                            const todayIndianDate = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date());
+                            const dNow = new Date();
+                            const todayIndianDate = `${String(dNow.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit' })).padStart(2, '0')} ${dNow.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', month: 'short' })} ${dNow.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', year: 'numeric' })}`;
                             const displayDate = (xDT && xDT.date) || (eDT && eDT.date) || (typeof t.timestamp === 'string' && t.timestamp.length >= 10 ? t.timestamp.slice(0, 10) : todayIndianDate);
                             const eTime = eDT ? eDT.time : (xDT ? xDT.time : 'Executed');
                             const xTime = xDT ? xDT.time : (eDT ? eDT.time : 'Closed');

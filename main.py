@@ -1287,7 +1287,7 @@ class PrimeSignalBot:
                         DashboardState.current_pnl_usdt = 0.0
 
                     e_time = self.entry_time[symbol]
-                    e_time_str = datetime.datetime.fromtimestamp(e_time / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S')
+                    e_time_str = datetime.datetime.fromtimestamp(e_time / 1000.0, tz=IST).strftime('%d-%m-%Y %H:%M:%S')
                     DashboardState.active_positions[symbol] = {
                         'symbol': symbol,
                         'side': "LONG",
@@ -1484,7 +1484,7 @@ class PrimeSignalBot:
                         DashboardState.current_pnl_usdt = 0.0
 
                     e_time = self.entry_time[symbol]
-                    e_time_str = datetime.datetime.fromtimestamp(e_time / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S')
+                    e_time_str = datetime.datetime.fromtimestamp(e_time / 1000.0, tz=IST).strftime('%d-%m-%Y %H:%M:%S')
                     DashboardState.active_positions[symbol] = {
                         'symbol': symbol,
                         'side': "SHORT",
@@ -1721,10 +1721,10 @@ class PrimeSignalBot:
                                         'pnl_pct': round(tp1_pnl_pct, 2),
                                         'entry_time': entry_ts,
                                         'exit_time': now_ts,
-                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S'),
-                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0, tz=IST).strftime('%d-%m-%Y %H:%M:%S'),
+                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0, tz=IST).strftime('%d-%m-%Y %H:%M:%S'),
                                         'duration': dur_str,
-                                        'timestamp': datetime.datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'timestamp': datetime.datetime.now(IST).strftime('%d-%m-%Y %H:%M:%S'),
                                         'reason': f'TP1_HIT_{int(tp1_pct*100)}PCT'
                                     }
                                     DashboardState.trades.append(tp1_record)
@@ -1820,10 +1820,10 @@ class PrimeSignalBot:
                                         'pnl_pct': round(tp2_pnl_pct, 2),
                                         'entry_time': entry_ts,
                                         'exit_time': now_ts,
-                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S'),
-                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0, tz=IST).strftime('%d-%m-%Y %H:%M:%S'),
+                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0, tz=IST).strftime('%d-%m-%Y %H:%M:%S'),
                                         'duration': dur_str,
-                                        'timestamp': datetime.datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'timestamp': datetime.datetime.now(IST).strftime('%d-%m-%Y %H:%M:%S'),
                                         'reason': 'TP2_HIT_30PCT'
                                     }
                                     DashboardState.trades.append(tp2_record)
@@ -1984,10 +1984,10 @@ class PrimeSignalBot:
                                         'pnl_pct': round(tp1_pnl_pct, 2),
                                         'entry_time': entry_ts,
                                         'exit_time': now_ts,
-                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S'),
-                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0, tz=IST).strftime('%d-%m-%Y %H:%M:%S'),
+                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0, tz=IST).strftime('%d-%m-%Y %H:%M:%S'),
                                         'duration': dur_str,
-                                        'timestamp': datetime.datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'timestamp': datetime.datetime.now(IST).strftime('%d-%m-%Y %H:%M:%S'),
                                         'reason': f'TP1_HIT_{int(tp1_pct*100)}PCT'
                                     }
                                     DashboardState.trades.append(tp1_record)
@@ -2084,10 +2084,10 @@ class PrimeSignalBot:
                                         'pnl_pct': round(tp2_pnl_pct, 2),
                                         'entry_time': entry_ts,
                                         'exit_time': now_ts,
-                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S'),
-                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0, tz=IST).strftime('%d-%m-%Y %H:%M:%S'),
+                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0, tz=IST).strftime('%d-%m-%Y %H:%M:%S'),
                                         'duration': dur_str,
-                                        'timestamp': datetime.datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'timestamp': datetime.datetime.now(IST).strftime('%d-%m-%Y %H:%M:%S'),
                                         'reason': 'TP2_HIT_30PCT'
                                     }
                                     DashboardState.trades.append(tp2_record)
@@ -2224,7 +2224,7 @@ class PrimeSignalBot:
                         guaranteed_pnl_pct = (guaranteed_pnl_usdt / orig_val * 100.0) if orig_val > 0 else 0.0
 
                         e_time = self.entry_time.get(s, int(time.time() * 1000))
-                        e_time_str = datetime.datetime.fromtimestamp(e_time / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S')
+                        e_time_str = datetime.datetime.fromtimestamp(e_time / 1000.0, tz=IST).strftime('%d-%m-%Y %H:%M:%S')
 
                         active_pos_map[s] = {
                             'side': self.position_side[s],
@@ -2433,8 +2433,8 @@ class PrimeSignalBot:
                 secs = duration_secs % 60
                 duration_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
                 
-                entry_dt_str = datetime.datetime.fromtimestamp(entry_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S')
-                exit_dt_str = datetime.datetime.fromtimestamp(exit_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S')
+                entry_dt_str = datetime.datetime.fromtimestamp(entry_ts / 1000.0, tz=IST).strftime('%d-%m-%Y %H:%M:%S')
+                exit_dt_str = datetime.datetime.fromtimestamp(exit_ts / 1000.0, tz=IST).strftime('%d-%m-%Y %H:%M:%S')
 
                 trade_record = {
                     'trade_id': self.current_trade_id.get(symbol, ''),
