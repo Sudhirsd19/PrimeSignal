@@ -31,20 +31,20 @@ class Config:
     MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "6"))
     TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015")) # Deprecated in favor of ATR
     TRAILING_ATR_MULT = float(os.getenv("TRAILING_ATR_MULT", "1.5"))
-    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.0")) # Breakeven Lock at +1.0R (Zero-Risk Free Trade)
-    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.5")) # TP1 Target: 1.5R
-    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.5")) # TP2 Target: 2.5R
-    TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "0.50")) # 50% profit booking at 1.5R target
+    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.2")) # Breakeven Lock aligns with TP1 target (1.2R)
+    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.2")) # TP1 Target: 1.2R
+    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.2")) # TP2 Target: 2.2R
+    TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "0.65")) # 65% profit booking at 1.2R target
     ML_CONFIDENCE_THRESHOLD = float(os.getenv("ML_CONFIDENCE_THRESHOLD", "0.60"))
     
     # ─── ULTIMATE SHIELD: 5 Advanced Institutional Protection Parameters ───
     # 1. Stagnation Killer (Time-based exit)
     ENABLE_TIME_STOP = os.getenv("ENABLE_TIME_STOP", "True").lower() in ("true", "1", "yes")
-    MAX_STAGNANT_CANDLES = int(os.getenv("MAX_STAGNANT_CANDLES", "16")) # 4 hours on 15m
+    MAX_STAGNANT_CANDLES = int(os.getenv("MAX_STAGNANT_CANDLES", "24")) # 6 hours on 15m
     STAGNANT_MAX_R_DISTANCE = float(os.getenv("STAGNANT_MAX_R_DISTANCE", "0.25")) # exit if within ±0.25R
     
     # 2. Early Structural Invalidation Exit
-    ENABLE_STRUCTURAL_EXIT = os.getenv("ENABLE_STRUCTURAL_EXIT", "True").lower() in ("true", "1", "yes")
+    ENABLE_STRUCTURAL_EXIT = os.getenv("ENABLE_STRUCTURAL_EXIT", "False").lower() in ("true", "1", "yes") # Disabled by default to avoid stop-hunt panic exits
     EARLY_EXIT_MAX_LOSS_R = float(os.getenv("EARLY_EXIT_MAX_LOSS_R", "0.45")) # Cut trade at max -0.45R instead of full -1.0R
     
     # 3. Funding Rate & Crowded Sentiment Filter

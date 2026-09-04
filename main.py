@@ -894,16 +894,18 @@ class PrimeSignalBot:
                 tp2_mult = 1.8
                 ml_confidence_weight = -1
             else:
-                tp2_mult = 2.2
+                tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.2))
+
+            tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.2))
 
             if signal == "BUY":
-                metadata['tp1'] = entry_price + (1.0 * risk_usdt) + fee_adj
+                metadata['tp1'] = entry_price + (tp1_mult * risk_usdt) + fee_adj
                 metadata['tp2'] = entry_price + (tp2_mult * risk_usdt) + fee_adj
                 metadata['tp3'] = entry_price + (4.0 * risk_usdt) + fee_adj
                 metadata['take_profit_1r'] = metadata['tp1']
                 metadata['take_profit'] = metadata['tp3']
             elif signal == "SELL":
-                metadata['tp1'] = entry_price - (1.0 * risk_usdt) - fee_adj
+                metadata['tp1'] = entry_price - (tp1_mult * risk_usdt) - fee_adj
                 metadata['tp2'] = entry_price - (tp2_mult * risk_usdt) - fee_adj
                 metadata['tp3'] = entry_price - (4.0 * risk_usdt) - fee_adj
                 metadata['take_profit_1r'] = metadata['tp1']
@@ -911,15 +913,17 @@ class PrimeSignalBot:
         else:
             risk_usdt = abs(metadata.get('stop_loss', entry_price) - entry_price)
             fee_adj = entry_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
+            tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.2))
+            tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.2))
             if signal == "BUY":
-                metadata['tp1'] = entry_price + (1.0 * risk_usdt) + fee_adj
-                metadata['tp2'] = entry_price + (2.2 * risk_usdt) + fee_adj
+                metadata['tp1'] = entry_price + (tp1_mult * risk_usdt) + fee_adj
+                metadata['tp2'] = entry_price + (tp2_mult * risk_usdt) + fee_adj
                 metadata['tp3'] = entry_price + (4.0 * risk_usdt) + fee_adj
                 metadata['take_profit_1r'] = metadata['tp1']
                 metadata['take_profit'] = metadata['tp3']
             elif signal == "SELL":
-                metadata['tp1'] = entry_price - (1.0 * risk_usdt) - fee_adj
-                metadata['tp2'] = entry_price - (2.2 * risk_usdt) - fee_adj
+                metadata['tp1'] = entry_price - (tp1_mult * risk_usdt) - fee_adj
+                metadata['tp2'] = entry_price - (tp2_mult * risk_usdt) - fee_adj
                 metadata['tp3'] = entry_price - (4.0 * risk_usdt) - fee_adj
                 metadata['take_profit_1r'] = metadata['tp1']
                 metadata['take_profit'] = metadata['tp3']
@@ -955,9 +959,10 @@ class PrimeSignalBot:
             add_log_message(f"[{symbol}] Cluster Loss Penalty: Risk slashed by 50%.")
             
         # Runner Logic Metadata
-        metadata['tp1_size'] = 0.50
-        metadata['tp2_size'] = 0.30
-        metadata['runner_size'] = 0.20
+        tp1_scale = float(getattr(Config, 'TP1_SCALE_OUT_PCT', 0.65))
+        metadata['tp1_size'] = tp1_scale
+        metadata['tp2_size'] = round((1.0 - tp1_scale) * 0.65, 2)
+        metadata['runner_size'] = round(1.0 - metadata['tp1_size'] - metadata['tp2_size'], 2)
         
         # Task 10: Equity Protection
         if not hasattr(self, 'hourly_peak_equity'):
@@ -1235,13 +1240,13 @@ class PrimeSignalBot:
                     self.entry_price[symbol] = fill_price
                     self.stop_loss[symbol] = sl
                     
-                    # Initialize TP levels for LONG (3-Stage: TP1 50%, TP2 30%, Runner 20%)
+                    # Initialize TP levels for LONG (3-Stage: TP1 65%, TP2 23%, Runner 12%)
                     # LOGIC-004 fix: Authoritative recalculation based on actual execution fill_price
                     self.partial_tp_taken[symbol] = False
                     self.tp2_taken[symbol] = False
                     r_amount = abs(sl - fill_price)
-                    tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5))
-                    tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.5))
+                    tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.2))
+                    tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.2))
                     self.take_profit_1r[symbol] = float(fill_price + (tp1_mult * r_amount) + fee_adj)
                     self.take_profit_2r[symbol] = float(fill_price + (tp2_mult * r_amount) + fee_adj)
                     self.take_profit[symbol] = float(fill_price + (4.0 * r_amount) + fee_adj)
@@ -1432,13 +1437,13 @@ class PrimeSignalBot:
                     self.entry_price[symbol] = fill_price
                     self.stop_loss[symbol] = sl
                     
-                    # Initialize TP levels for SHORT (3-Stage: TP1 50%, TP2 30%, Runner 20%)
+                    # Initialize TP levels for SHORT (3-Stage: TP1 65%, TP2 23%, Runner 12%)
                     # LOGIC-004 fix: Authoritative recalculation based on actual execution fill_price
                     self.partial_tp_taken[symbol] = False
                     self.tp2_taken[symbol] = False
                     r_amount = abs(sl - fill_price)
-                    tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5))
-                    tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.5))
+                    tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.2))
+                    tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.2))
                     self.take_profit_1r[symbol] = float(fill_price - (tp1_mult * r_amount) - fee_adj)
                     self.take_profit_2r[symbol] = float(fill_price - (tp2_mult * r_amount) - fee_adj)
                     self.take_profit[symbol] = float(fill_price - (4.0 * r_amount) - fee_adj)
@@ -1612,12 +1617,13 @@ class PrimeSignalBot:
                             # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven
                             fee_buffer_pct = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
                             fee_offset = self.entry_price[symbol] * fee_buffer_pct
-                            tsl_activation = float(getattr(Config, 'TSL_ACTIVATION_R', 1.0))
-                            min_required_profit = max(tsl_activation * r_dist, fee_offset * 1.15)
+                            tsl_activation = float(getattr(Config, 'TSL_ACTIVATION_R', 1.2))
+                            min_required_profit = max(tsl_activation * r_dist, fee_offset * 1.5)
                             
-                            if self.highest_price_reached[symbol] >= self.entry_price[symbol] + min_required_profit:
-                                be_sl = min(curr_price * 0.9995, self.entry_price[symbol] + fee_offset)
-                                if be_sl > self.stop_loss[symbol]:
+                            # Only activate Breakeven after TP1 profit is secured OR price has reached full activation threshold
+                            if (self.partial_tp_taken[symbol] or self.highest_price_reached[symbol] >= self.entry_price[symbol] + min_required_profit):
+                                be_sl = self.entry_price[symbol] + fee_offset
+                                if be_sl > self.stop_loss[symbol] and curr_price > be_sl:
                                     self.stop_loss[symbol] = be_sl
                                     if symbol == Config.SYMBOL: DashboardState.stop_loss = be_sl
                                     add_log_message(f"[{symbol}] 🛡️ ZERO-RISK FREE-TRADE ACTIVATED: SL moved to Breakeven ({be_sl:.4f})")
@@ -1658,7 +1664,7 @@ class PrimeSignalBot:
                             
                             # TP1 Scale-Out (80% at 2.0R, or 100% Full Exit)
                             if not self.partial_tp_taken[symbol] and curr_price >= self.take_profit_1r[symbol]:
-                                tp1_pct = float(getattr(Config, 'TP1_SCALE_OUT_PCT', 0.80))
+                                tp1_pct = float(getattr(Config, 'TP1_SCALE_OUT_PCT', 0.65))
                                 if tp1_pct >= 0.999:
                                     add_log_message(f"[{symbol}] 🎯 Target 1 hit! Full 100% profit booking initiated.")
                                     await self.exit_position(symbol, "TAKE_PROFIT_1")
@@ -1716,7 +1722,7 @@ class PrimeSignalBot:
                                         'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S'),
                                         'duration': dur_str,
                                         'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-                                        'reason': 'TP1_HIT_50PCT'
+                                        'reason': f'TP1_HIT_{int(tp1_pct*100)}PCT'
                                     }
                                     DashboardState.trades.append(tp1_record)
                                     
@@ -1873,12 +1879,13 @@ class PrimeSignalBot:
                             # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven
                             fee_buffer_pct = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
                             fee_offset = self.entry_price[symbol] * fee_buffer_pct
-                            tsl_activation = float(getattr(Config, 'TSL_ACTIVATION_R', 1.0))
-                            min_required_profit = max(tsl_activation * r_dist, fee_offset * 1.15)
+                            tsl_activation = float(getattr(Config, 'TSL_ACTIVATION_R', 1.2))
+                            min_required_profit = max(tsl_activation * r_dist, fee_offset * 1.5)
                             
-                            if self.lowest_price_reached[symbol] <= self.entry_price[symbol] - min_required_profit:
-                                be_sl = max(curr_price * 1.0005, self.entry_price[symbol] - fee_offset)
-                                if be_sl < self.stop_loss[symbol]:
+                            # Only activate Breakeven after TP1 profit is secured OR price has reached full activation threshold
+                            if (self.partial_tp_taken[symbol] or self.lowest_price_reached[symbol] <= self.entry_price[symbol] - min_required_profit):
+                                be_sl = self.entry_price[symbol] - fee_offset
+                                if be_sl < self.stop_loss[symbol] and curr_price < be_sl:
                                     self.stop_loss[symbol] = be_sl
                                     if symbol == Config.SYMBOL: DashboardState.stop_loss = be_sl
                                     add_log_message(f"[{symbol}] 🛡️ ZERO-RISK FREE-TRADE ACTIVATED: SL moved to Breakeven ({be_sl:.4f})")
@@ -1919,7 +1926,7 @@ class PrimeSignalBot:
                             
                             # TP1 Scale-Out (80% at 2.0R, or 100% Full Exit)
                             if not self.partial_tp_taken[symbol] and curr_price <= self.take_profit_1r[symbol]:
-                                tp1_pct = float(getattr(Config, 'TP1_SCALE_OUT_PCT', 0.80))
+                                tp1_pct = float(getattr(Config, 'TP1_SCALE_OUT_PCT', 0.65))
                                 if tp1_pct >= 0.999:
                                     add_log_message(f"[{symbol}] 🎯 Target 1 hit! Full 100% profit booking initiated.")
                                     await self.exit_position(symbol, "TAKE_PROFIT_1")
@@ -1978,7 +1985,7 @@ class PrimeSignalBot:
                                         'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S'),
                                         'duration': dur_str,
                                         'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-                                        'reason': 'TP1_HIT_50PCT'
+                                        'reason': f'TP1_HIT_{int(tp1_pct*100)}PCT'
                                     }
                                     DashboardState.trades.append(tp1_record)
                                     
