@@ -24,7 +24,7 @@ class Config:
     MAX_DAILY_PROFIT_PCT = float(os.getenv("MAX_DAILY_PROFIT_PCT", "10.0"))
     ENABLE_DAILY_PROFIT_LOCK = os.getenv("ENABLE_DAILY_PROFIT_LOCK", "True").lower() in ("true", "1", "yes")
     # Dynamic Kelly Criterion Position Sizing
-    ENABLE_KELLY_SIZING = os.getenv("ENABLE_KELLY_SIZING", "True").lower() in ("true", "1", "yes")
+    ENABLE_KELLY_SIZING = os.getenv("ENABLE_KELLY_SIZING", "False").lower() in ("true", "1", "yes")
     KELLY_LOOKBACK_TRADES = int(os.getenv("KELLY_LOOKBACK_TRADES", "20"))
     CONSECUTIVE_LOSS_LIMIT = int(os.getenv("CONSECUTIVE_LOSS_LIMIT", "2"))
     MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "2"))
