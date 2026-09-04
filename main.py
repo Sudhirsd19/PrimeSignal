@@ -308,7 +308,7 @@ class PrimeSignalBot:
                 # Restore closed trades history
                 saved_trades = state.get('closed_trades', []) if isinstance(state, dict) else []
                 if saved_trades:
-                    DashboardState.trades = list(saved_trades)
+                    DashboardState.trades = [t for t in saved_trades if t.get('type') != 'TRADE_LIFECYCLE']
                     
                 # Restore Order State Machine contexts
                 if isinstance(state, dict) and 'order_state_machine' in state:
@@ -367,6 +367,8 @@ class PrimeSignalBot:
                         if line.strip():
                             try:
                                 tr = json.loads(line)
+                                if tr.get('type') == 'TRADE_LIFECYCLE':
+                                    continue
                                 k = f"{tr.get('symbol')}_{tr.get('exit_time') or tr.get('time') or 0}_{round(float(tr.get('pnl_usdt', tr.get('pnl', 0)) or 0), 4)}"
                                 if k not in existing_keys:
                                     DashboardState.trades.append(tr)
@@ -2559,7 +2561,7 @@ class PrimeSignalBot:
                         'entry_fx_rate': self.entry_fx_rate.get(symbol, 0.0),
                         'exit_fx_rate': float(getattr(Config, 'USDT_INR_RATE', 85.0)),
                     }
-                    DashboardState.trades.append(lifecycle_record)
+                    # Persist consolidated lifecycle audit summary to disk only (not in live execution trades)
                     try:
                         log_dir = Path("data")
                         log_dir.mkdir(parents=True, exist_ok=True)

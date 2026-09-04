@@ -2315,9 +2315,10 @@
                         // Update trades table
                         const tbody = document.getElementById('trades-tbody');
                         if (tbody) {
-                            if (state.trades && state.trades.length > 0) {
+                            const validTrades = (state.trades || []).filter(t => t && t.type !== 'TRADE_LIFECYCLE');
+                            if (validTrades.length > 0) {
                                 tbody.innerHTML = '';
-                                const recentTrades = [...state.trades].reverse().slice(0, 5);
+                                const recentTrades = [...validTrades].reverse().slice(0, 5);
                                 recentTrades.forEach(trade => {
                                     const tr = document.createElement('tr');
                                     tr.className = "hover:bg-[#1f2937]/30 transition-colors text-[11px]";
@@ -2469,7 +2470,7 @@
             let wins = 0;
             let losses = 0;
             
-            trades.forEach(t => {
+            trades.filter(t => t && t.type !== 'TRADE_LIFECYCLE').forEach(t => {
                 const pnl = parseFloat(t.pnl_usdt || t.pnl || 0.0);
                 todayPnL += pnl;
                 if (pnl > 0.001) wins++;
