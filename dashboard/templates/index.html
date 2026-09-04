@@ -830,7 +830,7 @@
         let latestBackendLogs = [];
 
         function appendBrowserLog(type, args) {
-            const timeStr = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+            const timeStr = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
             const msg = `[${timeStr}] [BROWSER ${type.toUpperCase()}] ${Array.from(args).map(x => {
                 try {
                     if (x instanceof Error) {
@@ -1360,15 +1360,39 @@
             wsReconnectDelay = Math.min(wsReconnectDelay * 1.5, WS_MAX_RECONNECT_DELAY);
         }
 
+        function convert24To12(timeStr) {
+            if (!timeStr) return '';
+            if (timeStr.includes('AM') || timeStr.includes('PM') || timeStr.includes('am') || timeStr.includes('pm')) return timeStr;
+            const match = timeStr.match(/^(\d{1,2}):(\d{2}):?(\d{2})?/);
+            if (!match) return timeStr;
+            let h = parseInt(match[1], 10);
+            const m = match[2];
+            const s = match[3] || '00';
+            const ampm = h >= 12 ? 'PM' : 'AM';
+            h = h % 12;
+            if (h === 0) h = 12;
+            const hh = String(h).padStart(2, '0');
+            return `${hh}:${m}:${s} ${ampm}`;
+        }
+
         function formatExecutionTime(entry_ts, fallbackStr) {
             if (entry_ts) {
                 const ts = parseFloat(entry_ts) > 1e11 ? parseFloat(entry_ts) : (parseFloat(entry_ts) * 1000);
                 const d = new Date(ts);
                 if (!isNaN(d.getTime())) {
-                    return d.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+                    return d.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
                 }
             }
-            return fallbackStr ? (fallbackStr.split(' ')[1] || fallbackStr) : 'Recently';
+            if (fallbackStr) {
+                const raw = fallbackStr.trim();
+                if (raw.includes(' ')) {
+                    const parts = raw.split(' ');
+                    const timePart = parts[1] || '';
+                    return convert24To12(timePart);
+                }
+                return convert24To12(raw);
+            }
+            return 'Recently';
         }
 
         function formatExecutionDate(entry_ts, fallbackStr) {
@@ -2897,7 +2921,7 @@
                                         const year = dt.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', year: 'numeric' });
                                         return {
                                             date: `${day} ${month} ${year}`,
-                                            time: dt.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+                                            time: dt.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })
                                         };
                                     }
                                 }
@@ -2911,7 +2935,7 @@
                                             const year = dt.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', year: 'numeric' });
                                             return {
                                                 date: `${day} ${month} ${year}`,
-                                                time: dt.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+                                                time: dt.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })
                                             };
                                         }
                                     }
@@ -2931,7 +2955,7 @@
                                                 fmtDate = `${dParts[0]} ${mName} ${dParts[2]}`;
                                             }
                                         }
-                                        return { date: fmtDate, time: (parts[1] || '').slice(0, 8) };
+                                        return { date: fmtDate, time: convert24To12((parts[1] || '').slice(0, 8)) };
                                     }
                                 }
                                 return null;
