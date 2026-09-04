@@ -1113,6 +1113,7 @@ class PrimeSignalBot:
             pos_size = pos_size * (trade_risk_pct / (getattr(Config, 'RISK_PCT', 0.8) / 100.0))
 
             # ── Pre-Trade Exchange Rules & Equity Validation ──
+            markets_data = getattr(self.execution, 'markets', None) or getattr(getattr(self.execution, 'trade_client', None), 'markets', None) or getattr(getattr(self.execution, 'coindcx_client', None), 'markets_info', None)
             is_valid, validated_pos_size, v_reason = ExchangeValidator.validate_order_intent(
                 symbol=symbol,
                 side='buy' if signal == 'BUY' else 'sell',
@@ -1120,6 +1121,7 @@ class PrimeSignalBot:
                 amount=pos_size,
                 price=entry_price,
                 current_equity=current_equity,
+                markets_info=markets_data,
                 is_inr=is_inr,
                 quote_currency=quote_curr,
                 conversion_rate=conversion_rate,
@@ -1181,23 +1183,25 @@ class PrimeSignalBot:
                         pos_size = max_allowed_cost / (entry_price * (conversion_rate if is_inr else 1.0))
                         entry_cost_equity_curr = max_allowed_cost
 
+                    slippage_pct = getattr(Config, 'PAPER_SLIPPAGE_PCT', 0.0005)
+                    sim_buy_fill = round(entry_price * (1.0 + slippage_pct), 4)
                     if entry_cost_equity_curr <= self._dry_run_balance_usdt:
                         self._dry_run_balance_usdt -= entry_cost_equity_curr
-                        order = {'id': f'MOCK_BUY_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
+                        order = {'id': f'MOCK_BUY_{int(time.time()*1000)}', 'price': sim_buy_fill, 'average': sim_buy_fill, 'amount': pos_size, 'status': 'filled'}
                     elif self._dry_run_balance_usdt >= min_paper_cost:
                         usable_cash = min(self._dry_run_balance_usdt, self._dry_run_balance_usdt * max_alloc_pct)
                         if usable_cash < min_paper_cost:
                             usable_cash = self._dry_run_balance_usdt
                         pos_size = usable_cash / (entry_price * (conversion_rate if is_inr else 1.0))
                         self._dry_run_balance_usdt -= usable_cash
-                        order = {'id': f'MOCK_BUY_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
+                        order = {'id': f'MOCK_BUY_{int(time.time()*1000)}', 'price': sim_buy_fill, 'average': sim_buy_fill, 'amount': pos_size, 'status': 'filled'}
                     else:
                         add_log_message(f"[{symbol}] ⚠️ Paper trading wallet balance depleted ({cur_sym}{self._dry_run_balance_usdt:.2f}). Reset wallet to continue.")
 
                 if self._is_truthy_fill(order):
                     assert order is not None  # Guaranteed by _is_truthy_fill
                     filled_amount = self._extract_filled_qty(order, pos_size)
-                    fill_price = float(order.get('price') or entry_price) if isinstance(order, dict) else float(order.average_fill_price or entry_price)
+                    fill_price = float(order.get('average') or order.get('price') or order.get('avg_price') or entry_price) if isinstance(order, dict) else float(getattr(order, 'average_fill_price', None) or getattr(order, 'price', None) or entry_price)
                     ctx.filled_qty = filled_amount
                     ctx.fill_avg_price = fill_price
                     ctx.transition_to(OrderState.FILLED, reason="BUY fill confirmed")
@@ -1378,23 +1382,25 @@ class PrimeSignalBot:
                         pos_size = max_allowed_cost / (entry_price * (conversion_rate if is_inr else 1.0))
                         collateral_equity_curr = max_allowed_cost
 
+                    slippage_pct = getattr(Config, 'PAPER_SLIPPAGE_PCT', 0.0005)
+                    sim_sell_fill = round(entry_price * (1.0 - slippage_pct), 4)
                     if collateral_equity_curr <= self._dry_run_balance_usdt:
                         self._dry_run_balance_usdt -= collateral_equity_curr
-                        order = {'id': f'MOCK_SELL_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
+                        order = {'id': f'MOCK_SELL_{int(time.time()*1000)}', 'price': sim_sell_fill, 'average': sim_sell_fill, 'amount': pos_size, 'status': 'filled'}
                     elif self._dry_run_balance_usdt >= min_paper_cost:
                         usable_cash = min(self._dry_run_balance_usdt, self._dry_run_balance_usdt * max_alloc_pct)
                         if usable_cash < min_paper_cost:
                             usable_cash = self._dry_run_balance_usdt
                         pos_size = usable_cash / (entry_price * (conversion_rate if is_inr else 1.0))
                         self._dry_run_balance_usdt -= usable_cash
-                        order = {'id': f'MOCK_SELL_{int(time.time()*1000)}', 'price': entry_price, 'amount': pos_size, 'status': 'filled'}
+                        order = {'id': f'MOCK_SELL_{int(time.time()*1000)}', 'price': sim_sell_fill, 'average': sim_sell_fill, 'amount': pos_size, 'status': 'filled'}
                     else:
                         add_log_message(f"[{symbol}] ⚠️ Paper trading wallet balance depleted ({cur_sym}{self._dry_run_balance_usdt:.2f}). Reset wallet to continue.")
                     
                 if self._is_truthy_fill(order):
                     assert order is not None  # Guaranteed by _is_truthy_fill
                     filled_amount = self._extract_filled_qty(order, pos_size)
-                    fill_price = float(order.get('price') or entry_price) if isinstance(order, dict) else float(order.average_fill_price or entry_price)
+                    fill_price = float(order.get('average') or order.get('price') or order.get('avg_price') or entry_price) if isinstance(order, dict) else float(getattr(order, 'average_fill_price', None) or getattr(order, 'price', None) or entry_price)
                     ctx.filled_qty = filled_amount
                     ctx.fill_avg_price = fill_price
                     ctx.transition_to(OrderState.FILLED, reason="SELL fill confirmed")
@@ -1629,7 +1635,7 @@ class PrimeSignalBot:
                                 if be_sl > self.stop_loss[symbol] and curr_price > be_sl:
                                     self.stop_loss[symbol] = be_sl
                                     if symbol == Config.SYMBOL: DashboardState.stop_loss = be_sl
-                                    add_log_message(f"[{symbol}] 🛡️ ZERO-RISK FREE-TRADE ACTIVATED: SL moved to Breakeven ({be_sl:.4f})")
+                                    add_log_message(f"[{symbol}] 🛡️ BREAKEVEN PROTECTION ACTIVATED: SL moved to Breakeven (+0.30% fee buffer @ {be_sl:.4f})")
 
                             # 1. ⏱️ STAGNATION KILLER: Time-based exit if trade loses momentum near entry
                             if getattr(Config, 'ENABLE_TIME_STOP', True) and not self.partial_tp_taken[symbol]:
@@ -1891,7 +1897,7 @@ class PrimeSignalBot:
                                 if be_sl < self.stop_loss[symbol] and curr_price < be_sl:
                                     self.stop_loss[symbol] = be_sl
                                     if symbol == Config.SYMBOL: DashboardState.stop_loss = be_sl
-                                    add_log_message(f"[{symbol}] 🛡️ ZERO-RISK FREE-TRADE ACTIVATED: SL moved to Breakeven ({be_sl:.4f})")
+                                    add_log_message(f"[{symbol}] 🛡️ BREAKEVEN PROTECTION ACTIVATED: SL moved to Breakeven (-0.30% fee buffer @ {be_sl:.4f})")
 
                             # 1. ⏱️ STAGNATION KILLER: Time-based exit if trade loses momentum near entry
                             if getattr(Config, 'ENABLE_TIME_STOP', True) and not self.partial_tp_taken[symbol]:
@@ -2436,6 +2442,8 @@ class PrimeSignalBot:
                 entry_dt_str = datetime.datetime.fromtimestamp(entry_ts / 1000.0, tz=IST).strftime('%d-%m-%Y %H:%M:%S')
                 exit_dt_str = datetime.datetime.fromtimestamp(exit_ts / 1000.0, tz=IST).strftime('%d-%m-%Y %H:%M:%S')
 
+                total_position_pnl = self.realized_pnl.get(symbol, 0.0) + pnl_usdt
+
                 trade_record = {
                     'trade_id': self.current_trade_id.get(symbol, ''),
                     'symbol': symbol,
@@ -2443,7 +2451,11 @@ class PrimeSignalBot:
                     'entry_price': self.entry_price[symbol],
                     'exit_price': exit_price,
                     'pnl_usdt': round(pnl_usdt, 4),
+                    'leg_pnl_usdt': round(pnl_usdt, 4),
+                    'prior_realized_pnl': round(self.realized_pnl.get(symbol, 0.0), 4),
+                    'total_position_pnl_usdt': round(total_position_pnl, 4),
                     'pnl_currency': round(pnl_usdt * (rate if is_inr else 1.0), 2),
+                    'total_pnl_currency': round(total_position_pnl * (rate if is_inr else 1.0), 2),
                     'currency': 'INR' if is_inr else 'USDT',
                     'pnl_usdt_gross': round(pnl_usdt_gross, 4),
                     'total_fees': round(self.accumulated_fees.get(symbol, 0.0), 4),
