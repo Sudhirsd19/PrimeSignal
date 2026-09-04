@@ -20,6 +20,9 @@ if sys.platform == 'win32':
     except (AttributeError, Exception):
         pass
 
+# Indian Standard Time (IST / UTC+5:30)
+IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+
 from config import Config
 from execution.execution_engine import ExecutionEngine
 from execution.execution_result import ExecutionResult, ExecutionState
@@ -112,7 +115,7 @@ class PrimeSignalBot:
         self.relaxed_disabled_until: float = 0.0
         self.relaxed_trades_today = 0
         self.trades_today = 0
-        self.last_trade_day = datetime.datetime.now(datetime.timezone.utc).date()
+        self.last_trade_day = datetime.datetime.now(IST).date()
         self.trade_history: list[int] = []
         self.cluster_loss_pause_until: float = 0.0
         self.cluster_risk_penalty = False
@@ -145,7 +148,7 @@ class PrimeSignalBot:
         # Per-symbol exit locks to prevent concurrent exit_position() calls (LOGIC-001 fix)
         self._exit_locks = {sym: asyncio.Lock() for sym in Config.SUPPORTED_SYMBOLS}
         self._active_scan_tasks: set[asyncio.Task] = set()
-        self._last_reset_date = datetime.datetime.now(datetime.timezone.utc).date()
+        self._last_reset_date = datetime.datetime.now(IST).date()
         
         # Link callbacks
         self.pipeline.on_candle_close_callback = self.on_candle_close
@@ -713,8 +716,8 @@ class PrimeSignalBot:
                 add_log_message(f"[{symbol}] Trade skipped: Execution delay ({delay:.1f}s) > 120s. Stale signal protection.")
                 return
             
-        # Reset daily trades at UTC midnight
-        current_date = datetime.datetime.now(datetime.timezone.utc).date()
+        # Reset daily trades at IST midnight (00:00 IST)
+        current_date = datetime.datetime.now(IST).date()
         if current_date != self.last_trade_day:
             self.trades_today = 0
             self.relaxed_trades_today = 0
@@ -1284,7 +1287,7 @@ class PrimeSignalBot:
                         DashboardState.current_pnl_usdt = 0.0
 
                     e_time = self.entry_time[symbol]
-                    e_time_str = datetime.datetime.fromtimestamp(e_time / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
+                    e_time_str = datetime.datetime.fromtimestamp(e_time / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S')
                     DashboardState.active_positions[symbol] = {
                         'symbol': symbol,
                         'side': "LONG",
@@ -1481,7 +1484,7 @@ class PrimeSignalBot:
                         DashboardState.current_pnl_usdt = 0.0
 
                     e_time = self.entry_time[symbol]
-                    e_time_str = datetime.datetime.fromtimestamp(e_time / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
+                    e_time_str = datetime.datetime.fromtimestamp(e_time / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S')
                     DashboardState.active_positions[symbol] = {
                         'symbol': symbol,
                         'side': "SHORT",
@@ -1571,15 +1574,15 @@ class PrimeSignalBot:
                     DashboardState.symbol_change_requested = None
                     await self.change_bot_symbol(new_symbol)
 
-                now_utc = datetime.datetime.now(datetime.timezone.utc)
-                if now_utc.date() != self._last_reset_date:
+                now_ist = datetime.datetime.now(IST)
+                if now_ist.date() != self._last_reset_date:
                     current_eq = DashboardState.balance_usdt if self.has_keys else self.calculate_total_equity()
                     self.risk.reset_daily_equity(current_eq)
                     self.trades_today = 0
                     self.relaxed_trades_today = 0
-                    self.last_trade_day = now_utc.date()
-                    self._last_reset_date = now_utc.date()
-                    add_log_message(f"[RISK] Daily equity & trades checkpoint reset at UTC midnight.")
+                    self.last_trade_day = now_ist.date()
+                    self._last_reset_date = now_ist.date()
+                    add_log_message(f"[RISK] Daily equity & trades checkpoint reset at IST midnight (00:00 IST).")
 
                 # --- 🚀 INSTITUTIONAL MULTI-SYMBOL REAL-TIME SCANNER ---
                 self._fast_scan_counter = getattr(self, '_fast_scan_counter', 0) + 1
@@ -1718,10 +1721,10 @@ class PrimeSignalBot:
                                         'pnl_pct': round(tp1_pnl_pct, 2),
                                         'entry_time': entry_ts,
                                         'exit_time': now_ts,
-                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S'),
-                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S'),
                                         'duration': dur_str,
-                                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                                        'timestamp': datetime.datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S'),
                                         'reason': f'TP1_HIT_{int(tp1_pct*100)}PCT'
                                     }
                                     DashboardState.trades.append(tp1_record)
@@ -1817,10 +1820,10 @@ class PrimeSignalBot:
                                         'pnl_pct': round(tp2_pnl_pct, 2),
                                         'entry_time': entry_ts,
                                         'exit_time': now_ts,
-                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S'),
-                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S'),
                                         'duration': dur_str,
-                                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                                        'timestamp': datetime.datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S'),
                                         'reason': 'TP2_HIT_30PCT'
                                     }
                                     DashboardState.trades.append(tp2_record)
@@ -1981,10 +1984,10 @@ class PrimeSignalBot:
                                         'pnl_pct': round(tp1_pnl_pct, 2),
                                         'entry_time': entry_ts,
                                         'exit_time': now_ts,
-                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S'),
-                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S'),
                                         'duration': dur_str,
-                                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                                        'timestamp': datetime.datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S'),
                                         'reason': f'TP1_HIT_{int(tp1_pct*100)}PCT'
                                     }
                                     DashboardState.trades.append(tp1_record)
@@ -2081,10 +2084,10 @@ class PrimeSignalBot:
                                         'pnl_pct': round(tp2_pnl_pct, 2),
                                         'entry_time': entry_ts,
                                         'exit_time': now_ts,
-                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S'),
-                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'entry_time_str': datetime.datetime.fromtimestamp(entry_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S'),
+                                        'exit_time_str': datetime.datetime.fromtimestamp(now_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S'),
                                         'duration': dur_str,
-                                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                                        'timestamp': datetime.datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S'),
                                         'reason': 'TP2_HIT_30PCT'
                                     }
                                     DashboardState.trades.append(tp2_record)
@@ -2221,7 +2224,7 @@ class PrimeSignalBot:
                         guaranteed_pnl_pct = (guaranteed_pnl_usdt / orig_val * 100.0) if orig_val > 0 else 0.0
 
                         e_time = self.entry_time.get(s, int(time.time() * 1000))
-                        e_time_str = datetime.datetime.fromtimestamp(e_time / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
+                        e_time_str = datetime.datetime.fromtimestamp(e_time / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S')
 
                         active_pos_map[s] = {
                             'side': self.position_side[s],
@@ -2430,8 +2433,8 @@ class PrimeSignalBot:
                 secs = duration_secs % 60
                 duration_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
                 
-                entry_dt_str = datetime.datetime.fromtimestamp(entry_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
-                exit_dt_str = datetime.datetime.fromtimestamp(exit_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
+                entry_dt_str = datetime.datetime.fromtimestamp(entry_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S')
+                exit_dt_str = datetime.datetime.fromtimestamp(exit_ts / 1000.0, tz=IST).strftime('%Y-%m-%d %H:%M:%S')
 
                 trade_record = {
                     'trade_id': self.current_trade_id.get(symbol, ''),

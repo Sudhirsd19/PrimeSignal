@@ -830,7 +830,7 @@
         let latestBackendLogs = [];
 
         function appendBrowserLog(type, args) {
-            const timeStr = new Date().toTimeString().split(' ')[0];
+            const timeStr = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
             const msg = `[${timeStr}] [BROWSER ${type.toUpperCase()}] ${Array.from(args).map(x => {
                 try {
                     if (x instanceof Error) {
@@ -1365,7 +1365,7 @@
                 const ts = parseFloat(entry_ts) > 1e11 ? parseFloat(entry_ts) : (parseFloat(entry_ts) * 1000);
                 const d = new Date(ts);
                 if (!isNaN(d.getTime())) {
-                    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+                    return d.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
                 }
             }
             return fallbackStr ? (fallbackStr.split(' ')[1] || fallbackStr) : 'Recently';
@@ -1376,7 +1376,7 @@
                 const ts = parseFloat(entry_ts) > 1e11 ? parseFloat(entry_ts) : (parseFloat(entry_ts) * 1000);
                 const d = new Date(ts);
                 if (!isNaN(d.getTime())) {
-                    return d.toLocaleDateString();
+                    return d.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric' });
                 }
             }
             return fallbackStr ? (fallbackStr.split(' ')[0] || '') : '';
@@ -2326,8 +2326,9 @@
                                     // Time
                                     const timeTd = document.createElement('td');
                                     timeTd.className = "py-2 px-1 text-gray-400 terminal-font text-[10px]";
-                                    const exStr = formatExecutionTime(trade.entry_time || trade.exit_time || trade.timestamp, trade.entry_time_str || trade.exit_time_str);
-                                    timeTd.innerHTML = `<span class="text-gray-200 font-bold">${exStr}</span>`;
+                                    const exStr = formatExecutionTime(trade.exit_time || trade.entry_time || trade.timestamp, trade.exit_time_str || trade.entry_time_str);
+                                    const exDate = formatExecutionDate(trade.exit_time || trade.entry_time || trade.timestamp, trade.exit_time_str || trade.entry_time_str);
+                                    timeTd.innerHTML = `<span class="text-gray-200 font-bold">${exStr}</span><div class="text-[8px] text-gray-500">${exDate}</div>`;
                                     
                                     // Symbol
                                     const symTd = document.createElement('td');
@@ -2460,6 +2461,12 @@
             const badge = document.getElementById('today-pnl-badge');
             if (!badge) return;
             const curUnit = (latestStateRef && latestStateRef.balance_currency === 'INR') ? '₹' : '$';
+            const isINR = (latestStateRef && latestStateRef.balance_currency === 'INR');
+            const fxRate = (latestStateRef && latestStateRef.fx_rate) ? latestStateRef.fx_rate : 85.0;
+
+            // Today's date in Indian Standard Time (Asia/Kolkata) => YYYY-MM-DD
+            const todayIST = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+
             if (!trades || trades.length === 0) {
                 badge.innerText = `Today: ${curUnit}0.00 | 0W 0L`;
                 badge.className = "text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-slate-500/20 text-slate-400 border border-slate-500/30";
@@ -2471,20 +2478,65 @@
             let losses = 0;
             
             trades.filter(t => t && t.type !== 'TRADE_LIFECYCLE').forEach(t => {
-                const pnl = parseFloat(t.pnl_usdt || t.pnl || 0.0);
+                // Determine trade execution/exit date in Asia/Kolkata
+                let tradeDateIST = null;
+                const rawTime = t.exit_time || t.entry_time || t.exit_time_str || t.entry_time_str || t.timestamp || t.time || t.ts;
+                if (rawTime) {
+                    const num = parseFloat(rawTime);
+                    if (!isNaN(num) && num > 1e8) {
+                        const dt = new Date(num > 1e11 ? num : num * 1000);
+                        if (!isNaN(dt.getTime())) {
+                            tradeDateIST = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(dt);
+                        }
+                    } else if (typeof rawTime === 'string') {
+                        const cleanStr = rawTime.trim();
+                        if (cleanStr.match(/^\d{4}-\d{2}-\d{2}/)) {
+                            const dt = new Date(cleanStr.replace(' ', 'T'));
+                            if (!isNaN(dt.getTime())) {
+                                tradeDateIST = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(dt);
+                            } else {
+                                tradeDateIST = cleanStr.slice(0, 10);
+                            }
+                        }
+                    }
+                }
+
+                // Strictly filter only trades closed/executed TODAY in Indian Standard Time
+                if (tradeDateIST !== todayIST) {
+                    return;
+                }
+
+                // Extract PnL in the active account currency
+                let pnl = 0.0;
+                if (isINR) {
+                    if (t.pnl_currency !== undefined && t.pnl_currency !== null) {
+                        pnl = parseFloat(t.pnl_currency);
+                    } else if (t.currency === 'INR' && t.pnl !== undefined) {
+                        pnl = parseFloat(t.pnl);
+                    } else if (t.pnl_usdt !== undefined) {
+                        pnl = parseFloat(t.pnl_usdt) * fxRate;
+                    } else {
+                        pnl = parseFloat(t.pnl || 0.0);
+                    }
+                } else {
+                    pnl = parseFloat(t.pnl_usdt !== undefined ? t.pnl_usdt : (t.pnl || 0.0));
+                }
+
                 todayPnL += pnl;
                 if (pnl > 0.001) wins++;
                 else if (pnl < -0.001) losses++;
             });
             
             const totalCount = wins + losses;
-            const winRate = totalCount > 0 ? Math.round((wins / totalCount) * 100) : 100;
-            const sign = todayPnL >= 0 ? '+' : '';
-            const colorClass = todayPnL >= 0 
-                ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30 shadow-[0_0_8px_rgba(16,185,129,0.2)]" 
-                : "bg-rose-500/15 text-rose-400 border-rose-500/30 shadow-[0_0_8px_rgba(244,63,94,0.2)]";
+            const winRate = totalCount > 0 ? Math.round((wins / totalCount) * 100) : 0;
+            const sign = todayPnL > 0 ? '+' : '';
+            const colorClass = totalCount === 0
+                ? "bg-slate-500/20 text-slate-400 border-slate-500/30"
+                : (todayPnL >= 0 
+                    ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30 shadow-[0_0_8px_rgba(16,185,129,0.2)]" 
+                    : "bg-rose-500/15 text-rose-400 border-rose-500/30 shadow-[0_0_8px_rgba(244,63,94,0.2)]");
             
-            badge.innerText = `Today: ${sign}${curUnit}${todayPnL.toFixed(2)} | ${wins}W ${losses}L (${winRate}%)`;
+            badge.innerText = `Today: ${sign}${curUnit}${todayPnL.toFixed(2)} | ${wins}W ${losses}L${totalCount > 0 ? ` (${winRate}%)` : ''}`;
             badge.className = `text-[10px] font-extrabold px-2 py-0.5 rounded-full border ${colorClass}`;
         }
 
@@ -2808,24 +2860,30 @@
                             
                             const extractDT = (val) => {
                                 if (!val || val === 'N/A') return null;
-                                if (typeof val === 'string') {
-                                    if (val.includes('T')) {
-                                        const parts = val.replace('Z','').split('T');
-                                        return { date: parts[0], time: (parts[1] || '').slice(0, 8) };
-                                    }
-                                    if (val.includes(' ')) {
-                                        const parts = val.split(' ');
-                                        return { date: parts[0], time: (parts[1] || '').slice(0, 8) };
-                                    }
-                                }
                                 const num = parseFloat(val);
-                                if (!isNaN(num) && num > 0) {
+                                if (!isNaN(num) && num > 1e8) {
                                     const dt = new Date(num > 1e11 ? num : num * 1000);
                                     if (!isNaN(dt.getTime())) {
                                         return {
-                                            date: dt.toISOString().slice(0, 10),
-                                            time: dt.toTimeString().split(' ')[0]
+                                            date: dt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric' }),
+                                            time: dt.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
                                         };
+                                    }
+                                }
+                                if (typeof val === 'string') {
+                                    const cleanStr = val.trim();
+                                    if (cleanStr.includes('T') || cleanStr.match(/^\d{4}-\d{2}-\d{2}/)) {
+                                        const dt = new Date(cleanStr.replace(' ', 'T'));
+                                        if (!isNaN(dt.getTime())) {
+                                            return {
+                                                date: dt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric' }),
+                                                time: dt.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+                                            };
+                                        }
+                                    }
+                                    if (cleanStr.includes(' ')) {
+                                        const parts = cleanStr.split(' ');
+                                        return { date: parts[0], time: (parts[1] || '').slice(0, 8) };
                                     }
                                 }
                                 return null;
@@ -2834,7 +2892,8 @@
                             const eDT = extractDT(t.entry_time_str) || extractDT(t.entry_time);
                             const xDT = extractDT(t.exit_time_str) || extractDT(t.exit_time) || extractDT(t.timestamp) || extractDT(t.time) || extractDT(t.ts);
                             
-                            const displayDate = (eDT && eDT.date) || (xDT && xDT.date) || (typeof t.timestamp === 'string' && t.timestamp.length >= 10 ? t.timestamp.slice(0, 10) : '2026-08-27');
+                            const todayIndianDate = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date());
+                            const displayDate = (xDT && xDT.date) || (eDT && eDT.date) || (typeof t.timestamp === 'string' && t.timestamp.length >= 10 ? t.timestamp.slice(0, 10) : todayIndianDate);
                             const eTime = eDT ? eDT.time : (xDT ? xDT.time : 'Executed');
                             const xTime = xDT ? xDT.time : (eDT ? eDT.time : 'Closed');
                             
