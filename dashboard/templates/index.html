@@ -989,6 +989,17 @@
         }
 
         function getDashboardApiKey() {
+            try {
+                const params = new URLSearchParams(window.location.search);
+                const urlKey = params.get('token') || params.get('key');
+                if (urlKey) {
+                    const cleanKey = urlKey.trim();
+                    localStorage.setItem('dashboard_api_key', cleanKey);
+                    sessionStorage.setItem('dashboard_api_key', cleanKey);
+                    return cleanKey;
+                }
+            } catch (e) {}
+
             let key = localStorage.getItem('dashboard_api_key') || sessionStorage.getItem('dashboard_api_key');
             if (!key) {
                 key = prompt("Enter Dashboard Secret API Key:");
@@ -2440,8 +2451,8 @@
                     }
                 };
                 
-                ws.onclose = () => {
-                    console.log("WebSocket closed. Will reconnect...");
+                ws.onclose = (event) => {
+                    console.log("WebSocket closed with code:", event ? event.code : 'unknown');
                     const statusEl = document.getElementById('ws-status');
                     const statusM = document.getElementById('ws-status-mobile');
                     if (statusEl) {
@@ -2451,6 +2462,18 @@
                     if (statusM) {
                         statusM.innerText = "OFFLINE";
                         statusM.className = "bg-red-500/10 text-red-400 text-[10px] px-2 py-1 rounded-md font-bold border border-red-500/20";
+                    }
+                    if (event && (event.code === 1008 || event.code === 4403 || event.code === 403)) {
+                        console.warn("WebSocket auth rejected. Clearing invalid cached key.");
+                        localStorage.removeItem('dashboard_api_key');
+                        sessionStorage.removeItem('dashboard_api_key');
+                        const newKey = prompt("Invalid Dashboard Key. Enter correct Dashboard Secret (DASHBOARD_SECRET):");
+                        if (newKey) {
+                            const cleanKey = newKey.trim();
+                            localStorage.setItem('dashboard_api_key', cleanKey);
+                            sessionStorage.setItem('dashboard_api_key', cleanKey);
+                            wsReconnectDelay = 1000;
+                        }
                     }
                     scheduleReconnect();
                 };
