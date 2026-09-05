@@ -89,7 +89,7 @@ class Config:
     # Strategy settings
     HTF_TIMEFRAME = os.getenv("HTF_TIMEFRAME", "1h")
     LTF_TIMEFRAME = os.getenv("LTF_TIMEFRAME", "15m")
-    ADX_MIN_THRESHOLD = float(os.getenv("ADX_MIN_THRESHOLD", "20.0"))
+    ADX_MIN_THRESHOLD = float(os.getenv("ADX_MIN_THRESHOLD", "25.0"))
     SHORT_EMA = int(os.getenv("SHORT_EMA", "9"))
     LONG_EMA = int(os.getenv("LONG_EMA", "21"))
     TREND_EMA = int(os.getenv("TREND_EMA", "200"))
@@ -116,7 +116,7 @@ class Config:
     
     # Machine Learning configurations
     ML_CONFIRMATION_THRESHOLD = float(os.getenv("ML_CONFIRMATION_THRESHOLD", "0.60"))
-    ML_TRAIN_BARS = int(os.getenv("ML_TRAIN_BARS", "2000"))
+    ML_TRAIN_BARS = int(os.getenv("ML_TRAIN_BARS", "25.0"))
     
     # Test Mode config
     TEST_MODE = os.getenv("TEST_MODE", "False").lower() in ("true", "1", "yes")
@@ -226,3 +226,4 @@ class Config:
         print(f"  Trading Venue       : {cls.TRADING_VENUE} ({'Futures' if cls.EXCHANGE_TYPE == 'futures' else 'Spot'})")
         print("-------------------------------------------------")
         return has_keys
+

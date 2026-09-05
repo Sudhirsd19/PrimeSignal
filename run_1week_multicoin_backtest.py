@@ -225,7 +225,7 @@ def run_1week_multicoin_backtest():
 
                 # Volatility & Trend Health
                 vol_ok = c_atr > (ltf_atr.iloc[i-20:i].mean() * 0.75) if i >= 20 else True
-                trend_ok = c_adx > 18.0
+                trend_ok = c_adx > 25.0
 
                 if htf_bull and bull_zone and bull_engulf and c_close > c_vwap and 45 <= c_rsi <= 72 and vol_ok and trend_ok:
                     entry_p = c_close
@@ -319,3 +319,4 @@ def run_1week_multicoin_backtest():
 
 if __name__ == "__main__":
     run_1week_multicoin_backtest()
+
