@@ -43,7 +43,7 @@ def run_1week_multicoin_backtest():
     print("=" * 95, flush=True)
     print(f"Target Assets    : {len(symbols)} coins ({', '.join(symbols[:6])}...)", flush=True)
     print("Execution Frame  : 15m | Macro Trend Frame: 1h", flush=True)
-    print("Strategy Setup   : Institutional SMC (FVG + Order Blocks + VWAP + 1.2R TP1 / BE Lock)", flush=True)
+    print("Strategy Setup   : Institutional SMC (FVG + Order Blocks + VWAP + 1.5R TP1 / BE Lock)", flush=True)
     print("Portfolio Size   : $1,000 USDT per coin ($20,000 USDT Total Portfolio)\n", flush=True)
 
     tot_t, tot_w, tot_l = 0, 0, 0
@@ -117,10 +117,9 @@ def run_1week_multicoin_backtest():
                     high_p = max(high_p, c_high)
 
                     # Rule 1: Break-Even Lock at +0.70R
-                    if high_p >= entry_p + (0.70 * risk_d):
-                        sl = max(sl, entry_p * 1.002)
+                    # Removed premature 0.70R SL lock
 
-                    # Rule 2: TP1 (Take 65% profit at +1.2R)
+                    # Rule 2: TP1 (Take 65% profit at +1.5R)
                     if not partial_taken and c_high >= tp1:
                         p_qty = p_size * 0.65
                         pnl1 = p_qty * (tp1 - entry_p) - (p_qty * tp1 * fee_rate)
@@ -161,8 +160,7 @@ def run_1week_multicoin_backtest():
                             consecutive_losses = 0
                 else: # SHORT
                     low_p = min(low_p, c_low)
-                    if low_p <= entry_p - (0.70 * risk_d):
-                        sl = min(sl, entry_p * 0.998)
+                    # Removed premature 0.70R SL lock
                     if not partial_taken and c_low <= tp1:
                         p_qty = p_size * 0.65
                         pnl1 = p_qty * (entry_p - tp1) - (p_qty * tp1 * fee_rate)
@@ -234,7 +232,7 @@ def run_1week_multicoin_backtest():
                     if risk_d <= 0 or (risk_d / entry_p) > 0.035 or (risk_d / entry_p) < 0.003:
                         continue
                     sl = init_sl
-                    tp1 = entry_p + (1.2 * risk_d)
+                    tp1 = entry_p + (1.5 * risk_d)
                     tp2 = entry_p + (2.0 * risk_d)
                     risk_amt = balance * 0.015 # 1.5% Risk per trade
                     p_size = min((risk_amt / risk_d), (balance * 0.35) / entry_p)
@@ -255,7 +253,7 @@ def run_1week_multicoin_backtest():
                     if risk_d <= 0 or (risk_d / entry_p) > 0.035 or (risk_d / entry_p) < 0.003:
                         continue
                     sl = init_sl
-                    tp1 = entry_p - (1.2 * risk_d)
+                    tp1 = entry_p - (1.5 * risk_d)
                     tp2 = entry_p - (2.0 * risk_d)
                     risk_amt = balance * 0.015
                     p_size = min((risk_amt / risk_d), (balance * 0.35) / entry_p)
@@ -319,4 +317,6 @@ def run_1week_multicoin_backtest():
 
 if __name__ == "__main__":
     run_1week_multicoin_backtest()
+
+
 

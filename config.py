@@ -32,7 +32,7 @@ class Config:
     TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015")) # Deprecated in favor of ATR
     TRAILING_ATR_MULT = float(os.getenv("TRAILING_ATR_MULT", "1.5"))
     TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.2")) # Breakeven Lock aligns with TP1 target (1.2R)
-    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.2")) # TP1 Target: 1.2R
+    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.5")) # TP1 Target: 1.2R
     RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.2")) # TP2 Target: 2.2R
     TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "0.65")) # 65% profit booking at 1.2R target
     ML_CONFIDENCE_THRESHOLD = float(os.getenv("ML_CONFIDENCE_THRESHOLD", "0.60"))
@@ -226,4 +226,5 @@ class Config:
         print(f"  Trading Venue       : {cls.TRADING_VENUE} ({'Futures' if cls.EXCHANGE_TYPE == 'futures' else 'Spot'})")
         print("-------------------------------------------------")
         return has_keys
+
 

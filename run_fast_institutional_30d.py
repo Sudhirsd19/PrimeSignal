@@ -125,7 +125,7 @@ def run_asset_simulation(symbol, ltf_ohlcv, htf_ohlcv, initial_balance=1000.0):
                         stop_loss = be_sl
                         be_active = True
 
-                # 2. TP1 (+1.20R) - 50% scale-out
+                # 2. TP1 (+1.50R) - 50% scale-out
                 if not partial_tp1 and highs[i] >= tp1:
                     partial_tp1 = True
                     qty = pos_size * 0.50
@@ -175,7 +175,7 @@ def run_asset_simulation(symbol, ltf_ohlcv, htf_ohlcv, initial_balance=1000.0):
                         stop_loss = be_sl
                         be_active = True
 
-                # 2. TP1 (+1.20R) - 50% scale-out
+                # 2. TP1 (+1.50R) - 50% scale-out
                 if not partial_tp1 and lows[i] <= tp1:
                     partial_tp1 = True
                     qty = pos_size * 0.50
@@ -241,7 +241,7 @@ def run_asset_simulation(symbol, ltf_ohlcv, htf_ohlcv, initial_balance=1000.0):
                 stop_loss = entry_price - (1.5 * curr_atr)
                 initial_sl = stop_loss
                 r_dist = abs(entry_price - stop_loss)
-                tp1 = entry_price + (1.20 * r_dist)
+                tp1 = entry_price + (1.50 * r_dist)
                 tp2 = entry_price + (2.20 * r_dist)
                 tp3 = entry_price + (3.50 * r_dist)
                 
@@ -270,7 +270,7 @@ def run_asset_simulation(symbol, ltf_ohlcv, htf_ohlcv, initial_balance=1000.0):
                 stop_loss = entry_price + (1.5 * curr_atr)
                 initial_sl = stop_loss
                 r_dist = abs(entry_price - stop_loss)
-                tp1 = entry_price - (1.20 * r_dist)
+                tp1 = entry_price - (1.50 * r_dist)
                 tp2 = entry_price - (2.20 * r_dist)
                 tp3 = entry_price - (3.50 * r_dist)
 
@@ -361,3 +361,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
