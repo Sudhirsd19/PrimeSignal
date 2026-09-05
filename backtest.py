@@ -1,5 +1,20 @@
 import asyncio
 import sys
+import os
+import argparse
+
+# Ensure standard output and error handles use UTF-8 safely on Windows
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+if hasattr(sys.stderr, 'reconfigure'):
+    try:
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 from config import Config
 from execution.execution_engine import ExecutionEngine
 from strategies.multi_timeframe import MultiTimeframeSMCStrategy
@@ -8,8 +23,13 @@ from ml.confirmation import MLSignalConfirmator
 from backtester.backtester import BacktestEngine
 
 async def main():
+    parser = argparse.ArgumentParser(description="PrimeSignal Institutional Backtest Run")
+    parser.add_argument("--days", type=float, default=15.0, help="Number of days to backtest out-of-sample (default: 15.0)")
+    args, _ = parser.parse_known_args()
+    target_days = args.days
+
     print("====================================================")
-    print("STARTING PRIMESIGNAL INSTITUTIONAL BACKTEST RUN")
+    print(f"STARTING PRIMESIGNAL INSTITUTIONAL BACKTEST RUN ({target_days:.1f} DAYS)")
     print("====================================================")
     
     # 1. Connect to exchange to fetch historical data
@@ -74,11 +94,11 @@ async def main():
                 'close': 'last',
                 'volume': 'sum'
             }).dropna()
-            df_15m['timestamp'] = df_15m.index.astype('int64') // 1000000
+            df_15m['timestamp'] = df_15m.index.astype('datetime64[ms]').astype('int64')
             ltf_ohlcv = df_15m[['timestamp', 'open', 'high', 'low', 'close', 'volume']].values.tolist()
-            print(f"[DATA] Resampled 5m → 15m: {len(ltf_ohlcv)} candles")
+            print(f"[DATA] Resampled 5m -> 15m: {len(ltf_ohlcv)} candles")
         else:
-            print(f"[DATA] LTF data already at 15m — skipping resample.")
+            print(f"[DATA] LTF data already at 15m - skipping resample.")
         
     print(f"[DATA] Prepared {len(htf_ohlcv)} HTF ({Config.HTF_TIMEFRAME}) candles and {len(ltf_ohlcv)} LTF ({Config.LTF_TIMEFRAME}) candles.")
 
@@ -86,33 +106,42 @@ async def main():
     strategy = MultiTimeframeSMCStrategy()
     ml_confirmator = MLSignalConfirmator()
     
-    # BUG-03 FIX: Increased from 10% to 30% for ML warmup.
-    # With 1000 LTF bars: 10% ≈ 25h of training; 30% ≈ 75h — much more representative.
-    # For production use, fetch 90+ days of data to get 864+ warmup bars (≈9 days).
-    split_idx = int(len(ltf_ohlcv) * 0.30)
-    
-    # Warm up and train ML model on the training segment
-    print(f"\n[ML] Training confirmation classifier on warm-up data (0 to {split_idx})...")
+    # Calculate desired test period bars
+    bars_per_day = 96.0 if Config.LTF_TIMEFRAME == "15m" else 288.0
+    desired_test_bars = int(target_days * bars_per_day)
+
+    # Ensure at least 300 bars for ML training warmup
+    min_warmup_bars = 300
+    if len(ltf_ohlcv) > (desired_test_bars + min_warmup_bars):
+        split_idx = len(ltf_ohlcv) - desired_test_bars
+    else:
+        split_idx = int(len(ltf_ohlcv) * 0.30)
+        split_idx = max(min_warmup_bars, split_idx)
+        if split_idx >= len(ltf_ohlcv):
+            split_idx = int(len(ltf_ohlcv) * 0.30)
+
     warmup_ltf_candles = ltf_ohlcv[:split_idx]
+    test_ltf_candles = ltf_ohlcv[split_idx:]
+    if desired_test_bars < len(test_ltf_candles):
+        test_ltf_candles = test_ltf_candles[-desired_test_bars:]
+
+    warmup_days = len(warmup_ltf_candles) / bars_per_day
+    print(f"\n[ML] Training confirmation classifier on warm-up data: {len(warmup_ltf_candles)} candles ({warmup_days:.1f} days)...")
     warmup_df = prepare_dataframe(warmup_ltf_candles)
     
     trained = ml_confirmator.train(warmup_df)
     if trained:
         print("[ML] Confirmation model trained and active.")
     else:
-        print("[ML] WARNING: ML confirmation model training failed — trading without ML filter.")
+        print("[ML] WARNING: ML confirmation model training failed - trading without ML filter.")
         ml_confirmator = None
 
     # 3. Setup Backtest Engine
-    # Backtest on the remaining out-of-sample candles (Full 30-day period)
-    test_ltf_candles = ltf_ohlcv[split_idx:]
-    
     test_ltf_df = prepare_dataframe(test_ltf_candles)
     if len(test_ltf_df) == 0:
         print("ERROR: No test candles found after splitting.")
         return
         
-    bars_per_day = 96.0 if Config.LTF_TIMEFRAME == "15m" else 288.0
     duration_days = len(test_ltf_df) / bars_per_day
     print(f"\n[BACKTEST] Testing out-of-sample period: {len(test_ltf_df)} candles ({duration_days:.1f} Days @ {Config.LTF_TIMEFRAME})...")
     initial_capital = 10000.0
@@ -188,7 +217,7 @@ async def main():
         h2 = wf_results["Second Half"]
 
         def _pf_str(pf):
-            return f"{pf:.2f}" if pf != float('inf') else "∞"
+            return f"{pf:.2f}" if pf != float('inf') else "inf"
 
         print(f"{'Metric':<22} | {'First Half':>12} | {'Second Half':>12}")
         print("-" * 52)
@@ -203,12 +232,12 @@ async def main():
         both_profitable = h1['total_return_pct'] > 0 and h2['total_return_pct'] > 0
         both_pf_above_1 = h1['profit_factor'] > 1.0 and h2['profit_factor'] > 1.0
         if both_profitable and both_pf_above_1:
-            print("✅ WALK-FORWARD PASS: Strategy profitable in BOTH halves — consistent edge.")
+            print("[OK] WALK-FORWARD PASS: Strategy profitable in BOTH halves -- consistent edge.")
         elif both_profitable:
-            print("⚠️  PARTIAL PASS: Both halves profitable but Profit Factor < 1 in one half.")
+            print("[!] PARTIAL PASS: Both halves profitable but Profit Factor < 1 in one half.")
         else:
-            print("❌ WALK-FORWARD FAIL: Strategy not profitable in both halves — possible overfit.")
-            print("   → Increase training data, tighten filters, or reduce relaxed mode entries.")
+            print("[FAIL] WALK-FORWARD FAIL: Strategy not profitable in both halves -- possible overfit.")
+            print("   -> Increase training data, tighten filters, or reduce relaxed mode entries.")
     print("====================================================")
 
 if __name__ == "__main__":

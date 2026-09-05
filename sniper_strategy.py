@@ -21,7 +21,7 @@ def run_sniper_80pct_strategy():
         df_15m = df.resample('15min').agg({
             'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
         }).dropna()
-        df_15m['timestamp'] = df_15m.index.astype('int64') // 1000000
+        df_15m['timestamp'] = df_15m.index.astype('datetime64[ms]').astype('int64')
         ltf_ohlcv = df_15m[['timestamp', 'open', 'high', 'low', 'close', 'volume']].values.tolist()
 
     htf_df = prepare_dataframe(htf_ohlcv)

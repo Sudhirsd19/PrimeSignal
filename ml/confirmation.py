@@ -131,12 +131,12 @@ class MLSignalConfirmator:
         # For production, fetch 90+ days to get 2000+ training bars.
         if len(df) < 300:
             print(f"WARNING: Insufficient data to train ML model. Got {len(df)} bars, need at least 300 (ideally 2000+).")
-            print("         → Fetch more historical data (90+ days recommended) for a reliable model.")
+            print("         -> Fetch more historical data (90+ days recommended) for a reliable model.")
             return False
 
         if len(df) < 500:
             print(f"[ML] SOFT WARNING: Only {len(df)} training bars available. Model may overfit.")
-            print("     → Recommend 500+ bars minimum; 2000+ bars for production use.")
+            print("     -> Recommend 500+ bars minimum; 2000+ bars for production use.")
 
         try:
             print(f"[ML] Preparing training features from {len(df)} candles (12-feature GradientBoosting)...")
@@ -153,13 +153,13 @@ class MLSignalConfirmator:
             # FIX-4: Print class balance so skewed training data is immediately visible
             bull_pct = y.mean() * 100
             bear_pct = 100 - bull_pct
-            print(f"[ML] Class balance — Bullish: {bull_pct:.1f}%  Bearish: {bear_pct:.1f}%")
+            print(f"[ML] Class balance -- Bullish: {bull_pct:.1f}%  Bearish: {bear_pct:.1f}%")
             if bull_pct > 70 or bull_pct < 30:
-                print(f"[ML] ⚠️  IMBALANCED TRAINING DATA: {bull_pct:.1f}% bullish labels. Model predictions will be biased.")
+                print(f"[ML] [!] IMBALANCED TRAINING DATA: {bull_pct:.1f}% bullish labels. Model predictions will be biased.")
 
             # FIX-C: TimeSeriesSplit cross-validation to detect overfitting.
             # Uses 5 temporal folds so later folds always test on data the model hasn't seen.
-            # AUC ≥ 0.60 = model has real edge. AUC ≤ 0.55 = near-random, increase data.
+            # AUC >= 0.60 = model has real edge. AUC <= 0.55 = near-random, increase data.
             try:
                 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
                 if len(X) >= 100:
@@ -176,14 +176,14 @@ class MLSignalConfirmator:
                     )
                     mean_auc = cv_scores.mean()
                     std_auc  = cv_scores.std()
-                    print(f"[ML] Cross-Val AUC: {mean_auc:.3f} ± {std_auc:.3f}  (folds: {tscv.n_splits})")
+                    print(f"[ML] Cross-Val AUC: {mean_auc:.3f} +/- {std_auc:.3f}  (folds: {tscv.n_splits})")
                     if mean_auc < 0.55:
-                        print(f"[ML] ⚠️  WEAK MODEL: AUC {mean_auc:.3f} is near-random (0.5 = coin flip).")
-                        print(f"[ML]    → Fetch 90+ days of data and retrain for a reliable signal filter.")
+                        print(f"[ML] [!] WEAK MODEL: AUC {mean_auc:.3f} is near-random (0.5 = coin flip).")
+                        print(f"[ML]     -> Fetch 90+ days of data and retrain for a reliable signal filter.")
                     elif mean_auc >= 0.65:
-                        print(f"[ML] ✅ STRONG MODEL: AUC {mean_auc:.3f} — model has meaningful edge.")
+                        print(f"[ML] [OK] STRONG MODEL: AUC {mean_auc:.3f} -- model has meaningful edge.")
                     else:
-                        print(f"[ML] ℹ️  MODERATE MODEL: AUC {mean_auc:.3f} — usable but more data will help.")
+                        print(f"[ML] [INFO] MODERATE MODEL: AUC {mean_auc:.3f} -- usable but more data will help.")
             except Exception as cv_err:
                 print(f"[ML] Cross-validation skipped: {cv_err}")
 

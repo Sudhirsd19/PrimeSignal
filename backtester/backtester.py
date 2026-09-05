@@ -395,8 +395,11 @@ class BacktestEngine:
                     last_trade_time = ltf_ts
                     last_zone_traded = zone_id
                     
-                    # Calculate dynamic position size based on risk percent
-                    pos_size = self.risk.calculate_position_size(self.balance, entry_price, stop_loss)
+                    # Calculate dynamic position size based on risk percent in USDT
+                    pos_size = self.risk.calculate_position_size(
+                        self.balance, entry_price, stop_loss,
+                        quote_currency="USDT", equity_currency="USDT", is_inr=False
+                    )
                     if self.ml and ml_prob < float(getattr(Config, 'ML_CONFIRMATION_THRESHOLD', 0.60)):
                         pos_size *= 0.5
                     position_size = pos_size

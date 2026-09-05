@@ -1,4 +1,6 @@
 import math
+import pandas as pd
+import numpy as np
 from typing import Any
 from strategies.base import BaseStrategy
 from strategies.indicators import calculate_ema, calculate_rsi, calculate_atr, calculate_vwap, calculate_adx, calculate_bollinger_bands, detect_rsi_divergence
