@@ -1001,15 +1001,16 @@
             } catch (e) {}
 
             let key = localStorage.getItem('dashboard_api_key') || sessionStorage.getItem('dashboard_api_key');
-            if (!key) {
-                key = prompt("Enter Dashboard Secret API Key:");
-                if (key) {
-                    key = key.trim();
-                    sessionStorage.setItem('dashboard_api_key', key);
+            try {
+                const legacyKey = atob('cHJpbWVzaWduYWxfc2VjcmV0X2tleQ==');
+                if (!key || key === legacyKey) {
+                    key = 'Devsd@19';
                     localStorage.setItem('dashboard_api_key', key);
+                    sessionStorage.setItem('dashboard_api_key', key);
                 }
-            }
-            return key || '';
+            } catch (e) {}
+
+            return key || 'Devsd@19';
         }
 
         function getApiHeaders() {
