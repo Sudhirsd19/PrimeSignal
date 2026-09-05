@@ -30,6 +30,7 @@ from execution.exchange_validator import ExchangeValidator
 from core.data_pipeline import RealTimeDataPipeline
 from core.order_state_machine import OrderStateMachine, OrderState, PositionContext
 from core.immutable_ledger import ImmutableLedger
+from core.config_journal import ConfigAuditJournal
 from core.reconciliation_engine import ReconciliationEngine
 from strategies.multi_timeframe import MultiTimeframeSMCStrategy
 from strategies.indicators import prepare_dataframe, calculate_atr, calculate_ema, calculate_rsi, calculate_vwap
@@ -83,6 +84,8 @@ class PrimeSignalBot:
         self.courtroom = AdversarialDebateCourtroom()
         self.order_state_machine = OrderStateMachine(Config.SUPPORTED_SYMBOLS)
         self.immutable_ledger = ImmutableLedger()
+        self.config_journal = ConfigAuditJournal()
+        self.config_journal.record_change(event="STARTUP_CONFIG_SNAPSHOT", source="ENGINE_STARTUP")
         self.reconciliation = ReconciliationEngine(self, check_interval=15.0)
         
         self.ml_models: dict[str, MLSignalConfirmator] = {sym: MLSignalConfirmator() for sym in Config.SUPPORTED_SYMBOLS}
@@ -1345,7 +1348,8 @@ class PrimeSignalBot:
                         runner_tp=self.take_profit[symbol],
                         client_order_id=str(order.get('clientOrderId') or f"CLIENT_{int(time.time()*1000)}"),
                         exchange_order_id=str(order.get('id') or ''),
-                        native_sl_id=ctx.native_sl_order_id
+                        native_sl_id=ctx.native_sl_order_id,
+                        config_hash=Config.get_risk_config_hash()
                     )
 
                     self.save_state()
@@ -1551,7 +1555,8 @@ class PrimeSignalBot:
                         runner_tp=self.take_profit[symbol],
                         client_order_id=str(order.get('clientOrderId') or f"CLIENT_{int(time.time()*1000)}"),
                         exchange_order_id=str(order.get('id') or ''),
-                        native_sl_id=ctx.native_sl_order_id
+                        native_sl_id=ctx.native_sl_order_id,
+                        config_hash=Config.get_risk_config_hash()
                     )
 
                     self.save_state()

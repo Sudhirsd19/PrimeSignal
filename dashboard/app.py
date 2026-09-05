@@ -190,6 +190,50 @@ async def set_mode(req: ModeRequest):
                     "message": f"MODE SWITCH BLOCKED: Active or uncertain order execution states exist: {', '.join(unconfirmed)}. Cannot switch mode."
                 }
 
+        # P1-3 FIX: Authoritative broker-flat handshake.
+        # Query exchange directly to verify zero active orders and zero open positions.
+        if bot_instance.has_keys and hasattr(bot_instance, 'execution') and bot_instance.execution is not None:
+            try:
+                exec_engine = bot_instance.execution
+                # 1. Authoritative check for open exchange orders
+                if exec_engine.coindcx_client:
+                    broker_orders = await exec_engine.coindcx_client.fetch_active_orders()
+                elif hasattr(exec_engine, 'trade_client') and exec_engine.trade_client:
+                    broker_orders = await exec_engine.trade_client.fetch_open_orders()
+                else:
+                    broker_orders = []
+
+                if broker_orders:
+                    return {
+                        "status": "error",
+                        "message": f"MODE SWITCH BLOCKED: Authoritative broker check found {len(broker_orders)} active order(s) on exchange. Cancel all orders before switching modes."
+                    }
+
+                # 2. Authoritative check for open futures positions
+                if Config.EXCHANGE_TYPE == 'futures' and hasattr(exec_engine, 'trade_client') and exec_engine.trade_client:
+                    broker_positions = await exec_engine.trade_client.fetch_positions()
+                    if broker_positions is None:
+                        return {
+                            "status": "error",
+                            "message": "MODE SWITCH BLOCKED: Authoritative broker-flat handshake failed (positions endpoint returned None)."
+                        }
+                    active_broker_pos = []
+                    for p in broker_positions:
+                        if isinstance(p, dict):
+                            contracts = float(p.get('contracts', 0.0) or 0.0)
+                            if abs(contracts) > 1e-5:
+                                active_broker_pos.append(f"{p.get('symbol', 'unknown')}:{contracts}")
+                    if active_broker_pos:
+                        return {
+                            "status": "error",
+                            "message": f"MODE SWITCH BLOCKED: Authoritative broker check found open position(s) on exchange: {', '.join(active_broker_pos)}. All positions must be flat before switching modes."
+                        }
+            except Exception as e:
+                return {
+                    "status": "error",
+                    "message": f"MODE SWITCH BLOCKED: Authoritative broker-flat handshake failed: {e}"
+                }
+
         # If switching to LIVE: verify exchange API credentials and live balance authoritative check
         if not req.paper_trading:
             if not bot_instance.has_keys:
@@ -291,6 +335,9 @@ class RiskSettingsUpdate(BaseModel):
 @app.post("/api/update_risk_settings", dependencies=[Depends(verify_dashboard_key)])
 async def update_risk_settings(settings: RiskSettingsUpdate):
     from config import Config
+    from core.config_journal import ConfigAuditJournal
+    
+    old_snap = Config.get_risk_config_snapshot()
     if settings.tsl_multiplier is not None:
         Config.TRAILING_ATR_MULT = settings.tsl_multiplier
     if settings.tsl_enabled is not None:
@@ -302,8 +349,21 @@ async def update_risk_settings(settings: RiskSettingsUpdate):
         if bot_instance is not None:
             bot_instance.max_daily_trades = settings.max_daily_trades
     
+    new_snap = Config.get_risk_config_snapshot()
+    ConfigAuditJournal().record_change(
+        event="DASHBOARD_RISK_UPDATE",
+        source="DASHBOARD_API",
+        old_snapshot=old_snap,
+        new_snapshot=new_snap,
+        details={
+            "tsl_enabled": settings.tsl_enabled,
+            "tsl_multiplier": settings.tsl_multiplier,
+            "max_daily_trades": settings.max_daily_trades
+        }
+    )
+    
     status_str = f"Max Daily Trades: {Config.MAX_DAILY_TRADES} | TSL ATR Mult: {Config.TRAILING_ATR_MULT}"
-    add_log_message(f"⚙️ Risk Settings Updated: {status_str}")
+    add_log_message(f"⚙️ Risk Settings Updated & Journaled: {status_str}")
     return {"status": "success", "message": status_str, "max_daily_trades": Config.MAX_DAILY_TRADES}
 
 class LockProfitRequest(BaseModel):

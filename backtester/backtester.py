@@ -71,6 +71,8 @@ class BacktestEngine:
             
         start_ts = pd.Timestamp(str(ltf_df.index[start_idx]))
         last_trade_day = start_ts.date() if isinstance(start_ts, pd.Timestamp) else None
+        # P2-1 FIX: Seed initial equity point at start_ts to anchor peak drawdown calculation
+        self.equity_curve.append({'timestamp': start_ts, 'equity': float(initial_balance)})
         print(f"[BACKTEST] Running simulation loop from bar {start_idx} to {len(ltf_df)}...")
         
         for i in range(start_idx, len(ltf_df)):
@@ -497,8 +499,10 @@ class BacktestEngine:
             tw = w['pnl_usdt'].sum()
             tl = abs(l['pnl_usdt'].sum())
             pf = tw / tl if tl > 0 else float('inf')
-            # approx DD just for this subset based on PNL cumulative
-            cum = df_sub['pnl_usdt'].cumsum()
+            # P2-1 FIX: Approx DD for this subset anchored to 0.0 baseline at t=0
+            # to properly account for initial loss sequences.
+            pnl_series = pd.concat([pd.Series([0.0]), df_sub['pnl_usdt']], ignore_index=True)
+            cum = pnl_series.cumsum()
             peak = cum.cummax()
             dd = ((cum - peak) / initial_balance * 100.0).min() if len(cum) > 0 else 0.0
             return wr, pf, dd

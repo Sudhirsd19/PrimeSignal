@@ -38,12 +38,16 @@ class ExecutionEngine:
         # 3. CoinDCX Integration (spot only — CoinDCX has no standard futures API)
         from execution.coindcx_client import CoinDCXClient
         self.coindcx_client: CoinDCXClient | None = None
-        if Config.COINDCX_API_KEY and Config.COINDCX_API_KEY != "your_coindcx_key_here":
+        if getattr(Config, 'TRADING_VENUE', 'BINANCE') == 'COINDCX':
             if is_futures:
-                print("[EXECUTION] CoinDCX disabled in futures mode (CoinDCX does not support futures via API).")
-            else:
+                raise ValueError("[EXECUTION CRITICAL] CoinDCX venue selected but EXCHANGE_TYPE='futures'. CoinDCX does not support futures via API.")
+            if Config.COINDCX_API_KEY and Config.COINDCX_API_KEY != "your_coindcx_key_here":
                 self.coindcx_client = CoinDCXClient(Config.COINDCX_API_KEY, Config.COINDCX_SECRET_KEY)
-                print("[EXECUTION] CoinDCX client integrated successfully.")
+                print("[EXECUTION] Explicit CoinDCX venue active. Client integrated successfully.")
+            elif not Config.PAPER_TRADING:
+                raise ValueError("[EXECUTION CRITICAL] TRADING_VENUE is set to COINDCX for live trading, but valid credentials were not found.")
+        else:
+            print("[EXECUTION] Explicit Binance venue active.")
 
         if Config.USE_TESTNET:
             self.trade_client.set_sandbox_mode(True)
@@ -97,24 +101,33 @@ class ExecutionEngine:
         """One-time setup for futures: load markets, set leverage and margin mode."""
         if self._futures_initialized or Config.EXCHANGE_TYPE != 'futures':
             return
+        sym = symbol or Config.SYMBOL
         try:
             await self.trade_client.load_markets()
-            sym = symbol or Config.SYMBOL
             # Set margin mode (isolated / cross)
             try:
                 await self.trade_client.set_margin_mode(Config.FUTURES_MARGIN_MODE, sym)
                 print(f"[FUTURES] Margin mode set to {Config.FUTURES_MARGIN_MODE.upper()} for {sym}")
             except Exception as e:
-                print(f"[FUTURES] Margin mode already set or not changeable: {e}")
+                err_msg = str(e).lower()
+                # Binance returns -4046 / "No need to change margin type" if already in desired mode
+                if "no need to change margin type" in err_msg or "-4046" in err_msg:
+                    print(f"[FUTURES] Margin mode already set to {Config.FUTURES_MARGIN_MODE.upper()} for {sym}")
+                else:
+                    raise RuntimeError(f"Failed to set futures margin mode to {Config.FUTURES_MARGIN_MODE} on {sym}: {e}")
+
             # Set leverage
             try:
                 await self.trade_client.set_leverage(Config.FUTURES_LEVERAGE, sym)
                 print(f"[FUTURES] Leverage set to {Config.FUTURES_LEVERAGE}x for {sym}")
             except Exception as e:
-                print(f"[FUTURES] Leverage already set or not changeable: {e}")
+                raise RuntimeError(f"Failed to set futures leverage to {Config.FUTURES_LEVERAGE}x on {sym}: {e}")
+
             self._futures_initialized = True
         except Exception as e:
-            print(f"[FUTURES] ERROR initializing futures settings: {e}")
+            self._futures_initialized = False
+            print(f"[FUTURES CRITICAL] Error initializing futures settings: {e}")
+            raise
 
     async def close(self):
         await self.public_client.close()
@@ -189,10 +202,14 @@ class ExecutionEngine:
                         self._funding_rates_cache[symbol] = last_funding_rate
                         self._funding_rates_cache_time[symbol] = now
                         return last_funding_rate
-        except Exception:
-            pass
+                    else:
+                        print(f"[EXECUTION WARNING] Binance funding rate API returned status {resp.status}")
+                        return None
+        except Exception as e:
+            print(f"[EXECUTION WARNING] Error fetching funding rate: {e}")
+            return None
             
-        return 0.0
+        return None
 
     # ── Feature 1: Order fill confirmation ───────────────────────────────
     async def wait_for_fill(
@@ -281,7 +298,18 @@ class ExecutionEngine:
 
         # Initialize futures settings on first order if applicable
         if Config.EXCHANGE_TYPE == 'futures':
-            await self._init_futures(symbol)
+            try:
+                await self._init_futures(symbol)
+            except Exception as e:
+                print(f"[EXECUTION CRITICAL] Order rejected: Futures configuration failed: {e}")
+                return ExecutionResult(
+                    state=ExecutionState.REJECTED,
+                    requested_qty=float(amount or 0.0),
+                    client_order_id=client_order_id,
+                    intent_id=intent_id,
+                    venue="BINANCE",
+                    error=f"Futures leverage/margin configuration failed: {e}"
+                )
 
         if self.coindcx_client:
             coindcx_symbol = symbol

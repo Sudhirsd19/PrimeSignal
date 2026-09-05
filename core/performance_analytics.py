@@ -9,7 +9,7 @@ import math
 from typing import Any
 
 
-def calculate_advanced_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
+def calculate_advanced_metrics(trades: list[dict[str, Any]], initial_capital: float = 10000.0) -> dict[str, Any]:
     """Calculates institutional-grade performance metrics from trade history."""
     if not trades:
         return _empty_metrics()
@@ -46,12 +46,13 @@ def calculate_advanced_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     loss_pct = total_losses / total_trades if total_trades > 0 else 0
     expectancy = (win_pct * avg_win) - (loss_pct * avg_loss)
 
-    # Equity curve for drawdown calculation
-    cumulative_pnl = 0.0
-    equity_curve: list[float] = []
+    # P2-1 FIX: Equity curve for drawdown calculation, anchored to starting capital baseline at t=0
+    # to ensure early/initial losses are accurately captured rather than zeroed out.
+    current_equity = float(initial_capital)
+    equity_curve: list[float] = [current_equity]
     for p in pnl_values:
-        cumulative_pnl += p
-        equity_curve.append(cumulative_pnl)
+        current_equity += p
+        equity_curve.append(current_equity)
 
     max_drawdown, max_drawdown_pct = _calculate_max_drawdown(equity_curve)
     sharpe_ratio = _calculate_sharpe_ratio(pnl_values, annualization_factor=math.sqrt(6 * 365))

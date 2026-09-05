@@ -134,12 +134,44 @@ class Config:
     COINDCX_TRADE_INR = os.getenv("COINDCX_TRADE_INR", "True").lower() in ("true", "1", "yes")
     USDT_INR_RATE = float(os.getenv("USDT_INR_RATE", "85.0"))
 
+    # Exchange Routing Venue: 'BINANCE' (default) or 'COINDCX'
+    TRADING_VENUE = os.getenv("TRADING_VENUE", "BINANCE").strip().upper()
+
     # Exchange type: 'spot' or 'futures' (Binance USDT-M Futures)
     EXCHANGE_TYPE = os.getenv("EXCHANGE_TYPE", "spot").lower()
 
     # Futures-specific settings (only used when EXCHANGE_TYPE='futures')
     FUTURES_LEVERAGE = int(os.getenv("FUTURES_LEVERAGE", "1"))
     FUTURES_MARGIN_MODE = os.getenv("FUTURES_MARGIN_MODE", "isolated").lower()  # 'isolated' or 'cross'
+
+    @classmethod
+    def get_risk_config_snapshot(cls) -> dict:
+        """Returns a canonical serializable dictionary of all governing risk parameters."""
+        return {
+            "risk_pct": float(cls.RISK_PCT),
+            "max_daily_loss_pct": float(cls.MAX_DAILY_LOSS_PCT),
+            "max_daily_profit_pct": float(cls.MAX_DAILY_PROFIT_PCT),
+            "max_daily_trades": int(cls.MAX_DAILY_TRADES),
+            "max_trade_allocation_pct": float(cls.MAX_TRADE_ALLOCATION_PCT),
+            "trailing_atr_mult": float(cls.TRAILING_ATR_MULT),
+            "min_risk_reward_ratio": float(cls.MIN_RISK_REWARD_RATIO),
+            "risk_reward_ratio": float(cls.RISK_REWARD_RATIO),
+            "tp1_scale_out_pct": float(cls.TP1_SCALE_OUT_PCT),
+            "enable_funding_rate_filter": bool(cls.ENABLE_FUNDING_RATE_FILTER),
+            "max_funding_rate_pct": float(cls.MAX_FUNDING_RATE_PCT),
+            "exchange_type": str(cls.EXCHANGE_TYPE).lower(),
+            "futures_leverage": int(cls.FUTURES_LEVERAGE),
+            "futures_margin_mode": str(cls.FUTURES_MARGIN_MODE).lower(),
+            "trading_venue": str(cls.TRADING_VENUE).upper(),
+        }
+
+    @classmethod
+    def get_risk_config_hash(cls) -> str:
+        """Computes a deterministic SHA-256 hash of the canonical risk configuration."""
+        import json
+        import hashlib
+        canonical_str = json.dumps(cls.get_risk_config_snapshot(), sort_keys=True, separators=(',', ':'))
+        return hashlib.sha256(canonical_str.encode('utf-8')).hexdigest()
 
     @classmethod
     def validate(cls):
@@ -159,12 +191,22 @@ class Config:
         if not cls.COINDCX_SECRET_KEY or cls.COINDCX_SECRET_KEY == "your_coindcx_secret_here":
             has_coindcx = False
 
+        if cls.TRADING_VENUE not in ("BINANCE", "COINDCX"):
+            print(f"WARNING: Invalid TRADING_VENUE='{cls.TRADING_VENUE}'. Defaulting to 'BINANCE'.")
+            cls.TRADING_VENUE = "BINANCE"
+
+        if cls.TRADING_VENUE == "COINDCX":
+            if cls.EXCHANGE_TYPE == "futures":
+                raise ValueError("CRITICAL CONFIG ERROR: CoinDCX does not support futures trading via API. Set EXCHANGE_TYPE=spot or TRADING_VENUE=BINANCE.")
+            if not has_coindcx and not cls.PAPER_TRADING:
+                raise ValueError("CRITICAL CONFIG ERROR: TRADING_VENUE is set to COINDCX for live trading, but valid CoinDCX credentials were not found.")
+
         if not has_binance and not has_coindcx:
             print("WARNING: Neither Binance nor CoinDCX credentials found. Trading engine will run in DRY-RUN mode.")
             has_keys = False
-        elif has_coindcx:
+        elif cls.TRADING_VENUE == "COINDCX" and has_coindcx:
             print(f"[INIT] CoinDCX integration active. Mode: {'PAPER TRADING (Demo)' if cls.PAPER_TRADING else 'LIVE TRADING'}")
-        elif has_binance:
+        elif cls.TRADING_VENUE == "BINANCE" and has_binance:
             print(f"[INIT] Binance integration active. Mode: {'PAPER TRADING (Demo)' if cls.PAPER_TRADING else 'LIVE TRADING'}")
 
         # Validate critical numeric ranges to prevent account-wipe settings
@@ -181,9 +223,6 @@ class Config:
         print(f"  Account Risk Limit  : {cls.RISK_PCT}% | Max Daily Drawdown: {cls.MAX_DAILY_LOSS_PCT}%")
         print(f"  SMC Indicators      : RSI ({cls.RSI_PERIOD}), ATR ({cls.ATR_PERIOD}), EMA ({cls.TREND_EMA})")
         print(f"  ML Confidence Min   : {cls.ML_CONFIRMATION_THRESHOLD * 100:.1f}%")
-        if has_coindcx:
-            print(f"  Exchange Routing    : CoinDCX (INR Pairs: {cls.COINDCX_TRADE_INR})")
-        else:
-            print(f"  Exchange Routing    : Binance (Sandbox: {cls.USE_TESTNET})")
+        print(f"  Trading Venue       : {cls.TRADING_VENUE} ({'Futures' if cls.EXCHANGE_TYPE == 'futures' else 'Spot'})")
         print("-------------------------------------------------")
         return has_keys

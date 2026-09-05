@@ -340,7 +340,7 @@ class ReconciliationEngine:
         # An API error/timeout must trigger SAFE MODE and abort without inferring orders are missing.
         if self._global_binance_orders is None:
             self.safe_mode_active = True
-            print("[RECONCILIATION] 🚨 SAFE MODE ACTIVATED: Binance fetch_open_orders failed/unreachable. Aborting pass.")
+            print("[RECONCILIATION] [ALERT] SAFE MODE ACTIVATED: Binance fetch_open_orders failed/unreachable. Aborting pass.")
             return
 
         if Config.EXCHANGE_TYPE == 'futures':
@@ -348,8 +348,17 @@ class ReconciliationEngine:
                 positions = await exec_engine.execute_with_retry(exec_engine.trade_client.fetch_positions)
             except Exception as e:
                 print(f'[RECONCILIATION ERROR] Binance fetch_positions failed: {e}')
+                self.safe_mode_active = True
+                print('[RECONCILIATION] [ALERT] SAFE MODE ACTIVATED: Binance fetch_positions failed/unreachable. Aborting pass.')
                 return
-            pos_map = {p['symbol']: p for p in (positions or []) if p.get('symbol')}
+
+            # P0-2 FIX: Fail-closed if positions endpoint returns None or unreachable
+            if positions is None:
+                self.safe_mode_active = True
+                print('[RECONCILIATION] [ALERT] SAFE MODE ACTIVATED: Binance fetch_positions returned None. Aborting pass.')
+                return
+
+            pos_map = {p['symbol']: p for p in positions if isinstance(p, dict) and p.get('symbol')}
             for symbol in Config.SUPPORTED_SYMBOLS:
                 ctx = self.bot.order_state_machine.get_context(symbol)
                 exchange_pos = pos_map.get(symbol)
