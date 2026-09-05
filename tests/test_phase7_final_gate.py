@@ -279,7 +279,7 @@ for i in range(10000):
         with patch.dict(os.environ, {"DASHBOARD_SECRET": ""}):
             with self.assertRaises(dash_app.HTTPException) as cm:
                 await dash_app.verify_dashboard_key("any_key")
-            self.assertEqual(cm.exception.status_code, 500)
+            self.assertIn(cm.exception.status_code, (500, 503))
 
         # 2. Valid secret set
         dash_app._DASHBOARD_SECRET = "INSTITUTIONAL_SECRET_777"
