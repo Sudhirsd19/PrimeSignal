@@ -84,16 +84,38 @@ class MLSignalConfirmator:
         # Drop rows where indicators are not fully computed yet
         data.dropna(subset=feature_cols, inplace=True)
 
-        # Define target label: Did price go up over the next 5 candles?
-        future_lookahead = 5
-        data['future_return'] = data['close'].shift(-future_lookahead) / data['close'] - 1.0
+        # FIX-B: Triple-Barrier Label — aligned with strategy's actual SL/TP logic.
+        # Old label: "did price go up > 0.1% in 5 bars?" — unrelated to trade outcomes.
+        # New label: "did price hit TP1 (+0.6%) before SL (-0.5%) within 20 bars?"
+        #   → Teaches the model to predict TRADE SUCCESS, not raw price direction.
+        #   → 0.6% = TP1 at 1.2R of 0.5% SL (matching Config.MIN_SL_PCT / MIN_RISK_REWARD_RATIO)
+        tp_barrier  = float(getattr(Config, 'ML_LABEL_TP_PCT',  0.006))  # +0.6%
+        sl_barrier  = float(getattr(Config, 'ML_LABEL_SL_PCT', -0.005))  # -0.5%
+        lookahead   = int(getattr(Config,   'ML_LABEL_LOOKAHEAD', 20))   # max 20 bars
 
-        # Binary target: 1 if positive return, 0 if flat/negative return
-        data['target'] = (data['future_return'] > 0.001).astype(int)
+        close_vals = data['close'].values
+        n = len(close_vals)
+        labels = np.zeros(n, dtype=int)
 
-        # Drop rows where future_return is NaN (the last future_lookahead rows)
-        # NOTE: Cannot dropna on 'target' because NaN > 0.001 → False → 0 (never NaN)
-        clean_data = data.dropna(subset=['future_return'])
+        for idx in range(n):
+            entry = close_vals[idx]
+            if entry <= 0:
+                continue
+            hit = 0  # default: neither barrier hit → label 0 (unfavourable)
+            for fwd in range(1, min(lookahead + 1, n - idx)):
+                ret = (close_vals[idx + fwd] - entry) / entry
+                if ret >= tp_barrier:
+                    hit = 1   # TP hit first → favourable trade
+                    break
+                if ret <= sl_barrier:
+                    hit = 0   # SL hit first → unfavourable trade
+                    break
+            labels[idx] = hit
+
+        data['target'] = labels
+
+        # Drop the last `lookahead` rows — their labels are incomplete (no future bars)
+        clean_data = data.iloc[:-lookahead] if lookahead > 0 else data
 
         X = clean_data[feature_cols]
         y = clean_data['target']
@@ -104,9 +126,17 @@ class MLSignalConfirmator:
         """
         Trains the GradientBoosting model on historical data.
         """
-        if len(df) < 200:
-            print("WARNING: Insufficient data to train ML model. Needs at least 200 candles.")
+        # FIX-4: Hard minimum raised 200 → 300 bars (≈75h of 15m data after 30% split on a 1000-bar fetch).
+        # A GradientBoostingClassifier with 200 trees trained on <300 samples will overfit severely.
+        # For production, fetch 90+ days to get 2000+ training bars.
+        if len(df) < 300:
+            print(f"WARNING: Insufficient data to train ML model. Got {len(df)} bars, need at least 300 (ideally 2000+).")
+            print("         → Fetch more historical data (90+ days recommended) for a reliable model.")
             return False
+
+        if len(df) < 500:
+            print(f"[ML] SOFT WARNING: Only {len(df)} training bars available. Model may overfit.")
+            print("     → Recommend 500+ bars minimum; 2000+ bars for production use.")
 
         try:
             print(f"[ML] Preparing training features from {len(df)} candles (12-feature GradientBoosting)...")
@@ -119,6 +149,43 @@ class MLSignalConfirmator:
             print(f"[ML] Training GradientBoosting model on {len(X)} samples...")
             self.model.fit(X, y)
             self.is_trained = True
+
+            # FIX-4: Print class balance so skewed training data is immediately visible
+            bull_pct = y.mean() * 100
+            bear_pct = 100 - bull_pct
+            print(f"[ML] Class balance — Bullish: {bull_pct:.1f}%  Bearish: {bear_pct:.1f}%")
+            if bull_pct > 70 or bull_pct < 30:
+                print(f"[ML] ⚠️  IMBALANCED TRAINING DATA: {bull_pct:.1f}% bullish labels. Model predictions will be biased.")
+
+            # FIX-C: TimeSeriesSplit cross-validation to detect overfitting.
+            # Uses 5 temporal folds so later folds always test on data the model hasn't seen.
+            # AUC ≥ 0.60 = model has real edge. AUC ≤ 0.55 = near-random, increase data.
+            try:
+                from sklearn.model_selection import TimeSeriesSplit, cross_val_score
+                if len(X) >= 100:
+                    tscv = TimeSeriesSplit(n_splits=min(5, len(X) // 50))
+                    cv_scores = cross_val_score(
+                        GradientBoostingClassifier(
+                            n_estimators=self.model.n_estimators,
+                            max_depth=self.model.max_depth,
+                            learning_rate=self.model.learning_rate,
+                            subsample=self.model.subsample,
+                            random_state=42
+                        ),
+                        X, y, cv=tscv, scoring='roc_auc', n_jobs=-1
+                    )
+                    mean_auc = cv_scores.mean()
+                    std_auc  = cv_scores.std()
+                    print(f"[ML] Cross-Val AUC: {mean_auc:.3f} ± {std_auc:.3f}  (folds: {tscv.n_splits})")
+                    if mean_auc < 0.55:
+                        print(f"[ML] ⚠️  WEAK MODEL: AUC {mean_auc:.3f} is near-random (0.5 = coin flip).")
+                        print(f"[ML]    → Fetch 90+ days of data and retrain for a reliable signal filter.")
+                    elif mean_auc >= 0.65:
+                        print(f"[ML] ✅ STRONG MODEL: AUC {mean_auc:.3f} — model has meaningful edge.")
+                    else:
+                        print(f"[ML] ℹ️  MODERATE MODEL: AUC {mean_auc:.3f} — usable but more data will help.")
+            except Exception as cv_err:
+                print(f"[ML] Cross-validation skipped: {cv_err}")
 
             # Print simple feature importances
             raw_importances = getattr(self.model, "feature_importances_", [])

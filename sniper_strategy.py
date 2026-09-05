@@ -50,8 +50,10 @@ def run_sniper_80pct_strategy():
     ltf_atr = calculate_atr(test_ltf_df, 14).values
     ltf_adx = calculate_adx(test_ltf_df)['adx'].values
     ltf_vwap = calculate_vwap(test_ltf_df).values
-    obs = detect_order_blocks(test_ltf_df)
-    fvgs = detect_fvgs(test_ltf_df)
+    # BUG-07 FIX: OB/FVG detection moved INSIDE the loop on a rolling sub_ltf window.
+    # Pre-computing here on the full test dataset gives the strategy knowledge of future
+    # mitigation status (a candle at bar 500 "knowing" it gets touched at bar 520),
+    # which is a critical look-ahead bias. See entry logic below.
 
     balance = 10000.0
     initial_balance = balance
@@ -175,15 +177,23 @@ def run_sniper_80pct_strategy():
             if c_adx < 20.0:
                 continue
 
-            sub_ltf = test_ltf_df.iloc[max(0, i-250):i+1]
+            # BUG-07 FIX: sub_ltf is exclusive of bar i (bars 0..i-1 only — all closed).
+            # This ensures OB/FVG detection has NO knowledge of bar i's candle or any
+            # future price action. Mitigation status is evaluated only on past bars.
+            sub_ltf = test_ltf_df.iloc[max(0, i-250):i]
             ml_prob = ml.predict_bias(sub_ltf)
+
+            # BUG-07 FIX: Compute OBs on the historical-only sub_ltf window.
+            obs = detect_order_blocks(sub_ltf)
 
             zone_found = False
             zone_sl = 0.0
 
             if bullish_trend and c_close > c_vwap and ml_prob >= 0.50:
-                for ob_idx in range(i-1, max(0, i-35), -1):
-                    ob = obs.iloc[ob_idx]
+                # BUG-07 FIX: iterate over the last 35 bars of obs using relative indices
+                obs_len = len(obs)
+                for rel_idx in range(obs_len - 1, max(0, obs_len - 35), -1):
+                    ob = obs.iloc[rel_idx]
                     if ob and ob['type'] == 'BULLISH' and not ob['mitigated']:
                         if ob['bottom'] * 0.998 <= c_low <= ob['top'] * 1.002:
                             candle_r = c_high - c_low
@@ -201,7 +211,11 @@ def run_sniper_80pct_strategy():
                     if dist > 0 and dist / entry_p < 0.025:
                         tp1 = entry_p + (dist * 0.8)
                         tp2 = entry_p + (dist * 1.6)
-                        p_size = (balance * 0.015) / dist
+                        # BUG-08 FIX: Cap position value to 35% of balance (matches Config.MAX_TRADE_ALLOCATION_PCT)
+                        entry_balance = balance
+                        raw_size = (entry_balance * 0.015) / dist
+                        max_size = (entry_balance * 0.35) / entry_p
+                        p_size = min(raw_size, max_size)
                         in_pos = True
                         p_side = "LONG"
                         partial_taken = False
@@ -210,8 +224,10 @@ def run_sniper_80pct_strategy():
                         low_p = entry_p
 
             elif bearish_trend and c_close < c_vwap and (1.0 - ml_prob) >= 0.50:
-                for ob_idx in range(i-1, max(0, i-35), -1):
-                    ob = obs.iloc[ob_idx]
+                # BUG-07 FIX: iterate over the last 35 bars of obs using relative indices
+                obs_len = len(obs)
+                for rel_idx in range(obs_len - 1, max(0, obs_len - 35), -1):
+                    ob = obs.iloc[rel_idx]
                     if ob and ob['type'] == 'BEARISH' and not ob['mitigated']:
                         if ob['bottom'] * 0.998 <= c_high <= ob['top'] * 1.002:
                             candle_r = c_high - c_low
@@ -229,7 +245,11 @@ def run_sniper_80pct_strategy():
                     if dist > 0 and dist / entry_p < 0.025:
                         tp1 = entry_p - (dist * 0.8)
                         tp2 = entry_p - (dist * 1.6)
-                        p_size = (balance * 0.015) / dist
+                        # BUG-08 FIX: Cap position value to 35% of balance (matches Config.MAX_TRADE_ALLOCATION_PCT)
+                        entry_balance = balance
+                        raw_size = (entry_balance * 0.015) / dist
+                        max_size = (entry_balance * 0.35) / entry_p
+                        p_size = min(raw_size, max_size)
                         in_pos = True
                         p_side = "SHORT"
                         partial_taken = False

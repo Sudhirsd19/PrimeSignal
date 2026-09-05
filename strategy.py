@@ -1,3 +1,9 @@
+# ===========================================================================
+# DEPRECATED — Legacy EMA-9/21 Crossover Prototype
+# This module is NOT used by BacktestEngine or main.py.
+# The active strategy is: strategies/multi_timeframe.py (MultiTimeframeSMCStrategy)
+# This file is kept for reference only. Do not integrate without review.
+# ===========================================================================
 from config import Config
 
 def calculate_ema(prices, period):

@@ -28,8 +28,9 @@ class BacktestEngine:
         # 1. Prepare DataFrames
         htf_df = prepare_dataframe(htf_candles)
         ltf_df = prepare_dataframe(ltf_candles)
+        # BUG-01 FIX: Import kept here; ATR is now computed per-bar inside the loop
+        # on sub_ltf (rolling window) to prevent look-ahead bias.
         from strategies.indicators import calculate_atr
-        ltf_atr = calculate_atr(ltf_df, Config.ATR_PERIOD)
         
         if len(htf_df) < Config.TREND_EMA or len(ltf_df) < Config.LONG_EMA + 10:
             print("ERROR: Not enough historical candles to run backtest.")
@@ -88,7 +89,9 @@ class BacktestEngine:
             current_high: float = float(curr_candle['high'])
             current_low: float = float(curr_candle['low'])
             current_open: float = float(curr_candle['open'])
-            curr_atr: float = float(ltf_atr.iloc[i])
+            # BUG-01 FIX: Compute ATR on the rolling sub_ltf window (no look-ahead)
+            _atr_s = calculate_atr(sub_ltf, Config.ATR_PERIOD)
+            curr_atr: float = float(_atr_s.iloc[-1]) if len(_atr_s) > 0 and not pd.isna(_atr_s.iloc[-1]) else 0.0
             
             curr_date = ltf_time.date() if isinstance(ltf_time, pd.Timestamp) else None
             if curr_date != last_trade_day:
@@ -143,7 +146,9 @@ class BacktestEngine:
                         fee = gross_val * fee_rate
                         self.balance += gross_val - fee
                         
-                        pnl_usdt = (position_size * exit_price) - (position_size * entry_price) - fee
+                        # BUG-04 FIX: include entry fee so pnl_usdt matches actual net PnL
+                        entry_fee = position_size * entry_price * fee_rate
+                        pnl_usdt = (position_size * exit_price) - (position_size * entry_price) - fee - entry_fee
                         pnl_pct = (exit_price - entry_price) / entry_price * 100
                         
                         self.trades.append({
@@ -182,7 +187,9 @@ class BacktestEngine:
                         fee = gross_val * fee_rate
                         self.balance += gross_val - fee
                         
-                        pnl_usdt = (position_size * exit_price) - (position_size * entry_price) - fee
+                        # BUG-04 FIX: include entry fee so pnl_usdt matches actual net PnL
+                        entry_fee = position_size * entry_price * fee_rate
+                        pnl_usdt = (position_size * exit_price) - (position_size * entry_price) - fee - entry_fee
                         pnl_pct = (exit_price - entry_price) / entry_price * 100
                         
                         self.trades.append({
@@ -241,13 +248,17 @@ class BacktestEngine:
                             hit_sl = False
 
                     if hit_tp:
-                        exit_price = min(take_profit, current_open)
+                        # BUG-05 FIX: Conservative exit at TP level; current_open could be below TP
+                        # on a gap-down giving an unrealistically favourable short fill.
+                        exit_price = take_profit
                         collateral_return = position_size * entry_price
                         gross_pnl = position_size * (entry_price - exit_price)
                         exit_fee = position_size * exit_price * fee_rate
                         self.balance += collateral_return + gross_pnl - exit_fee
                         
-                        pnl_usdt = gross_pnl - exit_fee
+                        # BUG-04 FIX: include entry fee so pnl_usdt matches actual net PnL
+                        entry_fee = position_size * entry_price * fee_rate
+                        pnl_usdt = gross_pnl - exit_fee - entry_fee
                         pnl_pct = (entry_price - exit_price) / entry_price * 100
                         
                         self.trades.append({
@@ -287,7 +298,9 @@ class BacktestEngine:
                         exit_fee = position_size * exit_price * fee_rate
                         self.balance += collateral_return + gross_pnl - exit_fee
                         
-                        pnl_usdt = gross_pnl - exit_fee
+                        # BUG-04 FIX: include entry fee so pnl_usdt matches actual net PnL
+                        entry_fee = position_size * entry_price * fee_rate
+                        pnl_usdt = gross_pnl - exit_fee - entry_fee
                         pnl_pct = (entry_price - exit_price) / entry_price * 100
                         
                         self.trades.append({
@@ -419,14 +432,18 @@ class BacktestEngine:
                 gross_val = position_size * exit_price
                 fee = gross_val * fee_rate
                 self.balance += gross_val - fee
-                pnl_usdt = (position_size * exit_price) - (position_size * entry_price) - fee
+                # BUG-04 FIX: include entry fee so pnl_usdt matches actual net PnL
+                entry_fee = position_size * entry_price * fee_rate
+                pnl_usdt = (position_size * exit_price) - (position_size * entry_price) - fee - entry_fee
                 pnl_pct = (exit_price - entry_price) / entry_price * 100
             else:
                 collateral_return = position_size * entry_price
                 gross_pnl = position_size * (entry_price - exit_price)
                 exit_fee = position_size * exit_price * fee_rate
                 self.balance += collateral_return + gross_pnl - exit_fee
-                pnl_usdt = gross_pnl - exit_fee
+                # BUG-04 FIX: include entry fee so pnl_usdt matches actual net PnL
+                entry_fee = position_size * entry_price * fee_rate
+                pnl_usdt = gross_pnl - exit_fee - entry_fee
                 pnl_pct = (entry_price - exit_price) / entry_price * 100
                 
             self.trades.append({
@@ -498,13 +515,14 @@ class BacktestEngine:
         equity_df['dd'] = (equity_df['equity'] - equity_df['peak']) / equity_df['peak'] * 100.0
         max_drawdown = equity_df['dd'].min()
         
-        # Sharpe Ratio (daily/candle returns based)
-        equity_df['returns'] = equity_df['equity'].pct_change()
-        mean_return = equity_df['returns'].mean()
-        std_return = equity_df['returns'].std()
-        
-        if std_return > 0:
-            sharpe_ratio = (mean_return / std_return) * np.sqrt(288 * 365)
+        # BUG-09 FIX: Compute Sharpe on DAILY equity returns (not per-candle)
+        # annualised by sqrt(252 trading days) instead of sqrt(288*365).
+        equity_ts = equity_df.set_index('timestamp')['equity'].resample('1D').last().dropna()
+        if len(equity_ts) > 1:
+            daily_returns = equity_ts.pct_change().dropna()
+            mean_daily = daily_returns.mean()
+            std_daily = daily_returns.std()
+            sharpe_ratio = (mean_daily / std_daily) * np.sqrt(252) if std_daily > 0 else 0.0
         else:
             sharpe_ratio = 0.0
             

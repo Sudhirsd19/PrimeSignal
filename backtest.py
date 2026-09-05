@@ -60,18 +60,25 @@ async def main():
         print("ERROR: Failed to fetch historical data from Binance.")
         return
 
-    import pandas as pd
+    # BUG-10 FIX: Only resample when LTF data is 5m (300,000 ms interval).
+    # If data is already 15m (900,000 ms), skip — resampling identical data
+    # creates a timestamp mismatch between LTF and HTF alignment in the backtest loop.
     if Config.LTF_TIMEFRAME == "15m":
-        df = prepare_dataframe(ltf_ohlcv)
-        df_15m = df.resample('15min').agg({
-            'open': 'first',
-            'high': 'max',
-            'low': 'min',
-            'close': 'last',
-            'volume': 'sum'
-        }).dropna()
-        df_15m['timestamp'] = df_15m.index.astype('int64') // 1000000
-        ltf_ohlcv = df_15m[['timestamp', 'open', 'high', 'low', 'close', 'volume']].values.tolist()
+        is_5m_data = len(ltf_ohlcv) >= 2 and (ltf_ohlcv[1][0] - ltf_ohlcv[0][0]) == 300_000
+        if is_5m_data:
+            df = prepare_dataframe(ltf_ohlcv)
+            df_15m = df.resample('15min').agg({
+                'open': 'first',
+                'high': 'max',
+                'low': 'min',
+                'close': 'last',
+                'volume': 'sum'
+            }).dropna()
+            df_15m['timestamp'] = df_15m.index.astype('int64') // 1000000
+            ltf_ohlcv = df_15m[['timestamp', 'open', 'high', 'low', 'close', 'volume']].values.tolist()
+            print(f"[DATA] Resampled 5m → 15m: {len(ltf_ohlcv)} candles")
+        else:
+            print(f"[DATA] LTF data already at 15m — skipping resample.")
         
     print(f"[DATA] Prepared {len(htf_ohlcv)} HTF ({Config.HTF_TIMEFRAME}) candles and {len(ltf_ohlcv)} LTF ({Config.LTF_TIMEFRAME}) candles.")
 
@@ -79,8 +86,10 @@ async def main():
     strategy = MultiTimeframeSMCStrategy()
     ml_confirmator = MLSignalConfirmator()
     
-    # Split: Use first 10% of candles for training, remaining 90% for backtesting
-    split_idx = int(len(ltf_ohlcv) * 0.1)
+    # BUG-03 FIX: Increased from 10% to 30% for ML warmup.
+    # With 1000 LTF bars: 10% ≈ 25h of training; 30% ≈ 75h — much more representative.
+    # For production use, fetch 90+ days of data to get 864+ warmup bars (≈9 days).
+    split_idx = int(len(ltf_ohlcv) * 0.30)
     
     # Warm up and train ML model on the training segment
     print(f"\n[ML] Training confirmation classifier on warm-up data (0 to {split_idx})...")
@@ -145,6 +154,61 @@ async def main():
     print(f"Strict Profit Factor | {metrics_ml['strict_pf']:.2f}             | {metrics_raw['strict_pf']:.2f}")
     print(f"Relaxed Win Rate     | {metrics_ml['relaxed_win_rate']:.2f}%           | {metrics_raw['relaxed_win_rate']:.2f}%")
     print(f"Relaxed Profit Factor| {metrics_ml['relaxed_pf']:.2f}             | {metrics_raw['relaxed_pf']:.2f}")
+    print("====================================================")
+
+    # FIX-E: Walk-Forward Validation — split test period into First Half vs Second Half.
+    # If both halves are profitable → strategy is robust across different market regimes.
+    # If only the first half passes → strategy may be overfit to a single regime.
+    print("\n====================================================")
+    print("WALK-FORWARD VALIDATION (Out-of-Sample Stability)")
+    print("====================================================")
+    mid_idx = len(test_ltf_candles) // 2
+    wf_half1 = test_ltf_candles[:mid_idx]
+    wf_half2 = test_ltf_candles[mid_idx:]
+
+    bars_per_day = 96.0 if Config.LTF_TIMEFRAME == "15m" else 288.0
+    h1_days = len(wf_half1) / bars_per_day
+    h2_days = len(wf_half2) / bars_per_day
+    print(f"First Half:  {len(wf_half1)} bars ({h1_days:.1f} days)")
+    print(f"Second Half: {len(wf_half2)} bars ({h2_days:.1f} days)")
+    print("----------------------------------------------------")
+
+    wf_results = {}
+    for label, half_candles in [("First Half ", wf_half1), ("Second Half", wf_half2)]:
+        if len(half_candles) < 50:
+            print(f"[WF] {label}: Too few candles to backtest.")
+            continue
+        wf_engine = BacktestEngine(strategy, ml_confirmator=ml_confirmator)
+        wf_metrics = wf_engine.run(htf_ohlcv, half_candles, initial_balance=initial_capital)
+        if wf_metrics:
+            wf_results[label] = wf_metrics
+
+    if len(wf_results) == 2:
+        h1 = wf_results["First Half "]
+        h2 = wf_results["Second Half"]
+
+        def _pf_str(pf):
+            return f"{pf:.2f}" if pf != float('inf') else "∞"
+
+        print(f"{'Metric':<22} | {'First Half':>12} | {'Second Half':>12}")
+        print("-" * 52)
+        print(f"{'Total Return':<22} | {h1['total_return_pct']:>+11.2f}% | {h2['total_return_pct']:>+11.2f}%")
+        print(f"{'Total Trades':<22} | {h1['total_trades']:>12} | {h2['total_trades']:>12}")
+        print(f"{'Win Rate':<22} | {h1['win_rate']:>11.2f}% | {h2['win_rate']:>11.2f}%")
+        print(f"{'Profit Factor':<22} | {_pf_str(h1['profit_factor']):>12} | {_pf_str(h2['profit_factor']):>12}")
+        print(f"{'Max Drawdown':<22} | {h1['max_drawdown_pct']:>11.2f}% | {h2['max_drawdown_pct']:>11.2f}%")
+        print(f"{'Sharpe Ratio':<22} | {h1['sharpe_ratio']:>12.2f} | {h2['sharpe_ratio']:>12.2f}")
+        print("-" * 52)
+        # Stability verdict
+        both_profitable = h1['total_return_pct'] > 0 and h2['total_return_pct'] > 0
+        both_pf_above_1 = h1['profit_factor'] > 1.0 and h2['profit_factor'] > 1.0
+        if both_profitable and both_pf_above_1:
+            print("✅ WALK-FORWARD PASS: Strategy profitable in BOTH halves — consistent edge.")
+        elif both_profitable:
+            print("⚠️  PARTIAL PASS: Both halves profitable but Profit Factor < 1 in one half.")
+        else:
+            print("❌ WALK-FORWARD FAIL: Strategy not profitable in both halves — possible overfit.")
+            print("   → Increase training data, tighten filters, or reduce relaxed mode entries.")
     print("====================================================")
 
 if __name__ == "__main__":

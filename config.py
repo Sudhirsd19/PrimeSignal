@@ -36,6 +36,11 @@ class Config:
     RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.2")) # TP2 Target: 2.2R
     TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "0.65")) # 65% profit booking at 1.2R target
     ML_CONFIDENCE_THRESHOLD = float(os.getenv("ML_CONFIDENCE_THRESHOLD", "0.60"))
+    # Triple-Barrier Label constants (used in ml/confirmation.py FIX-B)
+    # TP barrier: +0.6% = TP1 at 1.2R of 0.5% minimum SL
+    ML_LABEL_TP_PCT      = float(os.getenv("ML_LABEL_TP_PCT",      "0.006"))
+    ML_LABEL_SL_PCT      = float(os.getenv("ML_LABEL_SL_PCT",      "-0.005"))
+    ML_LABEL_LOOKAHEAD   = int(os.getenv(  "ML_LABEL_LOOKAHEAD",   "20"))
     
     # ─── ULTIMATE SHIELD: 5 Advanced Institutional Protection Parameters ───
     # 1. Stagnation Killer (Time-based exit)

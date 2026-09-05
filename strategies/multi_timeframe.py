@@ -122,7 +122,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         curr_atr = ltf_atr.iloc[-2]
         if curr_atr > 1.2 * avg_atr_14:
             market_regime = 'HIGH_VOL'
-        adx_threshold = getattr(Config, 'ADX_MIN_THRESHOLD', 25.0)
+        adx_threshold = getattr(Config, 'ADX_MIN_THRESHOLD', 20.0)  # FIX-1: default matches Config.ADX_MIN_THRESHOLD = 20.0
         if curr_adx >= adx_threshold: market_regime = 'TREND'
         elif curr_adx >= 20.0: market_regime = 'MIXED'
         else: market_regime = 'RANGE'
@@ -157,11 +157,20 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 strong_trend = True
         metadata['strong_trend'] = strong_trend
 
+        # FIX-A: Use the current candle's timestamp for session/weekend classification.
+        # datetime.now() gives the REAL wall-clock time — correct in live trading, but
+        # in backtesting every historical bar would get classified by the time you run
+        # the script (e.g. all bars labelled "NY session" if run at 15:00 UTC on a weekday).
         import datetime
-        now_dt = datetime.datetime.now(datetime.timezone.utc)
-        current_hour = now_dt.hour
-        current_weekday = now_dt.weekday()
-        
+        last_bar_ts = ltf_df.index[-1]
+        if isinstance(last_bar_ts, pd.Timestamp):
+            current_hour = last_bar_ts.hour
+            current_weekday = last_bar_ts.dayofweek
+        else:
+            _now = datetime.datetime.now(datetime.timezone.utc)
+            current_hour = _now.hour
+            current_weekday = _now.weekday()
+
         session_name = 'OTHER'
         if 0 <= current_hour < 7: session_name = 'ASIA'
         elif 7 <= current_hour < 13: session_name = 'LONDON'
@@ -462,7 +471,9 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             elif in_zone and entry_type in ["EMA", "VWAP"]:
                 if (micro_bos or trigger_pass) and (curr_rsi < 65 and vwap_pass):
                     valid_entry = True
-            elif relaxed and in_zone and (trigger_pass or vwap_pass):
+            elif relaxed and in_zone and (trigger_pass or vwap_pass) and score >= 3:
+                # FIX-D: Relaxed mode now requires score >= 3 (zone=2pts + ≥1 more confluence).
+                # Prevents single-condition noise entries in choppy/sideways markets.
                 valid_entry = True
 
             # Sudden Wick Filter (1.8%) — applied after valid_entry evaluation
@@ -484,8 +495,9 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 
                 # Structural invalidation SL: tighter of OB boundary or 1.5x ATR
                 stop_loss = max(ob_sl, atr_sl) if ob_sl > 0 else atr_sl
-                # Ensure minimum 0.3% and maximum 2.5% bounds
-                stop_loss = min(stop_loss, curr_price * (1 - 0.003))
+                # FIX-2: Minimum SL raised 0.3% → 0.5% so TP1 at 1.2R gives ≥0.45% net after round-trip fees (~0.15%).
+                # At 0.3% SL, TP1 = 0.36% gross; after fees effective profit ≈ 0.21% — barely viable.
+                stop_loss = min(stop_loss, curr_price * (1 - 0.005))
                 stop_loss = max(stop_loss, curr_price * (1 - 0.025))
 
                 risk        = max(curr_price - stop_loss, 1e-9)
@@ -662,7 +674,9 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             elif in_zone and entry_type in ["EMA", "VWAP"]:
                 if (micro_bos or trigger_pass) and (curr_rsi > 35 and vwap_pass):
                     valid_entry = True
-            elif relaxed and in_zone and (trigger_pass or vwap_pass):
+            elif relaxed and in_zone and (trigger_pass or vwap_pass) and score >= 3:
+                # FIX-D: Relaxed mode now requires score >= 3 (zone=2pts + ≥1 more confluence).
+                # Prevents single-condition noise entries in choppy/sideways markets.
                 valid_entry = True
 
             # Sudden Wick Filter (1.8%) — applied after valid_entry evaluation
@@ -683,8 +697,9 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 
                 # Structural invalidation SL: tighter of OB boundary or 1.5x ATR
                 stop_loss = min(ob_sl, atr_sl) if entry_type in ["OB", "FVG"] else atr_sl
-                # Ensure minimum 0.3% and maximum 2.5% bounds
-                stop_loss = max(stop_loss, curr_price * (1 + 0.003))
+                # FIX-3: Minimum SL raised 0.3% → 0.5% so TP1 at 1.2R gives ≥0.45% net after round-trip fees (~0.15%).
+                # At 0.3% SL, TP1 = 0.36% gross; after fees effective profit ≈ 0.21% — barely viable.
+                stop_loss = max(stop_loss, curr_price * (1 + 0.005))
                 stop_loss = min(stop_loss, curr_price * (1 + 0.025))
 
                 risk        = max(stop_loss - curr_price, 1e-9)
