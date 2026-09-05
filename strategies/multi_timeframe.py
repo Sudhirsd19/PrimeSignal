@@ -127,7 +127,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         curr_atr = ltf_atr.iloc[-2]
         if curr_atr > 1.2 * avg_atr_14:
             market_regime = 'HIGH_VOL'
-        adx_threshold = getattr(Config, 'ADX_MIN_THRESHOLD', 20.0)  # FIX-1: default matches Config.ADX_MIN_THRESHOLD = 20.0
+        adx_threshold = getattr(Config, 'ADX_MIN_THRESHOLD', 25.0)  # FIX-1: default matches Config.ADX_MIN_THRESHOLD = 20.0
         if curr_adx >= adx_threshold: market_regime = 'TREND'
         elif curr_adx >= 20.0: market_regime = 'MIXED'
         else: market_regime = 'RANGE'
@@ -729,3 +729,4 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 return "SELL", metadata
 
         return "HOLD", metadata
+

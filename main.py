@@ -908,7 +908,7 @@ class PrimeSignalBot:
             else:
                 tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.2))
 
-            tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.2))
+            tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5))
 
             if signal == "BUY":
                 metadata['tp1'] = entry_price + (tp1_mult * risk_usdt) + fee_adj
@@ -925,7 +925,7 @@ class PrimeSignalBot:
         else:
             risk_usdt = abs(metadata.get('stop_loss', entry_price) - entry_price)
             fee_adj = entry_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
-            tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.2))
+            tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5))
             tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.2))
             if signal == "BUY":
                 metadata['tp1'] = entry_price + (tp1_mult * risk_usdt) + fee_adj
@@ -1268,7 +1268,7 @@ class PrimeSignalBot:
                     self.partial_tp_taken[symbol] = False
                     self.tp2_taken[symbol] = False
                     r_amount = abs(sl - fill_price)
-                    tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.2))
+                    tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5))
                     tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.2))
                     self.take_profit_1r[symbol] = float(fill_price + (tp1_mult * r_amount) + fee_adj)
                     self.take_profit_2r[symbol] = float(fill_price + (tp2_mult * r_amount) + fee_adj)
@@ -1475,7 +1475,7 @@ class PrimeSignalBot:
                     self.partial_tp_taken[symbol] = False
                     self.tp2_taken[symbol] = False
                     r_amount = abs(sl - fill_price)
-                    tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.2))
+                    tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5))
                     tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.2))
                     self.take_profit_1r[symbol] = float(fill_price - (tp1_mult * r_amount) - fee_adj)
                     self.take_profit_2r[symbol] = float(fill_price - (tp2_mult * r_amount) - fee_adj)
@@ -1646,7 +1646,7 @@ class PrimeSignalBot:
                         
                         if self.position_side[symbol] == "LONG":
                             self.highest_price_reached[symbol] = max(self.highest_price_reached[symbol], curr_price)
-                            fee_adj = self.entry_price[symbol] * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.2)); r_dist = (self.take_profit_1r[symbol] - self.entry_price[symbol] - fee_adj) / tp1_mult if self.position_side[symbol] == 'LONG' else (self.entry_price[symbol] - self.take_profit_1r[symbol] - fee_adj) / tp1_mult; r_dist = r_dist if r_dist > 0 else abs(self.entry_price[symbol] - self.stop_loss[symbol])
+                            fee_adj = self.entry_price[symbol] * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)); r_dist = (self.take_profit_1r[symbol] - self.entry_price[symbol] - fee_adj) / tp1_mult if self.position_side[symbol] == 'LONG' else (self.entry_price[symbol] - self.take_profit_1r[symbol] - fee_adj) / tp1_mult; r_dist = r_dist if r_dist > 0 else abs(self.entry_price[symbol] - self.stop_loss[symbol])
                             
                             # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven
                             fee_buffer_pct = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
@@ -1908,7 +1908,7 @@ class PrimeSignalBot:
                                 
                         elif self.position_side[symbol] == "SHORT":
                             self.lowest_price_reached[symbol] = min(self.lowest_price_reached[symbol], curr_price)
-                            fee_adj = self.entry_price[symbol] * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.2)); r_dist = (self.take_profit_1r[symbol] - self.entry_price[symbol] - fee_adj) / tp1_mult if self.position_side[symbol] == 'LONG' else (self.entry_price[symbol] - self.take_profit_1r[symbol] - fee_adj) / tp1_mult; r_dist = r_dist if r_dist > 0 else abs(self.entry_price[symbol] - self.stop_loss[symbol])
+                            fee_adj = self.entry_price[symbol] * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)); r_dist = (self.take_profit_1r[symbol] - self.entry_price[symbol] - fee_adj) / tp1_mult if self.position_side[symbol] == 'LONG' else (self.entry_price[symbol] - self.take_profit_1r[symbol] - fee_adj) / tp1_mult; r_dist = r_dist if r_dist > 0 else abs(self.entry_price[symbol] - self.stop_loss[symbol])
                             
                             # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven
                             fee_buffer_pct = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
@@ -2209,7 +2209,7 @@ class PrimeSignalBot:
                         entry_val = self.entry_price[s]
                         is_profit_locked = (is_long and sl_val >= entry_val) or (not is_long and sl_val <= entry_val and sl_val > 0)
                         
-                        fee_adj = entry_val * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.2)); r_dist_d = (self.take_profit_1r[s] - entry_val - fee_adj) / tp1_mult if is_long else (entry_val - self.take_profit_1r[s] - fee_adj) / tp1_mult; r_dist = r_dist_d if r_dist_d > 0 else (abs(entry_val - sl_val) if abs(entry_val - sl_val) > 0 else (entry_val * 0.01))
+                        fee_adj = entry_val * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)); r_dist_d = (self.take_profit_1r[s] - entry_val - fee_adj) / tp1_mult if is_long else (entry_val - self.take_profit_1r[s] - fee_adj) / tp1_mult; r_dist = r_dist_d if r_dist_d > 0 else (abs(entry_val - sl_val) if abs(entry_val - sl_val) > 0 else (entry_val * 0.01))
                         target_1r = self.take_profit_1r[s] if self.take_profit_1r[s] > 0 else (entry_val + 1.0 * r_dist if is_long else entry_val - 1.0 * r_dist)
                         target_2r = self.take_profit_2r[s] if self.take_profit_2r[s] > 0 else (entry_val + 2.5 * r_dist if is_long else entry_val - 2.5 * r_dist)
                         final_tp = self.take_profit[s] if self.take_profit[s] > 0 else (entry_val + 4.0 * r_dist if is_long else entry_val - 4.0 * r_dist)
@@ -2828,5 +2828,6 @@ if __name__ == "__main__":
         asyncio.run(start_all())
     except KeyboardInterrupt:
         print("\nStopping bot...")
+
 
 
