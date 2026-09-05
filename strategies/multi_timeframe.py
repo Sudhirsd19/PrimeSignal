@@ -167,6 +167,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         # in backtesting every historical bar would get classified by the time you run
         # the script (e.g. all bars labelled "NY session" if run at 15:00 UTC on a weekday).
         import datetime
+        import pandas as pd
         last_bar_ts = ltf_df.index[-1]
         if isinstance(last_bar_ts, pd.Timestamp):
             current_hour = last_bar_ts.hour
