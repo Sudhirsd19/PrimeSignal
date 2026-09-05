@@ -331,9 +331,17 @@ class ReconciliationEngine:
     async def _reconcile_binance(self):
         exec_engine = self.bot.execution
         try:
-            self._global_binance_orders = await exec_engine.execute_with_retry(exec_engine.trade_client.fetch_open_orders) or []
-        except Exception:
-            self._global_binance_orders = []
+            self._global_binance_orders = await exec_engine.execute_with_retry(exec_engine.trade_client.fetch_open_orders)
+        except Exception as e:
+            print(f"[RECONCILIATION ERROR] Binance fetch_open_orders failed with exception: {e}")
+            self._global_binance_orders = None
+
+        # F-07 FIX: Never treat fetch_open_orders failure or None as an empty order set.
+        # An API error/timeout must trigger SAFE MODE and abort without inferring orders are missing.
+        if self._global_binance_orders is None:
+            self.safe_mode_active = True
+            print("[RECONCILIATION] 🚨 SAFE MODE ACTIVATED: Binance fetch_open_orders failed/unreachable. Aborting pass.")
+            return
 
         if Config.EXCHANGE_TYPE == 'futures':
             try:

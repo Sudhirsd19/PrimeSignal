@@ -827,6 +827,10 @@ class PrimeSignalBot:
                 fetched_fr = await self.execution.fetch_funding_rate(symbol)
                 if fetched_fr is not None:
                     fr = float(fetched_fr)
+                else:
+                    # F-06 FIX: Fail-closed if funding rate data is unavailable
+                    add_log_message(f"[{symbol}] Trade blocked: Funding rate data unavailable from exchange (fail-closed protection).")
+                    return
                 max_fr = getattr(Config, 'MAX_FUNDING_RATE_PCT', 0.035) / 100.0 # e.g. 0.035% = 0.00035
                 if signal == "BUY" and fr > max_fr:
                     add_log_message(f"[{symbol}] Trade blocked: Extreme Bullish Funding Rate ({fr*100:+.4f}% > +{max_fr*100:.3f}%). Long liquidation trap protection.")
@@ -834,8 +838,10 @@ class PrimeSignalBot:
                 elif signal == "SELL" and fr < -max_fr:
                     add_log_message(f"[{symbol}] Trade blocked: Extreme Bearish Funding Rate ({fr*100:+.4f}% < -{max_fr*100:.3f}%). Short squeeze trap protection.")
                     return
-            except Exception:
-                pass
+            except Exception as e:
+                # F-06 FIX: Fail-closed on exception rather than ignoring error
+                add_log_message(f"[{symbol}] Trade blocked: Funding rate check error ({e}) (fail-closed protection).")
+                return
         
         # Daily Trade Limit
         max_daily_trades = getattr(Config, 'MAX_DAILY_TRADES', 6)
@@ -1210,12 +1216,19 @@ class PrimeSignalBot:
                     if self.has_keys and not Config.PAPER_TRADING:
                         ctx.transition_to(OrderState.SL_PLACEMENT_PENDING, reason="Submitting native SL to exchange")
                         sl_order = await self.execution.place_native_stop_loss(symbol, 'sell', filled_amount, sl)
+                        sl_is_verified = False
                         if self._is_active_sl_order(sl_order):
-                            ctx.native_sl_order_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
-                            ctx.transition_to(OrderState.PROTECTED, reason=f"Native SL confirmed on exchange @ {sl}")
-                            add_log_message(f"[{symbol}] 🛡️ NATIVE STOP LOSS ACTIVE on exchange (ID: {ctx.native_sl_order_id}, Price: {sl:.4f})")
-                        else:
-                            add_log_message(f"[{symbol}] 🚨 NATIVE SL PLACEMENT FAILED! Executing EMERGENCY FLATTEN.")
+                            sl_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
+                            # F-03 FIX: Authoritative verification that order is truly ACTIVE on exchange
+                            sl_status = await self.execution.verify_order_active(symbol, sl_id)
+                            if sl_status == 'ACTIVE':
+                                sl_is_verified = True
+                                ctx.native_sl_order_id = sl_id
+                                ctx.transition_to(OrderState.PROTECTED, reason=f"Native SL verified ACTIVE on exchange @ {sl}")
+                                add_log_message(f"[{symbol}] 🛡️ NATIVE STOP LOSS ACTIVE on exchange (ID: {ctx.native_sl_order_id}, Price: {sl:.4f})")
+                        
+                        if not sl_is_verified:
+                            add_log_message(f"[{symbol}] 🚨 NATIVE SL PLACEMENT/VERIFICATION FAILED! Executing EMERGENCY FLATTEN.")
                             flatten_order = await self.execution.emergency_flatten_position(symbol, 'BUY', filled_amount, reason="NATIVE_SL_FAILED")
                             if self._is_truthy_fill(flatten_order):
                                 actual_flatten = self._extract_filled_qty(flatten_order, filled_amount)
@@ -1409,12 +1422,19 @@ class PrimeSignalBot:
                     if self.has_keys and not Config.PAPER_TRADING:
                         ctx.transition_to(OrderState.SL_PLACEMENT_PENDING, reason="Submitting native SL to exchange")
                         sl_order = await self.execution.place_native_stop_loss(symbol, 'buy', filled_amount, sl)
+                        sl_is_verified = False
                         if self._is_active_sl_order(sl_order):
-                            ctx.native_sl_order_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
-                            ctx.transition_to(OrderState.PROTECTED, reason=f"Native SL confirmed on exchange @ {sl}")
-                            add_log_message(f"[{symbol}] 🛡️ NATIVE STOP LOSS ACTIVE on exchange (ID: {ctx.native_sl_order_id}, Price: {sl:.4f})")
-                        else:
-                            add_log_message(f"[{symbol}] 🚨 NATIVE SL PLACEMENT FAILED! Executing EMERGENCY FLATTEN.")
+                            sl_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
+                            # F-03 FIX: Authoritative verification that order is truly ACTIVE on exchange
+                            sl_status = await self.execution.verify_order_active(symbol, sl_id)
+                            if sl_status == 'ACTIVE':
+                                sl_is_verified = True
+                                ctx.native_sl_order_id = sl_id
+                                ctx.transition_to(OrderState.PROTECTED, reason=f"Native SL verified ACTIVE on exchange @ {sl}")
+                                add_log_message(f"[{symbol}] 🛡️ NATIVE STOP LOSS ACTIVE on exchange (ID: {ctx.native_sl_order_id}, Price: {sl:.4f})")
+                        
+                        if not sl_is_verified:
+                            add_log_message(f"[{symbol}] 🚨 NATIVE SL PLACEMENT/VERIFICATION FAILED! Executing EMERGENCY FLATTEN.")
                             flatten_order = await self.execution.emergency_flatten_position(symbol, 'SELL', filled_amount, reason="NATIVE_SL_FAILED")
                             if self._is_truthy_fill(flatten_order):
                                 actual_flatten = self._extract_filled_qty(flatten_order, filled_amount)
@@ -2291,24 +2311,25 @@ class PrimeSignalBot:
                         closed_symbols.append(sym)
                     else:
                         failed_symbols.append(sym)
-                        add_log_message(f"[{sym}] ⚠️ Exit order may have been rejected. Force-clearing local state.")
-                        # Force-clear local state even if exchange order failed
-                        self.in_position[sym] = False
-                        self.position_side[sym] = "HOLD"
-                        self.position_size[sym] = 0.0
+                        # F-02 FIX: Never force-clear state on unconfirmed exits. Transition to EXIT_UNKNOWN and activate SAFE MODE.
+                        add_log_message(f"[{sym}] ⚠️ Emergency exit unconfirmed on exchange. Retaining position state & activating SAFE MODE.")
+                        ctx = self.order_state_machine.get_context(sym)
+                        ctx.transition_to(OrderState.EXIT_UNKNOWN, reason="Emergency exit unconfirmed on exchange")
+                        if hasattr(self, 'reconciliation'):
+                            self.reconciliation.safe_mode_active = True
                 except Exception as e:
                     import traceback
                     add_log_message(f"[{sym}] Error closing position during emergency stop: {e}")
                     traceback.print_exc()
                     failed_symbols.append(sym)
-                    # Force-clear local state on error
-                    self.in_position[sym] = False
-                    self.position_side[sym] = "HOLD"
-                    self.position_size[sym] = 0.0
+                    # F-02 FIX: Retain state and flag EXIT_UNKNOWN + SAFE MODE on exception
+                    ctx = self.order_state_machine.get_context(sym)
+                    ctx.transition_to(OrderState.EXIT_UNKNOWN, reason=f"Emergency exit exception: {e}")
+                    if hasattr(self, 'reconciliation'):
+                        self.reconciliation.safe_mode_active = True
         
-        DashboardState.active_positions = {}
-        DashboardState.in_position = False
-        DashboardState.position_side = "HOLD"
+        DashboardState.active_positions = {s: self.position_size[s] for s in Config.SUPPORTED_SYMBOLS if self.in_position.get(s, False)}
+        DashboardState.in_position = any(self.in_position.values())
         self.save_state()
 
         count = len(closed_symbols)
@@ -2355,13 +2376,29 @@ class PrimeSignalBot:
                     ctx.native_sl_order_id = new_sl_id
                     add_log_message(f"[{symbol}] 🛡️ Native SL replaced for remaining size {size} @ {stop_price:.4f}")
                 else:
+                    # F-04 FIX: No virtual SL fallback on live SL replacement failure.
                     ctx.native_sl_order_id = None
-                    add_log_message(f"[{symbol}] 🚨 Native SL replaced but verification failed ({new_status}). Resorting to virtual SL.")
+                    ctx.transition_to(OrderState.EXIT_UNKNOWN, reason=f"Native SL replacement failed ({new_status})")
+                    if hasattr(self, 'reconciliation'):
+                        self.reconciliation.safe_mode_active = True
+                    add_log_message(f"[{symbol}] 🚨 Native SL replacement verification failed ({new_status}). Safe mode active; executing emergency flatten.")
+                    await self.execution.emergency_flatten_position(symbol, 'BUY' if self.position_side.get(symbol) == 'LONG' else 'SELL', size, reason="SL_REPLACE_FAILED")
             else:
+                # F-04 FIX: Placement returned non-active order
                 ctx.native_sl_order_id = None
+                ctx.transition_to(OrderState.EXIT_UNKNOWN, reason="Native SL replacement returned invalid order")
+                if hasattr(self, 'reconciliation'):
+                    self.reconciliation.safe_mode_active = True
+                add_log_message(f"[{symbol}] 🚨 Native SL replacement placement failed. Safe mode active; executing emergency flatten.")
+                await self.execution.emergency_flatten_position(symbol, 'BUY' if self.position_side.get(symbol) == 'LONG' else 'SELL', size, reason="SL_REPLACE_INVALID")
         except Exception as e:
-            add_log_message(f"[{symbol}] 🚨 Exception placing new native SL: {e}")
+            # F-04 FIX: Handle exceptions fail-closed
+            add_log_message(f"[{symbol}] 🚨 Exception placing new native SL: {e}. Safe mode active; executing emergency flatten.")
             ctx.native_sl_order_id = None
+            ctx.transition_to(OrderState.EXIT_UNKNOWN, reason=f"Exception in SL replacement: {e}")
+            if hasattr(self, 'reconciliation'):
+                self.reconciliation.safe_mode_active = True
+            await self.execution.emergency_flatten_position(symbol, 'BUY' if self.position_side.get(symbol) == 'LONG' else 'SELL', size, reason="SL_REPLACE_EXCEPTION")
 
     async def exit_position(self, symbol, reason):
         # LOGIC-001 fix: Idempotent exit serialization via per-symbol exit lock

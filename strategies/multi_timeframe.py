@@ -57,9 +57,12 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         htf_ema_50 = calculate_ema(htf_df, 50)
         htf_ema_200 = calculate_ema(htf_df, 200)
         
-        latest_htf_close = htf_df['close'].iloc[-1]
-        latest_htf_ema_50 = htf_ema_50.iloc[-1]
-        latest_htf_ema_200 = htf_ema_200.iloc[-1]
+        # F-11 FIX: Evaluate HTF trend on the last CLOSED HTF candle (iloc[-2])
+        # to prevent intra-candle trend fluctuation and mid-candle noise flips.
+        htf_eval_idx = -2 if len(htf_df) >= 2 else -1
+        latest_htf_close = htf_df['close'].iloc[htf_eval_idx]
+        latest_htf_ema_50 = htf_ema_50.iloc[htf_eval_idx]
+        latest_htf_ema_200 = htf_ema_200.iloc[htf_eval_idx]
 
         if latest_htf_close > latest_htf_ema_50 > latest_htf_ema_200:
             htf_trend = 'BULLISH'

@@ -17,17 +17,77 @@ class ImmutableLedger:
         self._init_hash_chain()
 
     def _init_hash_chain(self):
-        """Reads the last record hash to preserve blockchain-style tamper-evidence."""
-        if self.ledger_file.exists():
-            try:
-                with open(self.ledger_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        if line.strip():
-                            record = json.loads(line)
-                            if 'record_hash' in record:
-                                self.last_record_hash = record['record_hash']
-            except Exception as e:
-                print(f"[LEDGER] Warning reading hash chain: {e}")
+        """Validates the entire hash chain from genesis to prevent ledger tampering."""
+        self.verify_integrity()
+
+    def verify_integrity(self) -> bool:
+        """
+        Cryptographically validates the hash chain from genesis to ensure audit integrity.
+        Raises ValueError immediately if tampering or corruption is detected.
+        """
+        if not self.ledger_file.exists():
+            self.last_record_hash = "GENESIS_HASH_PRIMESIGNAL_V250"
+            return True
+
+        current_hash = "GENESIS_HASH_PRIMESIGNAL_V250"
+        line_num = 0
+        try:
+            with open(self.ledger_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line_num += 1
+                    line = line.strip()
+                    if not line:
+                        continue
+                    record = json.loads(line)
+                    prev_hash = record.get('prev_hash')
+                    rec_hash = record.get('record_hash')
+                    event_type = record.get('event_type')
+                    record_id = record.get('record_id', f'line_{line_num}')
+
+                    if prev_hash != current_hash:
+                        raise ValueError(
+                            f"CRITICAL: Immutable ledger integrity check failed! "
+                            f"Tampering detected at line {line_num} (record {record_id}): "
+                            f"prev_hash mismatch ('{prev_hash}' != expected '{current_hash}')."
+                        )
+
+                    if event_type == 'POSITION_OPENED':
+                        raw_payload = (
+                            f"{current_hash}|{record.get('record_id')}|{record.get('symbol')}|"
+                            f"{record.get('side')}|{record.get('filled_qty')}|{record.get('fill_price')}|"
+                            f"{record.get('stop_loss')}|{record.get('timestamp')}"
+                        )
+                    elif event_type == 'POSITION_EXITED':
+                        raw_payload = (
+                            f"{current_hash}|{record.get('record_id')}|{record.get('symbol')}|"
+                            f"{record.get('exit_qty')}|{record.get('exit_price')}|"
+                            f"{record.get('realized_pnl')}|{record.get('exit_reason')}|{record.get('timestamp')}"
+                        )
+                    else:
+                        raise ValueError(
+                            f"CRITICAL: Immutable ledger integrity check failed! "
+                            f"Unknown event_type '{event_type}' at line {line_num} (record {record_id})."
+                        )
+
+                    computed_hash = hashlib.sha256(raw_payload.encode()).hexdigest()
+                    if computed_hash != rec_hash:
+                        raise ValueError(
+                            f"CRITICAL: Immutable ledger integrity check failed! "
+                            f"Tampering detected at line {line_num} (record {record_id}): "
+                            f"record_hash mismatch ('{rec_hash}' != expected '{computed_hash}')."
+                        )
+
+                    current_hash = computed_hash
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(
+                f"CRITICAL: Immutable ledger integrity check failed! "
+                f"Corrupted record or parse error at line {line_num}: {e}"
+            ) from e
+
+        self.last_record_hash = current_hash
+        return True
 
     def record_entry(self, symbol: str, side: str, requested_qty: float, filled_qty: float,
                      fill_price: float, stop_loss: float, tp1: float, tp2: float, runner_tp: float,

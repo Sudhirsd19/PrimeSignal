@@ -56,22 +56,25 @@ class ModeRequest(BaseModel):
 class TimeframeRequest(BaseModel):
     timeframe: str
 
-# ─── ATTACK-1 FIX: API Key Auth for mutating endpoints ──────────────────────
-# Without this, anyone on the internet can POST /api/change_symbol and spam
-# the bot with symbol changes, triggering WebSocket restarts and CPU spikes.
-# Set DASHBOARD_SECRET env var on Render. Omit to disable auth in dev mode.
-_DASHBOARD_SECRET = os.getenv("DASHBOARD_SECRET", "primesignal_secret_key")
+# ─── F-01 FIX: Fail-closed Dashboard API Key Authentication ─────────────────
+# Never use hardcoded secrets. Requires DASHBOARD_SECRET in environment.
+_DASHBOARD_SECRET = os.getenv("DASHBOARD_SECRET", "").strip()
 if _DASHBOARD_SECRET:
-    print(f"[SECURITY] Dashboard API key auth is ENABLED.")
+    print("[SECURITY] Dashboard API key auth is ENABLED.")
 else:
-    print(f"[SECURITY] Dashboard API key auth is DISABLED (DASHBOARD_SECRET not set).")
+    print("[SECURITY] WARNING: DASHBOARD_SECRET not set. Mutating endpoints will fail-closed.")
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 async def verify_dashboard_key(key: Optional[str] = Depends(_api_key_header)):
-    """Enforces auth for all environments. Fails closed if missing."""
-    secret = os.getenv("DASHBOARD_SECRET", _DASHBOARD_SECRET) or "primesignal_secret_key"
+    """Enforces auth for all environments. Fails closed if DASHBOARD_SECRET is unset."""
+    secret = os.getenv("DASHBOARD_SECRET", "").strip() or _DASHBOARD_SECRET
+    if not secret:
+        raise HTTPException(
+            status_code=503,
+            detail="SECURITY ERROR: DASHBOARD_SECRET is not configured in .env. Mutating actions are blocked."
+        )
     if not key or not secrets.compare_digest(key, secret):
-        raise HTTPException(status_code=403, detail="Invalid dashboard API key. Set X-API-Key header.")
+        raise HTTPException(status_code=403, detail="Invalid dashboard API key. Set valid X-API-Key header.")
 
 # Global Memory State Store
 class DashboardState:
@@ -132,11 +135,9 @@ class DashboardState:
 
 @app.get("/", response_class=HTMLResponse)
 async def get_dashboard(request: Request):
-    """Renders the main terminal dashboard page."""
-    secret = os.getenv("DASHBOARD_SECRET", _DASHBOARD_SECRET) or "primesignal_secret_key"
+    """Renders the main terminal dashboard page without leaking secrets."""
+    # F-01 FIX: Never inject server secrets into rendered HTML/JS templates.
     return templates.TemplateResponse(request, "index.html", {
-        "dashboard_secret": secret,
-        "dashboard_api_key": secret,
         "request": request
     })
 
@@ -151,41 +152,78 @@ async def change_symbol(req: SymbolRequest):
 
 @app.post("/api/set_mode", dependencies=[Depends(verify_dashboard_key)])
 async def set_mode(req: ModeRequest):
-    # FAIL-CLOSED SECURITY INVARIANT:
-    # If DASHBOARD_SECRET is not configured, LIVE trading is strictly prohibited to prevent accidental funds exposure.
+    # F-01 & F-05 FIX: Fail-closed mode switching validation
     if not req.paper_trading and not _DASHBOARD_SECRET:
         return {
             "status": "error",
             "message": "SECURITY BLOCKED: Cannot switch to LIVE REAL MONEY mode without DASHBOARD_SECRET configured in .env."
         }
 
-    Config.PAPER_TRADING = req.paper_trading
-    
-    # If bot is active, trigger mode switch side-effects
+    # F-05 FIX: Block mode switching if positions are open, reconciliation SAFE MODE is active,
+    # or execution state machine has pending/unconfirmed orders.
     if bot_instance is not None:
-        try:
-            # Tell bot to update balance immediately
-            if not req.paper_trading:
-                # Switching to LIVE: fetch live balance
-                if bot_instance.has_keys:
-                    balance = await bot_instance.execution.fetch_balance()
-                    if balance:
-                        if Config.COINDCX_TRADE_INR:
-                            inr_balance = balance.get('total', {}).get('INR', None)
-                            if inr_balance is not None:
-                                DashboardState.balance_usdt = inr_balance
-                        else:
-                            usdt_balance = balance.get('total', {}).get('USDT', None)
-                            if usdt_balance is not None:
-                                DashboardState.balance_usdt = usdt_balance
-                        DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
-            else:
-                # Switching to PAPER: reset to total virtual equity (cash + open positions)
-                DashboardState.balance_usdt = bot_instance.calculate_total_equity()
-                DashboardState.balance_base = 0.0
-        except Exception as e:
-            print(f"[MODE SWITCH] Error syncing balances: {e}")
-            
+        if hasattr(bot_instance, 'reconciliation') and getattr(bot_instance.reconciliation, 'safe_mode_active', False):
+            return {
+                "status": "error",
+                "message": "MODE SWITCH BLOCKED: System reconciliation SAFE MODE is active. Clear safe mode first."
+            }
+
+        open_symbols = []
+        for s in Config.SUPPORTED_SYMBOLS:
+            if bot_instance.in_position.get(s, False) or bot_instance.position_size.get(s, 0.0) > 0.0:
+                open_symbols.append(s)
+        if open_symbols:
+            return {
+                "status": "error",
+                "message": f"MODE SWITCH BLOCKED: Positions are currently open on ({', '.join(open_symbols)}). All positions must be flat before switching mode."
+            }
+
+        if hasattr(bot_instance, 'order_state_machine'):
+            unconfirmed = []
+            for s in Config.SUPPORTED_SYMBOLS:
+                ctx_state = getattr(bot_instance.order_state_machine.get_context(s), 'state', None)
+                if ctx_state not in ("IDLE", "EMERGENCY_FLATTENED", None):
+                    unconfirmed.append(f"{s}:{ctx_state}")
+            if unconfirmed:
+                return {
+                    "status": "error",
+                    "message": f"MODE SWITCH BLOCKED: Active or uncertain order execution states exist: {', '.join(unconfirmed)}. Cannot switch mode."
+                }
+
+        # If switching to LIVE: verify exchange API credentials and live balance authoritative check
+        if not req.paper_trading:
+            if not bot_instance.has_keys:
+                return {
+                    "status": "error",
+                    "message": "MODE SWITCH BLOCKED: Exchange API keys are not configured or invalid for LIVE mode."
+                }
+            try:
+                balance = await bot_instance.execution.fetch_balance()
+                if not balance:
+                    return {
+                        "status": "error",
+                        "message": "MODE SWITCH BLOCKED: Unable to fetch live exchange balance. Exchange connection failed."
+                    }
+                if Config.COINDCX_TRADE_INR:
+                    inr_balance = balance.get('total', {}).get('INR', None)
+                    if inr_balance is not None:
+                        DashboardState.balance_usdt = inr_balance
+                else:
+                    usdt_balance = balance.get('total', {}).get('USDT', None)
+                    if usdt_balance is not None:
+                        DashboardState.balance_usdt = usdt_balance
+                DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
+            except Exception as e:
+                return {
+                    "status": "error",
+                    "message": f"MODE SWITCH BLOCKED: Live balance verification failed: {e}"
+                }
+        else:
+            # Switching to PAPER: reset to total virtual equity
+            DashboardState.balance_usdt = bot_instance.calculate_total_equity()
+            DashboardState.balance_base = 0.0
+
+    Config.PAPER_TRADING = req.paper_trading
     mode_name = "PAPER TRADING" if req.paper_trading else "REAL MONEY"
     add_log_message(f"Trading mode switched to {mode_name}")
     return {"status": "success", "message": f"Switched to {mode_name}"}
@@ -363,26 +401,24 @@ async def reset_account(req: Optional[ResetAccountRequest] = None):
 
 @app.post("/api/clear_analytics", dependencies=[Depends(verify_dashboard_key)])
 async def clear_analytics():
-    """Clears all in-memory and disk trade history logs for fresh analytics tracking."""
+    """Clears in-memory dashboard trade analytics. Preserves on-disk forensic logs and operational limits."""
+    # F-10 FIX: Strictly block purging in LIVE mode to prevent destroying forensic records
+    if not Config.PAPER_TRADING:
+        return {
+            "status": "error",
+            "message": "SECURITY BLOCKED: Clearing trade history/analytics is prohibited while in LIVE mode."
+        }
+
     DashboardState.trades.clear()
     if bot_instance is not None:
         bot_instance.trade_history.clear()
-        if hasattr(bot_instance, 'trades_today'):
-            bot_instance.trades_today = 0
-            
-    # Truncate on-disk log files if they exist
-    for fpath in [
-        os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'trade_logs.jsonl'),
-        os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs', 'trade_decisions.jsonl')
-    ]:
-        try:
-            if os.path.exists(fpath):
-                with open(fpath, 'w', encoding='utf-8') as f:
-                    pass
-        except Exception:
-            pass
-            
-    return {"status": "success", "message": "All historical trade logs and analytics have been cleared."}
+        # F-10 FIX: NEVER reset bot_instance.trades_today to preserve circuit breaker and operational limits
+
+    # F-10 FIX: NEVER truncate on-disk audit logs (trade_logs.jsonl, trade_decisions.jsonl)
+    return {
+        "status": "success",
+        "message": "In-memory dashboard analytics cleared (on-disk forensic audit logs preserved)."
+    }
 
 class TestTradeRequest(BaseModel):
     symbol: str | None = None
@@ -794,8 +830,11 @@ async def get_trades():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    # AUD-P9-05: Enforce fail-closed dashboard authentication before accepting financial stream
-    secret = os.getenv("DASHBOARD_SECRET", _DASHBOARD_SECRET) or "primesignal_secret_key"
+    # F-01 FIX: Fail-closed dashboard authentication without default secrets
+    secret = os.getenv("DASHBOARD_SECRET", "").strip() or _DASHBOARD_SECRET
+    if not secret:
+        await websocket.close(code=1008, reason="Unauthorized: DASHBOARD_SECRET not configured on server")
+        return
     token = websocket.query_params.get("token") or websocket.query_params.get("key") or websocket.headers.get("x-api-key")
     if not token or not secrets.compare_digest(token, secret):
         await websocket.close(code=1008, reason="Unauthorized: Missing or invalid dashboard API key")

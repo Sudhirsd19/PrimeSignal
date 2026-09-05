@@ -447,10 +447,9 @@ class CoinDCXClient:
         the market, side, and quantity was executed around the timestamp.
         """
         try:
-            # 1. Check active orders. Prefer exact client identity. A heuristic
-            # fallback is accepted only when exactly one candidate exists.
+            # 1. Check active orders. F-08 FIX: Strict exact client_order_id match only.
+            # Never heuristically adopt an order based only on side, quantity, or time.
             active_orders = await self.fetch_active_orders(market=market)
-            candidates = []
             for ord in (active_orders or []):
                 ord_client_id = ord.get('client_order_id') or ord.get('clientOrderId')
                 if client_order_id and ord_client_id and str(ord_client_id) == client_order_id:
@@ -458,21 +457,9 @@ class CoinDCXClient:
                         ord, requested_qty=amount, client_order_id=client_order_id,
                         intent_id=intent_id, venue="COINDCX",
                     )
-                ord_side = (ord.get('side') or '').lower()
-                ord_qty = float(ord.get('total_quantity') or ord.get('quantity') or 0.0)
-                ord_ts = int(ord.get('created_at') or ord.get('timestamp') or 0)
-                if ord_side == side.lower() and abs(ord_qty - amount) <= 1e-5:
-                    if ord_ts >= (created_after_ts - 10000):
-                        candidates.append(ord)
-            if len(candidates) == 1:
-                return ExecutionResult.from_exchange(
-                    candidates[0], requested_qty=amount,
-                    client_order_id=client_order_id, intent_id=intent_id, venue="COINDCX",
-                )
             
-            # 2. Check recent trade history (for immediate market fills)
+            # 2. Check recent trade history. F-08 FIX: Strict exact client_order_id match only.
             recent_trades = await self.fetch_recent_trades(market=market)
-            candidates = []
             for tr in (recent_trades or []):
                 tr_client_id = tr.get('client_order_id') or tr.get('clientOrderId')
                 if client_order_id and tr_client_id and str(tr_client_id) == client_order_id:
@@ -483,23 +470,13 @@ class CoinDCXClient:
                     result.state = ExecutionState.FILLED if result.filled_qty > 0 else ExecutionState.EXECUTION_UNKNOWN
                     result.exchange_order_id = str(tr.get('order_id') or tr.get('id')) if (tr.get('order_id') or tr.get('id')) else None
                     return result
-                tr_side = (tr.get('side') or '').lower()
-                tr_qty = float(tr.get('quantity') or tr.get('total_quantity') or 0.0)
-                tr_ts = int(tr.get('created_at') or tr.get('timestamp') or 0)
-                if tr_side == side.lower() and abs(tr_qty - amount) <= 1e-5:
-                    if tr_ts >= (created_after_ts - 10000):
-                        candidates.append(tr)
-            if len(candidates) == 1:
-                result = ExecutionResult.from_exchange(
-                    candidates[0], requested_qty=amount,
-                    client_order_id=client_order_id, intent_id=intent_id, venue="COINDCX",
-                )
-                result.exchange_order_id = str(candidates[0].get('order_id') or candidates[0].get('id')) if (candidates[0].get('order_id') or candidates[0].get('id')) else None
-                result.state = ExecutionState.FILLED if result.filled_qty > 0 else ExecutionState.EXECUTION_UNKNOWN
-                return result
+
+            # F-08 FIX: No heuristic candidate matching. If no exact client ID is found,
+            # return None so state remains ambiguous and SAFE MODE protects capital.
+            return None
         except Exception as e:
             print(f"[CoinDCX RECONCILE] Error checking ambiguous order state: {e}")
-        return None
+            return None
 
     async def fetch_user_info(self):
         """Fetches user profile information from CoinDCX."""

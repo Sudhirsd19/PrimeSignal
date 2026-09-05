@@ -988,14 +988,17 @@
             }
         }
 
-        // Auto-set dashboard API key from server-injected value
-        window.DASHBOARD_API_KEY = "{{ dashboard_secret | default(dashboard_api_key | default('', true), true) }}";
-        if (window.DASHBOARD_API_KEY) {
-            localStorage.setItem('dashboard_api_key', window.DASHBOARD_API_KEY);
-        }
-
         function getDashboardApiKey() {
-            return localStorage.getItem('dashboard_api_key') || window.DASHBOARD_API_KEY || 'primesignal_secret_key';
+            let key = localStorage.getItem('dashboard_api_key') || sessionStorage.getItem('dashboard_api_key');
+            if (!key) {
+                key = prompt("Enter Dashboard Secret API Key:");
+                if (key) {
+                    key = key.trim();
+                    sessionStorage.setItem('dashboard_api_key', key);
+                    localStorage.setItem('dashboard_api_key', key);
+                }
+            }
+            return key || '';
         }
 
         function getApiHeaders() {
