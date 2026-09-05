@@ -224,7 +224,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         metadata['debug_checks']['volatility'] = 'PASS' if vol_pass else 'FAIL'
 
         # ATR-scaled dynamic zone band for VWAP/EMA pullback zones
-        zone_half_band = min(0.5 * curr_atr, curr_price * 0.003) if curr_atr > 0 else curr_price * 0.0015
+        zone_half_band = min(0.2 * curr_atr, curr_price * 0.0015) if curr_atr > 0 else curr_price * 0.001
 
         def in_bounds(price, bottom, top):
             return (bottom * (1 - Config.ZONE_BUFFER_PCT)) <= price <= (top * (1 + Config.ZONE_BUFFER_PCT))
@@ -412,16 +412,16 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
 
             rsi_trigger       = (prev_rsi < Config.RSI_OVERSOLD) or ((prev_rsi < Config.RSI_OVERSOLD + 5) and (curr_rsi >= Config.RSI_OVERSOLD))
             crossover_trigger = (prev_short <= prev_long) and (curr_short > curr_long)
-            wick_trigger      = (candle_range > 0) and ((min(trigger_open, trigger_close) - trigger_low) / candle_range >= 0.35)
-            engulfing_trigger = (trigger_close > trigger_open) and (ltf_df.iloc[-3]['close'] < ltf_df.iloc[-3]['open']) and (trigger_close > ltf_df.iloc[-3]['open'])
+            wick_trigger      = (candle_range > 0) and ((min(trigger_open, trigger_close) - trigger_low) / candle_range >= 0.65)
+            engulfing_trigger = (trigger_close > trigger_open) and (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-2]['open']) and (trigger_close > ltf_df.iloc[-2]['open'])
             trigger_pass      = rsi_trigger or crossover_trigger or wick_trigger or engulfing_trigger
             metadata['debug_checks']['trigger'] = 'PASS' if trigger_pass else 'FAIL'
 
-            vwap_pass = curr_vwap > prev_vwap - (prev_vwap * vwap_tol)
+            vwap_pass = curr_vwap >= prev_vwap
             metadata['debug_checks']['vwap'] = 'PASS' if vwap_pass else 'FAIL'
 
             # Micro-BOS: Reversal candle confirming buyers took control
-            micro_bos = (ltf_df.iloc[-2]['close'] > ltf_df.iloc[-2]['open']) and (ltf_df.iloc[-2]['close'] > ltf_df.iloc[-3]['high'])
+            micro_bos = (ltf_df.iloc[-2]['close'] > ltf_df.iloc[-2]['open']) and (ltf_df.iloc[-2]['close'] > ltf_df.iloc[-2]['high'])
             
             # RSI Divergence confluence
             rsi_div_bonus = 0
@@ -522,7 +522,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 metadata['setup_type'] = entry_type
                 metadata['zone_id']    = f"{entry_type}_{zone_ts}"
                 metadata['setup_type'] = entry_type
-                trig_str = 'RSI Recovery' if rsi_trigger else 'Golden Cross'
+                trig_str = 'RSI Recovery' if rsi_trigger else 'Golden Cross' if crossover_trigger else 'Wick Rejection' if wick_trigger else 'Engulfing' if engulfing_trigger else 'Unknown'
                 rel_str = ' (RELAXED)' if relaxed else ''
                 metadata['reason']     = f"{reason} | Trigger: {trig_str}{rel_str}"
                 return "BUY", metadata
@@ -615,16 +615,16 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
 
             rsi_trigger       = (prev_rsi > Config.RSI_OVERBOUGHT) or ((prev_rsi > Config.RSI_OVERBOUGHT - 5) and (curr_rsi <= Config.RSI_OVERBOUGHT))
             crossover_trigger = (prev_short >= prev_long) and (curr_short < curr_long)
-            wick_trigger      = (candle_range > 0) and ((trigger_high - max(trigger_open, trigger_close)) / candle_range >= 0.35)
-            engulfing_trigger = (trigger_close < trigger_open) and (ltf_df.iloc[-3]['close'] > ltf_df.iloc[-3]['open']) and (trigger_close < ltf_df.iloc[-3]['open'])
+            wick_trigger      = (candle_range > 0) and ((trigger_high - max(trigger_open, trigger_close)) / candle_range >= 0.65)
+            engulfing_trigger = (trigger_close < trigger_open) and (ltf_df.iloc[-2]['close'] > ltf_df.iloc[-2]['open']) and (trigger_close < ltf_df.iloc[-2]['open'])
             trigger_pass      = rsi_trigger or crossover_trigger or wick_trigger or engulfing_trigger
             metadata['debug_checks']['trigger'] = 'PASS' if trigger_pass else 'FAIL'
 
-            vwap_pass = curr_vwap < prev_vwap + (prev_vwap * vwap_tol)
+            vwap_pass = curr_vwap <= prev_vwap
             metadata['debug_checks']['vwap'] = 'PASS' if vwap_pass else 'FAIL'
 
             # Micro-BOS: Reversal candle confirming sellers took control
-            micro_bos = (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-2]['open']) and (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-3]['low'])
+            micro_bos = (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-2]['open']) and (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-2]['low'])
             
             # RSI Divergence confluence
             rsi_div_bonus = 0
@@ -723,7 +723,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 metadata['mode'] = "RELAXED" if relaxed else "STRICT"
                 metadata['setup_type'] = entry_type
                 metadata['zone_id']    = f"{entry_type}_{zone_ts}"
-                trig_str = 'RSI Recovery' if rsi_trigger else 'Death Cross'
+                trig_str = 'RSI Recovery' if rsi_trigger else 'Death Cross' if crossover_trigger else 'Wick Rejection' if wick_trigger else 'Engulfing' if engulfing_trigger else 'Unknown'
                 rel_str = ' (RELAXED)' if relaxed else ''
                 metadata['reason']     = f"{reason} | Trigger: {trig_str}{rel_str}"
                 return "SELL", metadata
