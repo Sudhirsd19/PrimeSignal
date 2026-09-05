@@ -35,6 +35,7 @@ class TestPhase7FinalGate(unittest.IsolatedAsyncioTestCase):
         Config.INTENT_JOURNAL_FILE = str(self.journal_file)
         Config.PAPER_TRADING = False
         Config.EXCHANGE_TYPE = "futures"
+        Config.TRADING_VENUE = "BINANCE"
         Config.COINDCX_ACTIVE = False
 
     def tearDown(self):
