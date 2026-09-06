@@ -2502,10 +2502,6 @@ class PrimeSignalBot:
                 if is_full_close and ctx.native_sl_order_id and self.has_keys and not Config.PAPER_TRADING:
                     await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
                     ctx.native_sl_order_id = None
-                elif not is_full_close and ctx.native_sl_order_id and self.has_keys and not Config.PAPER_TRADING:
-                    # Cancel existing SL, transition to PROTECTED will re-create it for remainder
-                    await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
-                    ctx.native_sl_order_id = None
 
                 is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
                 rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
@@ -2587,6 +2583,21 @@ class PrimeSignalBot:
                     self.position_size[symbol] = remaining_size
                     ctx.filled_qty = remaining_size
                     ctx.transition_to(OrderState.PROTECTED, reason=f"Partial exit executed ({actual_exit} filled, {remaining_size} remaining)")
+                    
+                    # S-01 Fix: Actively resize or re-place native stop loss for remaining position
+                    if self.has_keys and not Config.PAPER_TRADING and remaining_size > 0:
+                        sl_side = 'sell' if self.position_side[symbol] == 'LONG' else 'buy'
+                        if ctx.native_sl_order_id:
+                            await self._resize_native_sl_safe(symbol, sl_side, remaining_size, self.stop_loss[symbol])
+                        else:
+                            try:
+                                new_sl = await self.execution.place_native_stop_loss(symbol, sl_side, remaining_size, self.stop_loss[symbol])
+                                if self._is_active_sl_order(new_sl):
+                                    new_sl_id = str(new_sl['id']) if isinstance(new_sl, dict) else str(new_sl.exchange_order_id)
+                                    ctx.native_sl_order_id = new_sl_id
+                                    add_log_message(f"[{symbol}] 🛡️ Native SL placed for remaining size {remaining_size} @ {self.stop_loss[symbol]:.4f}")
+                            except Exception as e:
+                                add_log_message(f"[{symbol}] 🚨 Failed to place native SL on partial exit: {e}")
 
                 # Record in Immutable Ledger
                 self.immutable_ledger.record_exit(

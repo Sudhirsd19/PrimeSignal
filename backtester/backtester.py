@@ -64,6 +64,13 @@ class BacktestEngine:
         fee_rate: float = float(getattr(Config, 'FEE_RATE', 0.001))
         slippage_pct: float = float(getattr(Config, 'MAX_SLIPPAGE_PCT', 0.002))
 
+        # L-01 Fix: Determine HTF bar duration to strictly exclude in-progress (unclosed) HTF bars
+        if len(htf_df) > 1 and hasattr(htf_df.index, 'to_series'):
+            diffs = htf_df.index.to_series().diff().dropna()
+            htf_bar_duration = diffs.median() if not diffs.empty else pd.Timedelta(hours=1)
+        else:
+            htf_bar_duration = pd.Timedelta(hours=1)
+
         # We start loop from index where indicators are warmed up
         start_idx = max(Config.LONG_EMA * 4, 100)
         if start_idx >= len(ltf_df) - 50:
@@ -84,8 +91,8 @@ class BacktestEngine:
             # For LTF, we use index up to i (meaning candle i is the current live candle, i-1 is the last completed)
             sub_ltf = ltf_df.iloc[max(0, i-250):i+1]
             
-            # For HTF, we can only see candles that closed BEFORE the current LTF timestamp (subtract 1h so unclosed bar is excluded)
-            sub_htf = htf_df[htf_df.index <= (ltf_time - pd.Timedelta(hours=1))].iloc[-250:]
+            # L-01 Fix: Exclude in-progress HTF bar by subtracting the exact HTF bar duration
+            sub_htf = htf_df[htf_df.index <= (ltf_time - htf_bar_duration)].iloc[-250:]
             
             current_close: float = float(curr_candle['close'])
             current_high: float = float(curr_candle['high'])
