@@ -436,7 +436,7 @@ class PrimeSignalBot:
                     ctx.transition_to(OrderState.CLOSED, reason="Manual account reset")
                     ctx.native_sl_order_id = None
                     ctx.entry_order_id = None
-                    ctx.entry_intent_id = None
+                    ctx.intent_id = None
 
         self.traded_zones_cache.clear()
         self.trade_history.clear()
@@ -595,7 +595,7 @@ class PrimeSignalBot:
     def calculate_total_equity(self):
         current_equity = self._dry_run_balance_usdt
         is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
-        rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
+        rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
         if rate <= 0:
             rate = 85.0
 
@@ -944,9 +944,9 @@ class PrimeSignalBot:
                 tp2_mult = 1.8
                 ml_confidence_weight = -1
             else:
-                tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.2))
+                tp2_mult = getattr(Config, 'RISK_REWARD_RATIO', 2.2)
 
-            tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5))
+            tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)
 
             if signal == "BUY":
                 metadata['tp1'] = entry_price + (tp1_mult * risk_usdt) + fee_adj
@@ -964,8 +964,8 @@ class PrimeSignalBot:
             # E-01 Fix: Use 'or entry_price' to handle None explicitly set by strategy
             risk_usdt = abs((metadata.get('stop_loss') or entry_price) - entry_price)
             fee_adj = entry_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
-            tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5))
-            tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.2))
+            tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)
+            tp2_mult = getattr(Config, 'RISK_REWARD_RATIO', 2.2)
             if signal == "BUY":
                 metadata['tp1'] = entry_price + (tp1_mult * risk_usdt) + fee_adj
                 metadata['tp2'] = entry_price + (tp2_mult * risk_usdt) + fee_adj
@@ -1011,7 +1011,7 @@ class PrimeSignalBot:
             add_log_message(f"[{symbol}] Cluster Loss Penalty: Risk slashed by 50%.")
             
         # Runner Logic Metadata
-        tp1_scale = float(getattr(Config, 'TP1_SCALE_OUT_PCT', 0.65))
+        tp1_scale = getattr(Config, 'TP1_SCALE_OUT_PCT', 0.65)
         metadata['tp1_size'] = tp1_scale
         metadata['tp2_size'] = round((1.0 - tp1_scale) * 0.65, 2)
         metadata['runner_size'] = round(1.0 - metadata['tp1_size'] - metadata['tp2_size'], 2)
@@ -1045,7 +1045,7 @@ class PrimeSignalBot:
         async with self.risk.portfolio_lock:
             open_count, total_risk, longs_count, shorts_count = await self.get_open_positions_info()
             max_open_trades = int(getattr(Config, 'MAX_OPEN_TRADES', 2))
-            max_risk_cap = float(getattr(Config, 'MAX_PORTFOLIO_RISK_PCT', 0.06))
+            max_risk_cap = getattr(Config, 'MAX_PORTFOLIO_RISK_PCT', 0.06)
             
             # Account for in-flight reservations
             effective_open_count = open_count + self.risk.reserved_open_count
@@ -1135,7 +1135,7 @@ class PrimeSignalBot:
             
             is_inr = getattr(Config, 'COINDCX_TRADE_INR', False) if not Config.PAPER_TRADING else (getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR')
             quote_curr = symbol.split('/')[1] if '/' in symbol else "USDT"
-            conversion_rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
+            conversion_rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
             if is_inr and not Config.PAPER_TRADING and hasattr(self.execution, 'fetch_usdt_inr_rate'):
                 if inspect.iscoroutinefunction(self.execution.fetch_usdt_inr_rate):
                     dynamic_rate = await self.execution.fetch_usdt_inr_rate(side=signal)
@@ -1317,8 +1317,8 @@ class PrimeSignalBot:
                     self.partial_tp_taken[symbol] = False
                     self.tp2_taken[symbol] = False
                     r_amount = abs(sl - fill_price)
-                    tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5))
-                    tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.2))
+                    tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)
+                    tp2_mult = getattr(Config, 'RISK_REWARD_RATIO', 2.2)
                     self.take_profit_1r[symbol] = float(fill_price + (tp1_mult * r_amount) + fee_adj)
                     self.take_profit_2r[symbol] = float(fill_price + (tp2_mult * r_amount) + fee_adj)
                     self.take_profit[symbol] = float(fill_price + (4.0 * r_amount) + fee_adj)
@@ -1524,8 +1524,8 @@ class PrimeSignalBot:
                     self.partial_tp_taken[symbol] = False
                     self.tp2_taken[symbol] = False
                     r_amount = abs(sl - fill_price)
-                    tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5))
-                    tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.2))
+                    tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)
+                    tp2_mult = getattr(Config, 'RISK_REWARD_RATIO', 2.2)
                     self.take_profit_1r[symbol] = float(fill_price - (tp1_mult * r_amount) - fee_adj)
                     self.take_profit_2r[symbol] = float(fill_price - (tp2_mult * r_amount) - fee_adj)
                     self.take_profit[symbol] = float(fill_price - (4.0 * r_amount) - fee_adj)
@@ -1695,12 +1695,12 @@ class PrimeSignalBot:
                         
                         if self.position_side[symbol] == "LONG":
                             self.highest_price_reached[symbol] = max(self.highest_price_reached[symbol], curr_price)
-                            fee_adj = self.entry_price[symbol] * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)); r_dist = (self.take_profit_1r[symbol] - self.entry_price[symbol] - fee_adj) / tp1_mult if self.position_side[symbol] == 'LONG' else (self.entry_price[symbol] - self.take_profit_1r[symbol] - fee_adj) / tp1_mult; r_dist = r_dist if r_dist > 0 else abs(self.entry_price[symbol] - self.stop_loss[symbol])
+                            fee_adj = self.entry_price[symbol] * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5); r_dist = (self.take_profit_1r[symbol] - self.entry_price[symbol] - fee_adj) / tp1_mult if self.position_side[symbol] == 'LONG' else (self.entry_price[symbol] - self.take_profit_1r[symbol] - fee_adj) / tp1_mult; r_dist = r_dist if r_dist > 0 else abs(self.entry_price[symbol] - self.stop_loss[symbol])
                             
                             # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven
                             fee_buffer_pct = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
                             fee_offset = self.entry_price[symbol] * fee_buffer_pct
-                            tsl_activation = float(getattr(Config, 'TSL_ACTIVATION_R', 1.2))
+                            tsl_activation = getattr(Config, 'TSL_ACTIVATION_R', 1.2)
                             min_required_profit = max(tsl_activation * r_dist, fee_offset * 1.5)
                             
                             # Only activate Breakeven after TP1 profit is secured OR price has reached full activation threshold
@@ -1747,7 +1747,7 @@ class PrimeSignalBot:
                             
                             # TP1 Scale-Out (80% at 2.0R, or 100% Full Exit)
                             if not self.partial_tp_taken[symbol] and curr_price >= self.take_profit_1r[symbol]:
-                                tp1_pct = float(getattr(Config, 'TP1_SCALE_OUT_PCT', 0.65))
+                                tp1_pct = getattr(Config, 'TP1_SCALE_OUT_PCT', 0.65)
                                 if tp1_pct >= 0.999:
                                     add_log_message(f"[{symbol}] 🎯 Target 1 hit! Full 100% profit booking initiated.")
                                     await self.exit_position(symbol, "TAKE_PROFIT_1")
@@ -1756,12 +1756,13 @@ class PrimeSignalBot:
                                 tp1_size = self.position_size[symbol] * tp1_pct
                                 tp1_success = False
                                 tp1_order = None
+                                is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+                                rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
+                                
                                 if self.has_keys and not Config.PAPER_TRADING:
                                     tp1_order = await self.execution.place_order('sell', 'market', tp1_size, symbol=symbol, is_exit_order=True)
                                     tp1_success = self._is_truthy_fill(tp1_order)
                                 else:
-                                    is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
-                                    rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
                                     self._dry_run_balance_usdt += tp1_size * curr_price * (rate if is_inr else 1.0)
                                     tp1_success = True
                                 if tp1_success:
@@ -1855,12 +1856,12 @@ class PrimeSignalBot:
                                 tp2_size = self.position_size[symbol]
                                 tp2_success = False
                                 tp2_order = None
+                                is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+                                rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
                                 if self.has_keys and not Config.PAPER_TRADING:
                                     tp2_order = await self.execution.place_order('sell', 'market', tp2_size, symbol=symbol, is_exit_order=True)
                                     tp2_success = self._is_truthy_fill(tp2_order)
                                 else:
-                                    is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
-                                    rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
                                     self._dry_run_balance_usdt += tp2_size * curr_price * (rate if is_inr else 1.0)
                                     tp2_success = True
                                 if tp2_success:
@@ -1957,12 +1958,12 @@ class PrimeSignalBot:
                                 
                         elif self.position_side[symbol] == "SHORT":
                             self.lowest_price_reached[symbol] = min(self.lowest_price_reached[symbol], curr_price)
-                            fee_adj = self.entry_price[symbol] * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)); r_dist = (self.take_profit_1r[symbol] - self.entry_price[symbol] - fee_adj) / tp1_mult if self.position_side[symbol] == 'LONG' else (self.entry_price[symbol] - self.take_profit_1r[symbol] - fee_adj) / tp1_mult; r_dist = r_dist if r_dist > 0 else abs(self.entry_price[symbol] - self.stop_loss[symbol])
+                            fee_adj = self.entry_price[symbol] * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5); r_dist = (self.take_profit_1r[symbol] - self.entry_price[symbol] - fee_adj) / tp1_mult if self.position_side[symbol] == 'LONG' else (self.entry_price[symbol] - self.take_profit_1r[symbol] - fee_adj) / tp1_mult; r_dist = r_dist if r_dist > 0 else abs(self.entry_price[symbol] - self.stop_loss[symbol])
                             
                             # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven
                             fee_buffer_pct = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
                             fee_offset = self.entry_price[symbol] * fee_buffer_pct
-                            tsl_activation = float(getattr(Config, 'TSL_ACTIVATION_R', 1.2))
+                            tsl_activation = getattr(Config, 'TSL_ACTIVATION_R', 1.2)
                             min_required_profit = max(tsl_activation * r_dist, fee_offset * 1.5)
                             
                             # Only activate Breakeven after TP1 profit is secured OR price has reached full activation threshold
@@ -2009,7 +2010,7 @@ class PrimeSignalBot:
                             
                             # TP1 Scale-Out (80% at 2.0R, or 100% Full Exit)
                             if not self.partial_tp_taken[symbol] and curr_price <= self.take_profit_1r[symbol]:
-                                tp1_pct = float(getattr(Config, 'TP1_SCALE_OUT_PCT', 0.65))
+                                tp1_pct = getattr(Config, 'TP1_SCALE_OUT_PCT', 0.65)
                                 if tp1_pct >= 0.999:
                                     add_log_message(f"[{symbol}] 🎯 Target 1 hit! Full 100% profit booking initiated.")
                                     await self.exit_position(symbol, "TAKE_PROFIT_1")
@@ -2018,15 +2019,16 @@ class PrimeSignalBot:
                                 tp1_size = self.position_size[symbol] * tp1_pct
                                 tp1_success = False
                                 tp1_order = None
+                                is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+                                rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
+
                                 if self.has_keys and not Config.PAPER_TRADING:
                                     tp1_order = await self.execution.place_order('buy', 'market', tp1_size, symbol=symbol, is_exit_order=True)
                                     tp1_success = self._is_truthy_fill(tp1_order)
                                 else:
-                                    is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
-                                    rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
-                                    # C-03 FIX (TP1 SHORT): Return collateral + pnl; avoid double-counting entry_notional
-                                    tp1_pnl_calc = tp1_size * (self.entry_price[symbol] - curr_price)
-                                    tp1_proceeds_usdt = tp1_size * self.entry_price[symbol] + tp1_pnl_calc
+                                    # Short TP cash return = entry_notional + (entry_notional - exit_notional) = profit + collateral
+                                    tp1_pnl_usdt = tp1_size * (self.entry_price[symbol] - curr_price)
+                                    tp1_proceeds_usdt = tp1_size * self.entry_price[symbol] + tp1_pnl_usdt
                                     self._dry_run_balance_usdt += tp1_proceeds_usdt * (rate if is_inr else 1.0)
                                     tp1_success = True
                                 if tp1_success:
@@ -2120,12 +2122,13 @@ class PrimeSignalBot:
                                 tp2_size = self.position_size[symbol]
                                 tp2_success = False
                                 tp2_order = None
+                                is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+                                rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
+
                                 if self.has_keys and not Config.PAPER_TRADING:
                                     tp2_order = await self.execution.place_order('buy', 'market', tp2_size, symbol=symbol, is_exit_order=True)
                                     tp2_success = self._is_truthy_fill(tp2_order)
                                 else:
-                                    is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
-                                    rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
                                     # C-03 FIX: Return collateral (entry_notional) + pnl only
                                     # entry_notional was deducted at SELL entry; buying back at curr_price frees: entry_notional + (entry - curr) * size
                                     tp2_pnl = tp2_size * (self.entry_price[symbol] - curr_price)
@@ -2263,7 +2266,7 @@ class PrimeSignalBot:
                         entry_val = self.entry_price[s]
                         is_profit_locked = (is_long and sl_val >= entry_val) or (not is_long and sl_val <= entry_val and sl_val > 0)
                         
-                        fee_adj = entry_val * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)); r_dist_d = (self.take_profit_1r[s] - entry_val - fee_adj) / tp1_mult if is_long else (entry_val - self.take_profit_1r[s] - fee_adj) / tp1_mult; r_dist = r_dist_d if r_dist_d > 0 else (abs(entry_val - sl_val) if abs(entry_val - sl_val) > 0 else (entry_val * 0.01))
+                        fee_adj = entry_val * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5); r_dist_d = (self.take_profit_1r[s] - entry_val - fee_adj) / tp1_mult if is_long else (entry_val - self.take_profit_1r[s] - fee_adj) / tp1_mult; r_dist = r_dist_d if r_dist_d > 0 else (abs(entry_val - sl_val) if abs(entry_val - sl_val) > 0 else (entry_val * 0.01))
                         target_1r = self.take_profit_1r[s] if self.take_profit_1r[s] > 0 else (entry_val + 1.0 * r_dist if is_long else entry_val - 1.0 * r_dist)
                         target_2r = self.take_profit_2r[s] if self.take_profit_2r[s] > 0 else (entry_val + 2.5 * r_dist if is_long else entry_val - 2.5 * r_dist)
                         final_tp = self.take_profit[s] if self.take_profit[s] > 0 else (entry_val + 4.0 * r_dist if is_long else entry_val - 4.0 * r_dist)
@@ -2504,7 +2507,7 @@ class PrimeSignalBot:
                     ctx.native_sl_order_id = None
 
                 is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
-                rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
+                rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
                 if self.position_side[symbol] == "LONG":
                     pnl_pct = (exit_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
                     pnl_usdt = actual_exit * (exit_price - self.entry_price[symbol])
@@ -2559,7 +2562,7 @@ class PrimeSignalBot:
                     'pnl_usdt_gross': round(pnl_usdt_gross, 4),
                     'total_fees': round(self.accumulated_fees.get(symbol, 0.0), 4),
                     'entry_fx_rate': self.entry_fx_rate.get(symbol, 0.0),
-                    'exit_fx_rate': float(getattr(Config, 'USDT_INR_RATE', 85.0)),
+                    'exit_fx_rate': getattr(Config, 'USDT_INR_RATE', 85.0),
                     'pnl_pct': round(pnl_pct, 2),
                     'entry_time': entry_ts,
                     'exit_time': exit_ts,
@@ -2695,7 +2698,7 @@ class PrimeSignalBot:
                         'entry_time': entry_ts,
                         'exit_time': exit_ts,
                         'entry_fx_rate': self.entry_fx_rate.get(symbol, 0.0),
-                        'exit_fx_rate': float(getattr(Config, 'USDT_INR_RATE', 85.0)),
+                        'exit_fx_rate': getattr(Config, 'USDT_INR_RATE', 85.0),
                     }
                     # Persist consolidated lifecycle audit summary to disk only (not in live execution trades)
                     try:
