@@ -163,19 +163,32 @@ class MLSignalConfirmator:
             self.is_trained = True
 
             # FIX-4: Print class balance so skewed training data is immediately visible
-            bull_pct = y.mean() * 100
-            bear_pct = 100 - bull_pct
-            print(f"[ML] Class balance -- Bullish: {bull_pct:.1f}%  Bearish: {bear_pct:.1f}%")
-            if bull_pct > 70 or bull_pct < 30:
-                print(f"[ML] [!] IMBALANCED TRAINING DATA: {bull_pct:.1f}% bullish labels. Model predictions will be biased.")
+            n_total = len(y)
+            bull_pct  = (y == 1).sum() / n_total * 100
+            bear_pct  = (y == 2).sum() / n_total * 100
+            neutral_pct = (y == 0).sum() / n_total * 100
+            print(f"[ML] Class balance -- Long-win: {bull_pct:.1f}%  Short-win: {bear_pct:.1f}%  Neutral: {neutral_pct:.1f}%")
+            if bull_pct > 70 or bull_pct < 15:
+                print(f"[ML] [!] IMBALANCED: Long-win {bull_pct:.1f}% is skewed. Model may be biased.")
+            if bear_pct > 70 or bear_pct < 15:
+                print(f"[ML] [!] IMBALANCED: Short-win {bear_pct:.1f}% is skewed. Model may be biased.")
 
             # FIX-C: TimeSeriesSplit cross-validation to detect overfitting.
             # Uses 5 temporal folds so later folds always test on data the model hasn't seen.
             # AUC >= 0.60 = model has real edge. AUC <= 0.55 = near-random, increase data.
+            # NOTE: multi_class='ovr' required because we now use 3-class labels {0, 1, 2}
             try:
                 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
+                from sklearn.metrics import make_scorer, roc_auc_score
                 if len(X) >= 100:
                     tscv = TimeSeriesSplit(n_splits=min(5, len(X) // 50))
+                    # multi_class='ovr' + average='macro' handles 3 classes correctly
+                    multiclass_auc = make_scorer(
+                        roc_auc_score,
+                        multi_class='ovr',
+                        average='macro',
+                        needs_proba=True
+                    )
                     cv_scores = cross_val_score(
                         GradientBoostingClassifier(
                             n_estimators=self.model.n_estimators,
@@ -184,11 +197,11 @@ class MLSignalConfirmator:
                             subsample=self.model.subsample,
                             random_state=42
                         ),
-                        X, y, cv=tscv, scoring='roc_auc', n_jobs=-1
+                        X, y, cv=tscv, scoring=multiclass_auc, n_jobs=-1
                     )
                     mean_auc = cv_scores.mean()
                     std_auc  = cv_scores.std()
-                    print(f"[ML] Cross-Val AUC: {mean_auc:.3f} +/- {std_auc:.3f}  (folds: {tscv.n_splits})")
+                    print(f"[ML] Cross-Val AUC (OVR macro): {mean_auc:.3f} +/- {std_auc:.3f}  (folds: {tscv.n_splits})")
                     if mean_auc < 0.55:
                         print(f"[ML] [!] WEAK MODEL: AUC {mean_auc:.3f} is near-random (0.5 = coin flip).")
                         print(f"[ML]     -> Fetch 90+ days of data and retrain for a reliable signal filter.")
