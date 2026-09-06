@@ -171,7 +171,7 @@ class BacktestEngine:
                             consecutive_losses = 0
                             if setup_mode == 'RELAXED': relaxed_losses = 0
                             
-                        if consecutive_losses >= 3:
+                        if consecutive_losses >= getattr(Config, 'CONSECUTIVE_LOSS_LIMIT', 2):
                             global_pause_until = ltf_ts + 3600
                             consecutive_losses = 0
                         if relaxed_losses >= 2:
@@ -212,7 +212,7 @@ class BacktestEngine:
                             consecutive_losses = 0
                             if setup_mode == 'RELAXED': relaxed_losses = 0
                             
-                        if consecutive_losses >= 3:
+                        if consecutive_losses >= getattr(Config, 'CONSECUTIVE_LOSS_LIMIT', 2):
                             global_pause_until = ltf_ts + 3600
                             consecutive_losses = 0
                         if relaxed_losses >= 2:
@@ -281,7 +281,7 @@ class BacktestEngine:
                             consecutive_losses = 0
                             if setup_mode == 'RELAXED': relaxed_losses = 0
                             
-                        if consecutive_losses >= 3:
+                        if consecutive_losses >= getattr(Config, 'CONSECUTIVE_LOSS_LIMIT', 2):
                             global_pause_until = ltf_ts + 3600
                             consecutive_losses = 0
                         if relaxed_losses >= 2:
@@ -323,7 +323,7 @@ class BacktestEngine:
                             consecutive_losses = 0
                             if setup_mode == 'RELAXED': relaxed_losses = 0
                             
-                        if consecutive_losses >= 3:
+                        if consecutive_losses >= getattr(Config, 'CONSECUTIVE_LOSS_LIMIT', 2):
                             global_pause_until = ltf_ts + 3600
                             consecutive_losses = 0
                         if relaxed_losses >= 2:

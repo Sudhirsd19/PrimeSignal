@@ -84,13 +84,12 @@ class MLSignalConfirmator:
         # Drop rows where indicators are not fully computed yet
         data.dropna(subset=feature_cols, inplace=True)
 
-        # FIX-B: Triple-Barrier Label — aligned with strategy's actual SL/TP logic.
         # Old label: "did price go up > 0.1% in 5 bars?" — unrelated to trade outcomes.
         # New label: "did price hit TP1 (+0.6%) before SL (-0.5%) within 20 bars?"
         #   → Teaches the model to predict TRADE SUCCESS, not raw price direction.
         #   → 0.6% = TP1 at 1.2R of 0.5% SL (matching Config.MIN_SL_PCT / MIN_RISK_REWARD_RATIO)
         tp_barrier  = float(getattr(Config, 'ML_LABEL_TP_PCT',  0.006))  # +0.6%
-        sl_barrier  = float(getattr(Config, 'ML_LABEL_SL_PCT', -0.005))  # -0.5%
+        sl_barrier  = abs(float(getattr(Config, 'ML_LABEL_SL_PCT', -0.005)))  # 0.5%
         lookahead   = int(getattr(Config,   'ML_LABEL_LOOKAHEAD', 20))   # max 20 bars
 
         close_vals = data['close'].values
@@ -101,14 +100,27 @@ class MLSignalConfirmator:
             entry = close_vals[idx]
             if entry <= 0:
                 continue
-            hit = 0  # default: neither barrier hit → label 0 (unfavourable)
+            hit = 0  # default: neither barrier hit -> label 0 (sideways / whipsaw)
+            long_alive = True
+            short_alive = True
             for fwd in range(1, min(lookahead + 1, n - idx)):
                 ret = (close_vals[idx + fwd] - entry) / entry
-                if ret >= tp_barrier:
-                    hit = 1   # TP hit first → favourable trade
+                
+                # Check SL violations first
+                if long_alive and ret <= -sl_barrier:
+                    long_alive = False
+                if short_alive and ret >= sl_barrier:
+                    short_alive = False
+                    
+                # Check TP targets
+                if long_alive and ret >= tp_barrier:
+                    hit = 1   # Long TP hit first -> favourable long
                     break
-                if ret <= sl_barrier:
-                    hit = 0   # SL hit first → unfavourable trade
+                if short_alive and ret <= -tp_barrier:
+                    hit = 2   # Short TP hit first -> favourable short
+                    break
+                    
+                if not long_alive and not short_alive:
                     break
             labels[idx] = hit
 
@@ -232,8 +244,15 @@ class MLSignalConfirmator:
         try:
             feature_row = self._extract_feature_row(df)
 
-            # Predict probability of price going up (target = 1)
-            prob_up = self.model.predict_proba(feature_row)[0][1]
+            # Predict probabilities for classes 1 (Up) and 2 (Down)
+            probs = self.model.predict_proba(feature_row)[0]
+            classes = self.model.classes_
+            
+            prob_up = 0.0
+            prob_down = 0.0
+            for i, c in enumerate(classes):
+                if c == 1: prob_up = float(probs[i])
+                elif c == 2: prob_down = float(probs[i])
 
             # Confirmation thresholds
             if signal_type == "BUY":
@@ -241,8 +260,7 @@ class MLSignalConfirmator:
                 confirmed = prob_up >= Config.ML_CONFIRMATION_THRESHOLD
                 return confirmed, prob_up
             elif signal_type == "SELL":
-                # For sell signal, we want high probability of price going down (low prob of going up)
-                prob_down = 1.0 - prob_up
+                # For sell signal, we want high probability of price going down
                 confirmed = prob_down >= Config.ML_CONFIRMATION_THRESHOLD
                 return confirmed, prob_down
 
@@ -261,7 +279,10 @@ class MLSignalConfirmator:
 
         try:
             feature_row = self._extract_feature_row(df)
-            return float(self.model.predict_proba(feature_row)[0][1])
+            probs = self.model.predict_proba(feature_row)[0]
+            for i, c in enumerate(self.model.classes_):
+                if c == 1: return float(probs[i])
+            return 0.5
         except Exception as e:
             print(f"WARNING: Error predicting ML bias: {e}")
             return 0.5
