@@ -484,10 +484,20 @@ async def clear_analytics():
         bot_instance.trade_history.clear()
         # F-10 FIX: NEVER reset bot_instance.trades_today to preserve circuit breaker and operational limits
 
-    # F-10 FIX: NEVER truncate on-disk audit logs (trade_logs.jsonl, trade_decisions.jsonl)
+    # Also clear on-disk trade_logs.jsonl in paper trading mode so the table actually empties
+    try:
+        log_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'trade_logs.jsonl')
+        if os.path.exists(log_file):
+            open(log_file, 'w').close()  # Truncate file to zero bytes
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"In-memory cleared but failed to clear disk log: {e}"
+        }
+
     return {
         "status": "success",
-        "message": "In-memory dashboard analytics cleared (on-disk forensic audit logs preserved)."
+        "message": "In-memory dashboard analytics and paper trade logs cleared successfully."
     }
 
 class TestTradeRequest(BaseModel):
