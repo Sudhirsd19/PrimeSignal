@@ -28,7 +28,6 @@ jobs:
                   raise SystemExit('FAIL-CLOSED: TP1_SCALE_OUT_PCT marker not found')
               s = s.replace(marker, marker + "\n    TP2_SCALE_OUT_OF_REMAINING_PCT = 0.65", 1)
           p.write_text(s, encoding='utf-8')
-          print('TP2 remediation applied')
       - name: Validate
         run: |
           python -m py_compile main.py config.py
