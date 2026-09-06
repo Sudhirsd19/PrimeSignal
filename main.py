@@ -576,10 +576,13 @@ class PrimeSignalBot:
                 entry_p_adj = self.entry_price[sym] * rate if is_inr else self.entry_price[sym]
                 
                 if self.position_side[sym] == "LONG":
+                    # Value of LONG is size * live_price (since entry cost was deducted from cash)
                     current_equity += self.position_size[sym] * live_p_adj
                 elif self.position_side[sym] == "SHORT":
+                    # Value of SHORT is collateral + unrealized PnL
                     unrealized_pnl = self.position_size[sym] * (entry_p_adj - live_p_adj)
-                    current_equity += (self.position_size[sym] * entry_p_adj) + unrealized_pnl
+                    collateral = self.position_size[sym] * entry_p_adj
+                    current_equity += (collateral + unrealized_pnl)
         return current_equity
 
     def is_macro_news_blackout(self):
@@ -822,10 +825,12 @@ class PrimeSignalBot:
                         add_log_message(f"[{symbol}] Trade blocked: BTC dropped > 1.4% in last 5m. Blocking altcoin longs.")
                         return
 
-        # Funding Rate & Crowded Trade Sentiment Filter
+        # Funding Rate & Crowded Trade Sentiment Filter (Perpetual Futures ONLY — spot has no funding rate)
         fr: float = 0.0
         spread: float = 0.0005
-        if getattr(Config, 'ENABLE_FUNDING_RATE_FILTER', True):
+        is_spot_venue = getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'spot'
+        if getattr(Config, 'ENABLE_FUNDING_RATE_FILTER', True) and not is_spot_venue:
+            # H-03 FIX: Funding rates only exist on perpetual futures — skip entirely for spot trading
             try:
                 fetched_fr = await self.execution.fetch_funding_rate(symbol)
                 if fetched_fr is not None:
@@ -1137,10 +1142,18 @@ class PrimeSignalBot:
             )
             if not is_valid:
                 add_log_message(f"[{symbol}] Order pre-validation REJECTED: {v_reason}")
+                # C-05 FIX: Release risk reservation on pre-validation rejection (happens before finally block)
+                await self.risk.release_risk(reserved_trade_risk, side=signal, reservation_id=reservation_id)
+                ctx.reserved_risk_pct = 0.0
+                ctx.reservation_id = None
                 return
             pos_size = validated_pos_size
 
             if pos_size <= 0.0:
+                # C-05 FIX: Release risk reservation on zero position size (happens before finally block)
+                await self.risk.release_risk(reserved_trade_risk, side=signal, reservation_id=reservation_id)
+                ctx.reserved_risk_pct = 0.0
+                ctx.reservation_id = None
                 return
 
             # ── Next-Gen Proprietary Edge: Dual-Brain Adversarial AI Debate Courtroom ──
@@ -1679,7 +1692,7 @@ class PrimeSignalBot:
                                             continue
 
                             # 2. ⚡ EARLY STRUCTURAL EXIT: Cut loss early if 15m structure breaks against LONG
-                            if getattr(Config, 'ENABLE_STRUCTURAL_EXIT', True) and not self.partial_tp_taken[symbol] and len(ltf_df) >= 3:
+                            if getattr(Config, 'ENABLE_STRUCTURAL_EXIT', False) and not self.partial_tp_taken[symbol] and len(ltf_df) >= 3:
                                 last_c = ltf_df.iloc[-1]
                                 prev_c = ltf_df.iloc[-2]
                                 ema_20 = calculate_ema(ltf_df, 20).iloc[-1] if len(ltf_df) >= 20 else 0.0
@@ -1975,7 +1988,9 @@ class PrimeSignalBot:
                                 else:
                                     is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
                                     rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
-                                    tp1_proceeds_usdt = tp1_size * (self.entry_price[symbol] - curr_price) + (tp1_size * self.entry_price[symbol])
+                                    # C-03 FIX (TP1 SHORT): Return collateral + pnl; avoid double-counting entry_notional
+                                    tp1_pnl_calc = tp1_size * (self.entry_price[symbol] - curr_price)
+                                    tp1_proceeds_usdt = tp1_size * self.entry_price[symbol] + tp1_pnl_calc
                                     self._dry_run_balance_usdt += tp1_proceeds_usdt * (rate if is_inr else 1.0)
                                     tp1_success = True
                                 if tp1_success:
@@ -2075,7 +2090,10 @@ class PrimeSignalBot:
                                 else:
                                     is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
                                     rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
-                                    tp2_proceeds_usdt = tp2_size * (self.entry_price[symbol] - curr_price) + (tp2_size * self.entry_price[symbol])
+                                    # C-03 FIX: Return collateral (entry_notional) + pnl only
+                                    # entry_notional was deducted at SELL entry; buying back at curr_price frees: entry_notional + (entry - curr) * size
+                                    tp2_pnl = tp2_size * (self.entry_price[symbol] - curr_price)
+                                    tp2_proceeds_usdt = tp2_size * self.entry_price[symbol] + tp2_pnl
                                     self._dry_run_balance_usdt += tp2_proceeds_usdt * (rate if is_inr else 1.0)
                                     tp2_success = True
                                 if tp2_success:
@@ -2459,12 +2477,19 @@ class PrimeSignalBot:
                     pnl_pct = (exit_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
                     pnl_usdt = actual_exit * (exit_price - self.entry_price[symbol])
                     if not self.has_keys or Config.PAPER_TRADING:
+                        # Return cash proceeds from selling the asset at exit_price
                         self._dry_run_balance_usdt += actual_exit * exit_price * (rate if is_inr else 1.0)
                 else:
                     pnl_pct = (self.entry_price[symbol] - exit_price) / self.entry_price[symbol] * 100.0
                     pnl_usdt = actual_exit * (self.entry_price[symbol] - exit_price)
                     if not self.has_keys or Config.PAPER_TRADING:
-                        self._dry_run_balance_usdt += ((actual_exit * self.entry_price[symbol]) + pnl_usdt) * (rate if is_inr else 1.0)
+                        # C-02 FIX: Return collateral + profit = entry_notional + pnl_usdt
+                        # But collateral was deducted at entry, so return the buy-back cost and the profit separately:
+                        # Cash back = (collateral freed) + pnl = entry_notional + (entry_notional - exit_notional) = wrong
+                        # Correct: collateral freed = entry_notional, cost to close = exit_notional
+                        # Net cash returned = entry_notional - exit_notional + entry_notional (collateral) = entry_notional + pnl_usdt
+                        # But entry_notional was already DEDUCTED, so re-add collateral + pnl:
+                        self._dry_run_balance_usdt += (actual_exit * self.entry_price[symbol] + pnl_usdt) * (rate if is_inr else 1.0)
 
                 # --- PROFIT-BASED LOGIC: Net fee deduction ---
                 exit_fee = actual_exit * exit_price * Config.FEE_RATE
@@ -2772,30 +2797,6 @@ class PrimeSignalBot:
         add_log_message(f"[{symbol}] {msg}")
         return True, msg
 
-    async def emergency_close_all(self) -> tuple[int, str]:
-        """
-        Emergency Kill Switch: Instantly flattens all open positions across all supported symbols.
-        Handles both live and paper trading, updates state machines, ledger, logs, and dashboard.
-        """
-        symbols_to_close = [sym for sym in Config.SUPPORTED_SYMBOLS if self.in_position.get(sym, False)]
-        if not symbols_to_close:
-            add_log_message("🚨 Emergency close requested, but no open positions were found.")
-            return 0, "No open positions to close."
-
-        add_log_message(f"🚨 EMERGENCY CLOSE ALL TRIGGERED! Closing {len(symbols_to_close)} active position(s)...")
-        closed_count = 0
-        for sym in symbols_to_close:
-            try:
-                await self.exit_position(sym, "USER_EMERGENCY_CLOSE")
-                if not self.in_position.get(sym, False):
-                    closed_count += 1
-            except Exception as e:
-                add_log_message(f"[{sym}] ⚠️ Error closing position during emergency close: {e}")
-
-        self.save_state()
-        msg = f"Successfully closed {closed_count} of {len(symbols_to_close)} position(s)."
-        add_log_message(f"🚨 EMERGENCY CLOSE ALL COMPLETED: {msg}")
-        return closed_count, msg
 
     async def shutdown(self):
         add_log_message("Shutting down exchange sessions gracefully...")

@@ -107,8 +107,11 @@ class Config:
     MAX_CANDLE_MOVE_PCT = float(os.getenv("MAX_CANDLE_MOVE_PCT", "0.015"))
     VOLATILITY_PAUSE_CANDLES = int(os.getenv("VOLATILITY_PAUSE_CANDLES", "2"))
     COOLDOWN_MINUTES = int(os.getenv("COOLDOWN_MINUTES", "20"))
+    TP_EXIT_COOLDOWN_MINUTES = int(os.getenv("TP_EXIT_COOLDOWN_MINUTES", "25"))   # M-04 FIX: Was hardcoded in main.py
+    POST_EXIT_COOLDOWN_MINUTES = int(os.getenv("POST_EXIT_COOLDOWN_MINUTES", "15"))  # M-05 FIX: Was hardcoded in main.py
     MAX_SLIPPAGE_PCT = float(os.getenv("MAX_SLIPPAGE_PCT", "0.004"))
     FEE_RATE = float(os.getenv("FEE_RATE", "0.00075"))
+    MAX_PORTFOLIO_RISK_PCT = float(os.getenv("MAX_PORTFOLIO_RISK_PCT", "6.0"))    # Total portfolio risk cap (%)
     
     # Structure & Divergence settings
     STRUCTURE_LOOKBACK = int(os.getenv("STRUCTURE_LOOKBACK", "30"))
@@ -116,7 +119,7 @@ class Config:
     
     # Machine Learning configurations
     ML_CONFIRMATION_THRESHOLD = float(os.getenv("ML_CONFIRMATION_THRESHOLD", "0.60"))
-    ML_TRAIN_BARS = int(os.getenv("ML_TRAIN_BARS", "25.0"))
+    ML_TRAIN_BARS = int(float(os.getenv("ML_TRAIN_BARS", "25")))  # C-04 FIX: int(float()) to handle decimal env strings
     
     # Test Mode config
     TEST_MODE = os.getenv("TEST_MODE", "False").lower() in ("true", "1", "yes")

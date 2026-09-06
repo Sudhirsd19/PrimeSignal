@@ -1,364 +1,358 @@
-import os
-import sys
-import json
-import numpy as np
-import pandas as pd
-
-sys.stdout.reconfigure(encoding='utf-8')
-
-from strategies.indicators import prepare_dataframe, calculate_ema, calculate_rsi, calculate_atr, calculate_adx, calculate_vwap
-from strategies.smc import detect_order_blocks
-
-SUPPORTED_PAIRS = [
-    "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", 
-    "ADA/USDT", "DOGE/USDT", "AVAX/USDT", "DOT/USDT", "LTC/USDT", 
-    "TRX/USDT", "LINK/USDT", "ATOM/USDT", "ETC/USDT", "FIL/USDT", 
-    "NEAR/USDT", "OP/USDT", "POL/USDT"
-]
-
-def load_30d_data(symbol):
-    data_dir = os.path.join(os.path.dirname(__file__), "data")
-    clean_sym = symbol.replace("/", "_")
-    
-    ltf_file = os.path.join(data_dir, f"{clean_sym}_15m_30d.json")
-    htf_file = os.path.join(data_dir, f"{clean_sym}_1h_30d.json")
-    
-    if not os.path.exists(ltf_file):
-        ltf_file = os.path.join(data_dir, f"{clean_sym}_15m_1600_2w.json")
-    if not os.path.exists(htf_file):
-        htf_file = os.path.join(data_dir, f"{clean_sym}_1h_600_2w.json")
-        
-    if not os.path.exists(ltf_file) or not os.path.exists(htf_file):
-        ltf_file = os.path.join(data_dir, f"{clean_sym}_15m_1000.json")
-        htf_file = os.path.join(data_dir, f"{clean_sym}_1h_500.json")
-
-    if os.path.exists(ltf_file) and os.path.exists(htf_file):
-        try:
-            with open(ltf_file, 'r') as f:
-                ltf_data = json.load(f)
-            with open(htf_file, 'r') as f:
-                htf_data = json.load(f)
-            return ltf_data, htf_data
-        except Exception:
-            return None, None
-    return None, None
-
-def run_asset_simulation(symbol, ltf_ohlcv, htf_ohlcv, initial_balance=1000.0):
-    if not ltf_ohlcv or len(ltf_ohlcv) < 200 or not htf_ohlcv or len(htf_ohlcv) < 50:
-        return None
-
-    ltf_df = prepare_dataframe(ltf_ohlcv)
-    htf_df = prepare_dataframe(htf_ohlcv)
-
-    closes = ltf_df['close'].values
-    opens = ltf_df['open'].values
-    highs = ltf_df['high'].values
-    lows = ltf_df['low'].values
-    timestamps = ltf_df.index
-
-    atr = calculate_atr(ltf_df, 14).values
-    adx_df = calculate_adx(ltf_df)
-    adx = adx_df['adx'].values
-    plus_di = adx_df['plus_di'].values
-    minus_di = adx_df['minus_di'].values
-    rsi = calculate_rsi(ltf_df, 14).values
-    ema20 = calculate_ema(ltf_df, 20).values
-    vwap = calculate_vwap(ltf_df).values
-    obs = detect_order_blocks(ltf_df)
-
-    htf_ema50 = calculate_ema(htf_df, 50).values
-    htf_ema200 = calculate_ema(htf_df, 200).values
-    htf_timestamps = htf_df.index.values
-
-    balance = initial_balance
-    peak_balance = initial_balance
-    max_drawdown = 0.0
-
-    in_position = False
-    pos_side = "HOLD"
-    entry_price = 0.0
-    stop_loss = 0.0
-    initial_sl = 0.0
-    tp1 = 0.0
-    tp2 = 0.0
-    tp3 = 0.0
-    pos_size = 0.0
-    highest_price = 0.0
-    lowest_price = 999999.0
-    partial_tp1 = False
-    partial_tp2 = False
-    be_active = False
-    trade_accum_pnl = 0.0
-
-    trades = []
-    fee_pct = 0.0006 # 0.06% Binance Taker fee per fill
-
-    for i in range(100, len(ltf_df) - 1):
-        curr_price = closes[i]
-        curr_ts = timestamps[i]
-
-        if balance > peak_balance:
-            peak_balance = balance
-        dd = (peak_balance - balance) / peak_balance if peak_balance > 0 else 0.0
-        if dd > max_drawdown:
-            max_drawdown = dd
-
-        htf_idx = np.searchsorted(htf_timestamps, curr_ts, side='right') - 1
-        htf_bullish = False
-        htf_bearish = False
-        if htf_idx >= 0 and htf_idx < len(htf_ema50):
-            htf_bullish = htf_ema50[htf_idx] > htf_ema200[htf_idx]
-            htf_bearish = htf_ema50[htf_idx] < htf_ema200[htf_idx]
-
-        if in_position:
-            r_dist = abs(entry_price - initial_sl)
-            fee_offset = entry_price * 0.0030
-            min_be_dist = max(0.50 * r_dist, fee_offset * 1.15)
-
-            if pos_side == "LONG":
-                highest_price = max(highest_price, highs[i])
-
-                # 1. Zero-Risk Breakeven Lock at +0.50R / Fee Offset
-                if not be_active and highest_price >= entry_price + min_be_dist:
-                    be_sl = min(curr_price * 0.9995, entry_price + fee_offset)
-                    if be_sl > stop_loss:
-                        stop_loss = be_sl
-                        be_active = True
-
-                # 2. TP1 (+1.50R) - 50% scale-out
-                if not partial_tp1 and highs[i] >= tp1:
-                    partial_tp1 = True
-                    qty = pos_size * 0.50
-                    leg_pnl = qty * (tp1 - entry_price) - (qty * (entry_price + tp1) * fee_pct)
-                    trade_accum_pnl += leg_pnl
-                    balance += leg_pnl
-                    stop_loss = max(stop_loss, entry_price + fee_offset)
-
-                # 3. TP2 (+2.20R) - 30% scale-out
-                if partial_tp1 and not partial_tp2 and highs[i] >= tp2:
-                    partial_tp2 = True
-                    qty = pos_size * 0.30
-                    leg_pnl = qty * (tp2 - entry_price) - (qty * (entry_price + tp2) * fee_pct)
-                    trade_accum_pnl += leg_pnl
-                    balance += leg_pnl
-                    stop_loss = max(stop_loss, entry_price + (1.0 * r_dist))
-
-                # 4. Runner Target (+3.50R) - 20% position
-                if partial_tp2 and highs[i] >= tp3:
-                    qty = pos_size * 0.20
-                    leg_pnl = qty * (tp3 - entry_price) - (qty * (entry_price + tp3) * fee_pct)
-                    trade_accum_pnl += leg_pnl
-                    balance += leg_pnl
-                    in_position = False
-                    trades.append({"symbol": symbol, "side": "LONG", "result": "WIN", "pnl": round(trade_accum_pnl, 2)})
-                    continue
-
-                # 5. Stop Loss Hit
-                if lows[i] <= stop_loss:
-                    rem_fraction = 0.20 if partial_tp2 else (0.50 if partial_tp1 else 1.0)
-                    rem_qty = pos_size * rem_fraction
-                    leg_pnl = rem_qty * (stop_loss - entry_price) - (rem_qty * (entry_price + stop_loss) * fee_pct)
-                    trade_accum_pnl += leg_pnl
-                    balance += leg_pnl
-                    in_position = False
-                    res = "WIN" if trade_accum_pnl > 0 else "LOSS"
-                    trades.append({"symbol": symbol, "side": "LONG", "result": res, "pnl": round(trade_accum_pnl, 2)})
-                    continue
-
-            elif pos_side == "SHORT":
-                lowest_price = min(lowest_price, lows[i])
-
-                # 1. Zero-Risk Breakeven Lock at +0.50R / Fee Offset
-                if not be_active and lowest_price <= entry_price - min_be_dist:
-                    be_sl = max(curr_price * 1.0005, entry_price - fee_offset)
-                    if be_sl < stop_loss:
-                        stop_loss = be_sl
-                        be_active = True
-
-                # 2. TP1 (+1.50R) - 50% scale-out
-                if not partial_tp1 and lows[i] <= tp1:
-                    partial_tp1 = True
-                    qty = pos_size * 0.50
-                    leg_pnl = qty * (entry_price - tp1) - (qty * (entry_price + tp1) * fee_pct)
-                    trade_accum_pnl += leg_pnl
-                    balance += leg_pnl
-                    stop_loss = min(stop_loss, entry_price - fee_offset)
-
-                # 3. TP2 (+2.20R) - 30% scale-out
-                if partial_tp1 and not partial_tp2 and lows[i] <= tp2:
-                    partial_tp2 = True
-                    qty = pos_size * 0.30
-                    leg_pnl = qty * (entry_price - tp2) - (qty * (entry_price + tp2) * fee_pct)
-                    trade_accum_pnl += leg_pnl
-                    balance += leg_pnl
-                    stop_loss = min(stop_loss, entry_price - (1.0 * r_dist))
-
-                # 4. Runner Target (+3.50R) - 20% position
-                if partial_tp2 and lows[i] <= tp3:
-                    qty = pos_size * 0.20
-                    leg_pnl = qty * (entry_price - tp3) - (qty * (entry_price + tp3) * fee_pct)
-                    trade_accum_pnl += leg_pnl
-                    balance += leg_pnl
-                    in_position = False
-                    trades.append({"symbol": symbol, "side": "SHORT", "result": "WIN", "pnl": round(trade_accum_pnl, 2)})
-                    continue
-
-                # 5. Stop Loss Hit
-                if highs[i] >= stop_loss:
-                    rem_fraction = 0.20 if partial_tp2 else (0.50 if partial_tp1 else 1.0)
-                    rem_qty = pos_size * rem_fraction
-                    leg_pnl = rem_qty * (entry_price - stop_loss) - (rem_qty * (entry_price + stop_loss) * fee_pct)
-                    trade_accum_pnl += leg_pnl
-                    balance += leg_pnl
-                    in_position = False
-                    res = "WIN" if trade_accum_pnl > 0 else "LOSS"
-                    trades.append({"symbol": symbol, "side": "SHORT", "result": res, "pnl": round(trade_accum_pnl, 2)})
-                    continue
-
-        else:
-            curr_atr = atr[i]
-            if np.isnan(curr_atr) or curr_atr <= 0:
-                continue
-
-            curr_adx = adx[i] if not np.isnan(adx[i]) else 20
-            curr_rsi = rsi[i] if not np.isnan(rsi[i]) else 50
-            curr_vwap = vwap[i] if not np.isnan(vwap[i]) else curr_price
-
-            if curr_adx < 22 or curr_rsi < 35 or curr_rsi > 68:
-                continue
-
-            # Bullish SMC Setup
-            has_bull_ob = False
-            for ob_idx in range(max(0, i - 15), i):
-                if obs.iloc[ob_idx] and obs.iloc[ob_idx]['type'] == 'BULLISH' and not obs.iloc[ob_idx].get('invalidated', False):
-                    has_bull_ob = True
-                    break
-
-            if has_bull_ob and htf_bullish and plus_di[i] > minus_di[i] and curr_price >= curr_vwap:
-                in_position = True
-                pos_side = "LONG"
-                entry_price = curr_price
-                stop_loss = entry_price - (1.5 * curr_atr)
-                initial_sl = stop_loss
-                r_dist = abs(entry_price - stop_loss)
-                tp1 = entry_price + (1.50 * r_dist)
-                tp2 = entry_price + (2.20 * r_dist)
-                tp3 = entry_price + (3.50 * r_dist)
-                
-                highest_price = entry_price
-                partial_tp1 = False
-                partial_tp2 = False
-                be_active = False
-                trade_accum_pnl = 0.0
-
-                risk_usdt = balance * 0.015 # 1.5% Risk sizing
-                raw_size = risk_usdt / r_dist
-                max_notional = balance * 0.35 # 35% Allocation Cap
-                pos_size = min(raw_size, (max_notional * 0.999) / entry_price)
-
-            # Bearish SMC Setup
-            has_bear_ob = False
-            for ob_idx in range(max(0, i - 15), i):
-                if obs.iloc[ob_idx] and obs.iloc[ob_idx]['type'] == 'BEARISH' and not obs.iloc[ob_idx].get('invalidated', False):
-                    has_bear_ob = True
-                    break
-
-            if has_bear_ob and htf_bearish and minus_di[i] > plus_di[i] and curr_price <= curr_vwap:
-                in_position = True
-                pos_side = "SHORT"
-                entry_price = curr_price
-                stop_loss = entry_price + (1.5 * curr_atr)
-                initial_sl = stop_loss
-                r_dist = abs(entry_price - stop_loss)
-                tp1 = entry_price - (1.50 * r_dist)
-                tp2 = entry_price - (2.20 * r_dist)
-                tp3 = entry_price - (3.50 * r_dist)
-
-                lowest_price = entry_price
-                partial_tp1 = False
-                partial_tp2 = False
-                be_active = False
-                trade_accum_pnl = 0.0
-
-                risk_usdt = balance * 0.015 # 1.5% Risk sizing
-                raw_size = risk_usdt / r_dist
-                max_notional = balance * 0.35 # 35% Allocation Cap
-                pos_size = min(raw_size, (max_notional * 0.999) / entry_price)
-
-    return {
-        "symbol": symbol,
-        "initial_balance": initial_balance,
-        "final_balance": round(balance, 2),
-        "total_trades": len(trades),
-        "wins": sum(1 for t in trades if t["result"] == "WIN"),
-        "losses": sum(1 for t in trades if t["result"] == "LOSS"),
-        "max_drawdown_pct": round(max_drawdown * 100, 2),
-        "return_pct": round(((balance - initial_balance) / initial_balance) * 100, 2),
-        "trades": trades
-    }
-
-def main():
-    print("=" * 82)
-    print("🚀 PRIMESIGNAL v2.3 — 30-DAY MULTI-ASSET INSTITUTIONAL BACKTEST REPORT")
-    print("=" * 82)
-    print(f"{'SYMBOL':<10} | {'TRADES':<7} | {'WIN RATE':<9} | {'NET PNL':<12} | {'RETURN %':<9} | {'MAX DD %':<9}")
-    print("-" * 82)
-
-    total_trades = 0
-    total_wins = 0
-    total_losses = 0
-    total_start = 0.0
-    total_final = 0.0
-    all_trades = []
-    max_peak_dd = 0.0
-
-    for sym in SUPPORTED_PAIRS:
-        ltf, htf = load_30d_data(sym)
-        if not ltf or not htf:
-            continue
-
-        res = run_asset_simulation(sym, ltf, htf, initial_balance=1000.0)
-        if not res or res["total_trades"] == 0:
-            continue
-
-        trades_count = res["total_trades"]
-        wins = res["wins"]
-        wr = (wins / trades_count) * 100 if trades_count > 0 else 0
-        profit = res["final_balance"] - res["initial_balance"]
-        
-        total_trades += trades_count
-        total_wins += wins
-        total_losses += res["losses"]
-        total_start += res["initial_balance"]
-        total_final += res["final_balance"]
-        max_peak_dd = max(max_peak_dd, res["max_drawdown_pct"])
-        all_trades.extend(res["trades"])
-
-        pnl_str = f"+" if profit >= 0 else f"-"
-        ret_str = f"+{res['return_pct']:.2f}%" if res['return_pct'] >= 0 else f"{res['return_pct']:.2f}%"
-        print(f"{sym:<10} | {trades_count:<7} | {wr:>5.1f}%    | {pnl_str:>12} | {ret_str:>9} | {res['max_drawdown_pct']:>7.2f}%")
-
-    overall_wr = (total_wins / total_trades) * 100 if total_trades > 0 else 0
-    overall_pnl = total_final - total_start
-    overall_ret = ((total_final - total_start) / total_start) * 100 if total_start > 0 else 0
-
-    gross_profit = sum(t["pnl"] for t in all_trades if t["pnl"] > 0)
-    gross_loss = abs(sum(t["pnl"] for t in all_trades if t["pnl"] < 0))
-    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 99.9
-
-    print("=" * 82)
-    print("📊 30-DAY INSTITUTIONAL PORTFOLIO AGGREGATE SUMMARY:")
-    print(f" • Starting Portfolio Capital:     USDT")
-    print(f" • Ending Portfolio Balance:        USDT")
-    print(f" • Net Portfolio Profit:          + USDT (+{overall_ret:.2f}%)")
-    print(f" • Total Completed Trades:        {total_trades} Trades")
-    print(f" • Total Winning Trades:          {total_wins} Wins ({overall_wr:.2f}% Win Rate)")
-    print(f" • Total Losing Trades:           {total_losses} Losses")
-    print(f" • Portfolio Profit Factor:       {profit_factor:.2f}")
-    print(f" • Maximum Portfolio Drawdown:    {max_peak_dd:.2f}% (Safety Guard: < 4.5% Max)")
-    print(f" • Average Risk-to-Reward Ratio:  1 : 2.45")
-    print("=" * 82)
-
-if __name__ == "__main__":
-    main()
-
+﻿-i-m-p-o-r-t- -o-s--
+-i-m-p-o-r-t- -s-y-s--
+-i-m-p-o-r-t- -j-s-o-n--
+-i-m-p-o-r-t- -n-u-m-p-y- -a-s- -n-p--
+-i-m-p-o-r-t- -p-a-n-d-a-s- -a-s- -p-d--
+--
+-s-y-s-.-s-t-d-o-u-t-.-r-e-c-o-n-f-i-g-u-r-e-(-e-n-c-o-d-i-n-g-=-'-u-t-f---8-'-)--
+--
+-f-r-o-m- -s-t-r-a-t-e-g-i-e-s-.-i-n-d-i-c-a-t-o-r-s- -i-m-p-o-r-t- -p-r-e-p-a-r-e-_-d-a-t-a-f-r-a-m-e-,- -c-a-l-c-u-l-a-t-e-_-e-m-a-,- -c-a-l-c-u-l-a-t-e-_-r-s-i-,- -c-a-l-c-u-l-a-t-e-_-a-t-r-,- -c-a-l-c-u-l-a-t-e-_-a-d-x-,- -c-a-l-c-u-l-a-t-e-_-v-w-a-p--
+-f-r-o-m- -s-t-r-a-t-e-g-i-e-s-.-s-m-c- -i-m-p-o-r-t- -d-e-t-e-c-t-_-o-r-d-e-r-_-b-l-o-c-k-s--
+--
+-S-U-P-P-O-R-T-E-D-_-P-A-I-R-S- -=- -[--
+- - - - -"-B-T-C-/-U-S-D-T-"-,- -"-E-T-H-/-U-S-D-T-"-,- -"-S-O-L-/-U-S-D-T-"-,- -"-B-N-B-/-U-S-D-T-"-,- -"-X-R-P-/-U-S-D-T-"-,- --
+- - - - -"-A-D-A-/-U-S-D-T-"-,- -"-D-O-G-E-/-U-S-D-T-"-,- -"-A-V-A-X-/-U-S-D-T-"-,- -"-D-O-T-/-U-S-D-T-"-,- -"-L-T-C-/-U-S-D-T-"-,- --
+- - - - -"-T-R-X-/-U-S-D-T-"-,- -"-L-I-N-K-/-U-S-D-T-"-,- -"-A-T-O-M-/-U-S-D-T-"-,- -"-E-T-C-/-U-S-D-T-"-,- -"-F-I-L-/-U-S-D-T-"-,- --
+- - - - -"-N-E-A-R-/-U-S-D-T-"-,- -"-O-P-/-U-S-D-T-"-,- -"-P-O-L-/-U-S-D-T-"--
+-]--
+--
+-d-e-f- -l-o-a-d-_-3-0-d-_-d-a-t-a-(-s-y-m-b-o-l-)-:--
+- - - - -d-a-t-a-_-d-i-r- -=- -o-s-.-p-a-t-h-.-j-o-i-n-(-o-s-.-p-a-t-h-.-d-i-r-n-a-m-e-(-_-_-f-i-l-e-_-_-)-,- -"-d-a-t-a-"-)--
+- - - - -c-l-e-a-n-_-s-y-m- -=- -s-y-m-b-o-l-.-r-e-p-l-a-c-e-(-"-/-"-,- -"-_-"-)--
+- - - - --
+- - - - -l-t-f-_-f-i-l-e- -=- -o-s-.-p-a-t-h-.-j-o-i-n-(-d-a-t-a-_-d-i-r-,- -f-"-{-c-l-e-a-n-_-s-y-m-}-_-1-5-m-_-3-0-d-.-j-s-o-n-"-)--
+- - - - -h-t-f-_-f-i-l-e- -=- -o-s-.-p-a-t-h-.-j-o-i-n-(-d-a-t-a-_-d-i-r-,- -f-"-{-c-l-e-a-n-_-s-y-m-}-_-1-h-_-3-0-d-.-j-s-o-n-"-)--
+- - - - --
+- - - - -i-f- -n-o-t- -o-s-.-p-a-t-h-.-e-x-i-s-t-s-(-l-t-f-_-f-i-l-e-)-:--
+- - - - - - - - -l-t-f-_-f-i-l-e- -=- -o-s-.-p-a-t-h-.-j-o-i-n-(-d-a-t-a-_-d-i-r-,- -f-"-{-c-l-e-a-n-_-s-y-m-}-_-1-5-m-_-1-6-0-0-_-2-w-.-j-s-o-n-"-)--
+- - - - -i-f- -n-o-t- -o-s-.-p-a-t-h-.-e-x-i-s-t-s-(-h-t-f-_-f-i-l-e-)-:--
+- - - - - - - - -h-t-f-_-f-i-l-e- -=- -o-s-.-p-a-t-h-.-j-o-i-n-(-d-a-t-a-_-d-i-r-,- -f-"-{-c-l-e-a-n-_-s-y-m-}-_-1-h-_-6-0-0-_-2-w-.-j-s-o-n-"-)--
+- - - - - - - - --
+- - - - -i-f- -n-o-t- -o-s-.-p-a-t-h-.-e-x-i-s-t-s-(-l-t-f-_-f-i-l-e-)- -o-r- -n-o-t- -o-s-.-p-a-t-h-.-e-x-i-s-t-s-(-h-t-f-_-f-i-l-e-)-:--
+- - - - - - - - -l-t-f-_-f-i-l-e- -=- -o-s-.-p-a-t-h-.-j-o-i-n-(-d-a-t-a-_-d-i-r-,- -f-"-{-c-l-e-a-n-_-s-y-m-}-_-1-5-m-_-1-0-0-0-.-j-s-o-n-"-)--
+- - - - - - - - -h-t-f-_-f-i-l-e- -=- -o-s-.-p-a-t-h-.-j-o-i-n-(-d-a-t-a-_-d-i-r-,- -f-"-{-c-l-e-a-n-_-s-y-m-}-_-1-h-_-5-0-0-.-j-s-o-n-"-)--
+--
+- - - - -i-f- -o-s-.-p-a-t-h-.-e-x-i-s-t-s-(-l-t-f-_-f-i-l-e-)- -a-n-d- -o-s-.-p-a-t-h-.-e-x-i-s-t-s-(-h-t-f-_-f-i-l-e-)-:--
+- - - - - - - - -t-r-y-:--
+- - - - - - - - - - - - -w-i-t-h- -o-p-e-n-(-l-t-f-_-f-i-l-e-,- -'-r-'-)- -a-s- -f-:--
+- - - - - - - - - - - - - - - - -l-t-f-_-d-a-t-a- -=- -j-s-o-n-.-l-o-a-d-(-f-)--
+- - - - - - - - - - - - -w-i-t-h- -o-p-e-n-(-h-t-f-_-f-i-l-e-,- -'-r-'-)- -a-s- -f-:--
+- - - - - - - - - - - - - - - - -h-t-f-_-d-a-t-a- -=- -j-s-o-n-.-l-o-a-d-(-f-)--
+- - - - - - - - - - - - -r-e-t-u-r-n- -l-t-f-_-d-a-t-a-,- -h-t-f-_-d-a-t-a--
+- - - - - - - - -e-x-c-e-p-t- -E-x-c-e-p-t-i-o-n-:--
+- - - - - - - - - - - - -r-e-t-u-r-n- -N-o-n-e-,- -N-o-n-e--
+- - - - -r-e-t-u-r-n- -N-o-n-e-,- -N-o-n-e--
+--
+-d-e-f- -r-u-n-_-a-s-s-e-t-_-s-i-m-u-l-a-t-i-o-n-(-s-y-m-b-o-l-,- -l-t-f-_-o-h-l-c-v-,- -h-t-f-_-o-h-l-c-v-,- -i-n-i-t-i-a-l-_-b-a-l-a-n-c-e-=-1-0-0-0-.-0-)-:--
+- - - - -i-f- -n-o-t- -l-t-f-_-o-h-l-c-v- -o-r- -l-e-n-(-l-t-f-_-o-h-l-c-v-)- -<- -2-0-0- -o-r- -n-o-t- -h-t-f-_-o-h-l-c-v- -o-r- -l-e-n-(-h-t-f-_-o-h-l-c-v-)- -<- -5-0-:--
+- - - - - - - - -r-e-t-u-r-n- -N-o-n-e--
+--
+- - - - -l-t-f-_-d-f- -=- -p-r-e-p-a-r-e-_-d-a-t-a-f-r-a-m-e-(-l-t-f-_-o-h-l-c-v-)--
+- - - - -h-t-f-_-d-f- -=- -p-r-e-p-a-r-e-_-d-a-t-a-f-r-a-m-e-(-h-t-f-_-o-h-l-c-v-)--
+--
+- - - - -c-l-o-s-e-s- -=- -l-t-f-_-d-f-[-'-c-l-o-s-e-'-]-.-v-a-l-u-e-s--
+- - - - -o-p-e-n-s- -=- -l-t-f-_-d-f-[-'-o-p-e-n-'-]-.-v-a-l-u-e-s--
+- - - - -h-i-g-h-s- -=- -l-t-f-_-d-f-[-'-h-i-g-h-'-]-.-v-a-l-u-e-s--
+- - - - -l-o-w-s- -=- -l-t-f-_-d-f-[-'-l-o-w-'-]-.-v-a-l-u-e-s--
+- - - - -t-i-m-e-s-t-a-m-p-s- -=- -l-t-f-_-d-f-.-i-n-d-e-x--
+--
+- - - - -a-t-r- -=- -c-a-l-c-u-l-a-t-e-_-a-t-r-(-l-t-f-_-d-f-,- -1-4-)-.-v-a-l-u-e-s--
+- - - - -a-d-x-_-d-f- -=- -c-a-l-c-u-l-a-t-e-_-a-d-x-(-l-t-f-_-d-f-)--
+- - - - -a-d-x- -=- -a-d-x-_-d-f-[-'-a-d-x-'-]-.-v-a-l-u-e-s--
+- - - - -p-l-u-s-_-d-i- -=- -a-d-x-_-d-f-[-'-p-l-u-s-_-d-i-'-]-.-v-a-l-u-e-s--
+- - - - -m-i-n-u-s-_-d-i- -=- -a-d-x-_-d-f-[-'-m-i-n-u-s-_-d-i-'-]-.-v-a-l-u-e-s--
+- - - - -r-s-i- -=- -c-a-l-c-u-l-a-t-e-_-r-s-i-(-l-t-f-_-d-f-,- -1-4-)-.-v-a-l-u-e-s--
+- - - - -e-m-a-2-0- -=- -c-a-l-c-u-l-a-t-e-_-e-m-a-(-l-t-f-_-d-f-,- -2-0-)-.-v-a-l-u-e-s--
+- - - - -v-w-a-p- -=- -c-a-l-c-u-l-a-t-e-_-v-w-a-p-(-l-t-f-_-d-f-)-.-v-a-l-u-e-s--
+- - - - -o-b-s- -=- -d-e-t-e-c-t-_-o-r-d-e-r-_-b-l-o-c-k-s-(-l-t-f-_-d-f-)--
+--
+- - - - -h-t-f-_-e-m-a-5-0- -=- -c-a-l-c-u-l-a-t-e-_-e-m-a-(-h-t-f-_-d-f-,- -5-0-)-.-v-a-l-u-e-s--
+- - - - -h-t-f-_-e-m-a-2-0-0- -=- -c-a-l-c-u-l-a-t-e-_-e-m-a-(-h-t-f-_-d-f-,- -2-0-0-)-.-v-a-l-u-e-s--
+- - - - -h-t-f-_-t-i-m-e-s-t-a-m-p-s- -=- -h-t-f-_-d-f-.-i-n-d-e-x-.-v-a-l-u-e-s--
+--
+- - - - -b-a-l-a-n-c-e- -=- -i-n-i-t-i-a-l-_-b-a-l-a-n-c-e--
+- - - - -p-e-a-k-_-b-a-l-a-n-c-e- -=- -i-n-i-t-i-a-l-_-b-a-l-a-n-c-e--
+- - - - -m-a-x-_-d-r-a-w-d-o-w-n- -=- -0-.-0--
+--
+- - - - -i-n-_-p-o-s-i-t-i-o-n- -=- -F-a-l-s-e--
+- - - - -p-o-s-_-s-i-d-e- -=- -"-H-O-L-D-"--
+- - - - -e-n-t-r-y-_-p-r-i-c-e- -=- -0-.-0--
+- - - - -s-t-o-p-_-l-o-s-s- -=- -0-.-0--
+- - - - -i-n-i-t-i-a-l-_-s-l- -=- -0-.-0--
+- - - - -t-p-1- -=- -0-.-0--
+- - - - -t-p-2- -=- -0-.-0--
+- - - - -t-p-3- -=- -0-.-0--
+- - - - -p-o-s-_-s-i-z-e- -=- -0-.-0--
+- - - - -h-i-g-h-e-s-t-_-p-r-i-c-e- -=- -0-.-0--
+- - - - -l-o-w-e-s-t-_-p-r-i-c-e- -=- -9-9-9-9-9-9-.-0--
+- - - - -p-a-r-t-i-a-l-_-t-p-1- -=- -F-a-l-s-e--
+- - - - -p-a-r-t-i-a-l-_-t-p-2- -=- -F-a-l-s-e--
+- - - - -b-e-_-a-c-t-i-v-e- -=- -F-a-l-s-e--
+- - - - -t-r-a-d-e-_-a-c-c-u-m-_-p-n-l- -=- -0-.-0--
+--
+- - - - -t-r-a-d-e-s- -=- -[-]--
+- - - - -f-e-e-_-p-c-t- -=- -0-.-0-0-0-6- -#- -0-.-0-6-%- -B-i-n-a-n-c-e- -T-a-k-e-r- -f-e-e- -p-e-r- -f-i-l-l--
+--
+- - - - -f-o-r- -i- -i-n- -r-a-n-g-e-(-1-0-0-,- -l-e-n-(-l-t-f-_-d-f-)- --- -1-)-:--
+- - - - - - - - -c-u-r-r-_-p-r-i-c-e- -=- -c-l-o-s-e-s-[-i-]--
+- - - - - - - - -c-u-r-r-_-t-s- -=- -t-i-m-e-s-t-a-m-p-s-[-i-]--
+--
+- - - - - - - - -i-f- -b-a-l-a-n-c-e- ->- -p-e-a-k-_-b-a-l-a-n-c-e-:--
+- - - - - - - - - - - - -p-e-a-k-_-b-a-l-a-n-c-e- -=- -b-a-l-a-n-c-e--
+- - - - - - - - -d-d- -=- -(-p-e-a-k-_-b-a-l-a-n-c-e- --- -b-a-l-a-n-c-e-)- -/- -p-e-a-k-_-b-a-l-a-n-c-e- -i-f- -p-e-a-k-_-b-a-l-a-n-c-e- ->- -0- -e-l-s-e- -0-.-0--
+- - - - - - - - -i-f- -d-d- ->- -m-a-x-_-d-r-a-w-d-o-w-n-:--
+- - - - - - - - - - - - -m-a-x-_-d-r-a-w-d-o-w-n- -=- -d-d--
+--
+- - - - - - - - -h-t-f-_-i-d-x- -=- -n-p-.-s-e-a-r-c-h-s-o-r-t-e-d-(-h-t-f-_-t-i-m-e-s-t-a-m-p-s-,- -c-u-r-r-_-t-s-,- -s-i-d-e-=-'-r-i-g-h-t-'-)- --- -1--
+- - - - - - - - -h-t-f-_-b-u-l-l-i-s-h- -=- -F-a-l-s-e--
+- - - - - - - - -h-t-f-_-b-e-a-r-i-s-h- -=- -F-a-l-s-e--
+- - - - - - - - -i-f- -h-t-f-_-i-d-x- ->-=- -0- -a-n-d- -h-t-f-_-i-d-x- -<- -l-e-n-(-h-t-f-_-e-m-a-5-0-)-:--
+- - - - - - - - - - - - -h-t-f-_-b-u-l-l-i-s-h- -=- -h-t-f-_-e-m-a-5-0-[-h-t-f-_-i-d-x-]- ->- -h-t-f-_-e-m-a-2-0-0-[-h-t-f-_-i-d-x-]--
+- - - - - - - - - - - - -h-t-f-_-b-e-a-r-i-s-h- -=- -h-t-f-_-e-m-a-5-0-[-h-t-f-_-i-d-x-]- -<- -h-t-f-_-e-m-a-2-0-0-[-h-t-f-_-i-d-x-]--
+--
+- - - - - - - - -i-f- -i-n-_-p-o-s-i-t-i-o-n-:--
+- - - - - - - - - - - - -r-_-d-i-s-t- -=- -a-b-s-(-e-n-t-r-y-_-p-r-i-c-e- --- -i-n-i-t-i-a-l-_-s-l-)--
+- - - - - - - - - - - - -f-e-e-_-o-f-f-s-e-t- -=- -e-n-t-r-y-_-p-r-i-c-e- -*- -0-.-0-0-3-0--
+- - - - - - - - - - - - -m-i-n-_-b-e-_-d-i-s-t- -=- -m-a-x-(-0-.-5-0- -*- -r-_-d-i-s-t-,- -f-e-e-_-o-f-f-s-e-t- -*- -1-.-1-5-)--
+--
+- - - - - - - - - - - - -i-f- -p-o-s-_-s-i-d-e- -=-=- -"-L-O-N-G-"-:--
+- - - - - - - - - - - - - - - - -h-i-g-h-e-s-t-_-p-r-i-c-e- -=- -m-a-x-(-h-i-g-h-e-s-t-_-p-r-i-c-e-,- -h-i-g-h-s-[-i-]-)--
+--
+- - - - - - - - - - - - - - - - -#- -1-.- -Z-e-r-o---R-i-s-k- -B-r-e-a-k-e-v-e-n- -L-o-c-k- -r-e-m-o-v-e-d- -(-h-a-n-d-l-e-d- -a-t- -T-P-1-)--
+--
+- - - - - - - - - - - - - - - - -#- -2-.- -T-P-1- -(-+-1-.-5-0-R-)- --- -5-0-%- -s-c-a-l-e---o-u-t--
+- - - - - - - - - - - - - - - - -i-f- -n-o-t- -p-a-r-t-i-a-l-_-t-p-1- -a-n-d- -h-i-g-h-s-[-i-]- ->-=- -t-p-1-:--
+- - - - - - - - - - - - - - - - - - - - -p-a-r-t-i-a-l-_-t-p-1- -=- -T-r-u-e--
+- - - - - - - - - - - - - - - - - - - - -q-t-y- -=- -p-o-s-_-s-i-z-e- -*- -0-.-5-0--
+- - - - - - - - - - - - - - - - - - - - -l-e-g-_-p-n-l- -=- -q-t-y- -*- -(-t-p-1- --- -e-n-t-r-y-_-p-r-i-c-e-)- --- -(-q-t-y- -*- -(-e-n-t-r-y-_-p-r-i-c-e- -+- -t-p-1-)- -*- -f-e-e-_-p-c-t-)--
+- - - - - - - - - - - - - - - - - - - - -t-r-a-d-e-_-a-c-c-u-m-_-p-n-l- -+-=- -l-e-g-_-p-n-l--
+- - - - - - - - - - - - - - - - - - - - -b-a-l-a-n-c-e- -+-=- -l-e-g-_-p-n-l--
+- - - - - - - - - - - - - - - - - - - - -s-t-o-p-_-l-o-s-s- -=- -m-a-x-(-s-t-o-p-_-l-o-s-s-,- -e-n-t-r-y-_-p-r-i-c-e- -+- -f-e-e-_-o-f-f-s-e-t-)--
+--
+- - - - - - - - - - - - - - - - -#- -3-.- -T-P-2- -(-+-2-.-2-0-R-)- --- -3-0-%- -s-c-a-l-e---o-u-t--
+- - - - - - - - - - - - - - - - -i-f- -p-a-r-t-i-a-l-_-t-p-1- -a-n-d- -n-o-t- -p-a-r-t-i-a-l-_-t-p-2- -a-n-d- -h-i-g-h-s-[-i-]- ->-=- -t-p-2-:--
+- - - - - - - - - - - - - - - - - - - - -p-a-r-t-i-a-l-_-t-p-2- -=- -T-r-u-e--
+- - - - - - - - - - - - - - - - - - - - -q-t-y- -=- -p-o-s-_-s-i-z-e- -*- -0-.-3-0--
+- - - - - - - - - - - - - - - - - - - - -l-e-g-_-p-n-l- -=- -q-t-y- -*- -(-t-p-2- --- -e-n-t-r-y-_-p-r-i-c-e-)- --- -(-q-t-y- -*- -(-e-n-t-r-y-_-p-r-i-c-e- -+- -t-p-2-)- -*- -f-e-e-_-p-c-t-)--
+- - - - - - - - - - - - - - - - - - - - -t-r-a-d-e-_-a-c-c-u-m-_-p-n-l- -+-=- -l-e-g-_-p-n-l--
+- - - - - - - - - - - - - - - - - - - - -b-a-l-a-n-c-e- -+-=- -l-e-g-_-p-n-l--
+- - - - - - - - - - - - - - - - - - - - -s-t-o-p-_-l-o-s-s- -=- -m-a-x-(-s-t-o-p-_-l-o-s-s-,- -e-n-t-r-y-_-p-r-i-c-e- -+- -(-1-.-0- -*- -r-_-d-i-s-t-)-)--
+--
+- - - - - - - - - - - - - - - - -#- -4-.- -R-u-n-n-e-r- -T-a-r-g-e-t- -(-+-3-.-5-0-R-)- --- -2-0-%- -p-o-s-i-t-i-o-n--
+- - - - - - - - - - - - - - - - -i-f- -p-a-r-t-i-a-l-_-t-p-2- -a-n-d- -h-i-g-h-s-[-i-]- ->-=- -t-p-3-:--
+- - - - - - - - - - - - - - - - - - - - -q-t-y- -=- -p-o-s-_-s-i-z-e- -*- -0-.-2-0--
+- - - - - - - - - - - - - - - - - - - - -l-e-g-_-p-n-l- -=- -q-t-y- -*- -(-t-p-3- --- -e-n-t-r-y-_-p-r-i-c-e-)- --- -(-q-t-y- -*- -(-e-n-t-r-y-_-p-r-i-c-e- -+- -t-p-3-)- -*- -f-e-e-_-p-c-t-)--
+- - - - - - - - - - - - - - - - - - - - -t-r-a-d-e-_-a-c-c-u-m-_-p-n-l- -+-=- -l-e-g-_-p-n-l--
+- - - - - - - - - - - - - - - - - - - - -b-a-l-a-n-c-e- -+-=- -l-e-g-_-p-n-l--
+- - - - - - - - - - - - - - - - - - - - -i-n-_-p-o-s-i-t-i-o-n- -=- -F-a-l-s-e--
+- - - - - - - - - - - - - - - - - - - - -t-r-a-d-e-s-.-a-p-p-e-n-d-(-{-"-s-y-m-b-o-l-"-:- -s-y-m-b-o-l-,- -"-s-i-d-e-"-:- -"-L-O-N-G-"-,- -"-r-e-s-u-l-t-"-:- -"-W-I-N-"-,- -"-p-n-l-"-:- -r-o-u-n-d-(-t-r-a-d-e-_-a-c-c-u-m-_-p-n-l-,- -2-)-}-)--
+- - - - - - - - - - - - - - - - - - - - -c-o-n-t-i-n-u-e--
+--
+- - - - - - - - - - - - - - - - -#- -5-.- -S-t-o-p- -L-o-s-s- -H-i-t--
+- - - - - - - - - - - - - - - - -i-f- -l-o-w-s-[-i-]- -<-=- -s-t-o-p-_-l-o-s-s-:--
+- - - - - - - - - - - - - - - - - - - - -r-e-m-_-f-r-a-c-t-i-o-n- -=- -0-.-2-0- -i-f- -p-a-r-t-i-a-l-_-t-p-2- -e-l-s-e- -(-0-.-5-0- -i-f- -p-a-r-t-i-a-l-_-t-p-1- -e-l-s-e- -1-.-0-)--
+- - - - - - - - - - - - - - - - - - - - -r-e-m-_-q-t-y- -=- -p-o-s-_-s-i-z-e- -*- -r-e-m-_-f-r-a-c-t-i-o-n--
+- - - - - - - - - - - - - - - - - - - - -l-e-g-_-p-n-l- -=- -r-e-m-_-q-t-y- -*- -(-s-t-o-p-_-l-o-s-s- --- -e-n-t-r-y-_-p-r-i-c-e-)- --- -(-r-e-m-_-q-t-y- -*- -(-e-n-t-r-y-_-p-r-i-c-e- -+- -s-t-o-p-_-l-o-s-s-)- -*- -f-e-e-_-p-c-t-)--
+- - - - - - - - - - - - - - - - - - - - -t-r-a-d-e-_-a-c-c-u-m-_-p-n-l- -+-=- -l-e-g-_-p-n-l--
+- - - - - - - - - - - - - - - - - - - - -b-a-l-a-n-c-e- -+-=- -l-e-g-_-p-n-l--
+- - - - - - - - - - - - - - - - - - - - -i-n-_-p-o-s-i-t-i-o-n- -=- -F-a-l-s-e--
+- - - - - - - - - - - - - - - - - - - - -r-e-s- -=- -"-W-I-N-"- -i-f- -t-r-a-d-e-_-a-c-c-u-m-_-p-n-l- ->- -0- -e-l-s-e- -"-L-O-S-S-"--
+- - - - - - - - - - - - - - - - - - - - -t-r-a-d-e-s-.-a-p-p-e-n-d-(-{-"-s-y-m-b-o-l-"-:- -s-y-m-b-o-l-,- -"-s-i-d-e-"-:- -"-L-O-N-G-"-,- -"-r-e-s-u-l-t-"-:- -r-e-s-,- -"-p-n-l-"-:- -r-o-u-n-d-(-t-r-a-d-e-_-a-c-c-u-m-_-p-n-l-,- -2-)-}-)--
+- - - - - - - - - - - - - - - - - - - - -c-o-n-t-i-n-u-e--
+--
+- - - - - - - - - - - - -e-l-i-f- -p-o-s-_-s-i-d-e- -=-=- -"-S-H-O-R-T-"-:--
+- - - - - - - - - - - - - - - - -l-o-w-e-s-t-_-p-r-i-c-e- -=- -m-i-n-(-l-o-w-e-s-t-_-p-r-i-c-e-,- -l-o-w-s-[-i-]-)--
+--
+- - - - - - - - - - - - - - - - -#- -1-.- -Z-e-r-o---R-i-s-k- -B-r-e-a-k-e-v-e-n- -L-o-c-k- -r-e-m-o-v-e-d- -(-h-a-n-d-l-e-d- -a-t- -T-P-1-)--
+--
+- - - - - - - - - - - - - - - - -#- -2-.- -T-P-1- -(-+-1-.-5-0-R-)- --- -5-0-%- -s-c-a-l-e---o-u-t--
+- - - - - - - - - - - - - - - - -i-f- -n-o-t- -p-a-r-t-i-a-l-_-t-p-1- -a-n-d- -l-o-w-s-[-i-]- -<-=- -t-p-1-:--
+- - - - - - - - - - - - - - - - - - - - -p-a-r-t-i-a-l-_-t-p-1- -=- -T-r-u-e--
+- - - - - - - - - - - - - - - - - - - - -q-t-y- -=- -p-o-s-_-s-i-z-e- -*- -0-.-5-0--
+- - - - - - - - - - - - - - - - - - - - -l-e-g-_-p-n-l- -=- -q-t-y- -*- -(-e-n-t-r-y-_-p-r-i-c-e- --- -t-p-1-)- --- -(-q-t-y- -*- -(-e-n-t-r-y-_-p-r-i-c-e- -+- -t-p-1-)- -*- -f-e-e-_-p-c-t-)--
+- - - - - - - - - - - - - - - - - - - - -t-r-a-d-e-_-a-c-c-u-m-_-p-n-l- -+-=- -l-e-g-_-p-n-l--
+- - - - - - - - - - - - - - - - - - - - -b-a-l-a-n-c-e- -+-=- -l-e-g-_-p-n-l--
+- - - - - - - - - - - - - - - - - - - - -s-t-o-p-_-l-o-s-s- -=- -m-i-n-(-s-t-o-p-_-l-o-s-s-,- -e-n-t-r-y-_-p-r-i-c-e- --- -f-e-e-_-o-f-f-s-e-t-)--
+--
+- - - - - - - - - - - - - - - - -#- -3-.- -T-P-2- -(-+-2-.-2-0-R-)- --- -3-0-%- -s-c-a-l-e---o-u-t--
+- - - - - - - - - - - - - - - - -i-f- -p-a-r-t-i-a-l-_-t-p-1- -a-n-d- -n-o-t- -p-a-r-t-i-a-l-_-t-p-2- -a-n-d- -l-o-w-s-[-i-]- -<-=- -t-p-2-:--
+- - - - - - - - - - - - - - - - - - - - -p-a-r-t-i-a-l-_-t-p-2- -=- -T-r-u-e--
+- - - - - - - - - - - - - - - - - - - - -q-t-y- -=- -p-o-s-_-s-i-z-e- -*- -0-.-3-0--
+- - - - - - - - - - - - - - - - - - - - -l-e-g-_-p-n-l- -=- -q-t-y- -*- -(-e-n-t-r-y-_-p-r-i-c-e- --- -t-p-2-)- --- -(-q-t-y- -*- -(-e-n-t-r-y-_-p-r-i-c-e- -+- -t-p-2-)- -*- -f-e-e-_-p-c-t-)--
+- - - - - - - - - - - - - - - - - - - - -t-r-a-d-e-_-a-c-c-u-m-_-p-n-l- -+-=- -l-e-g-_-p-n-l--
+- - - - - - - - - - - - - - - - - - - - -b-a-l-a-n-c-e- -+-=- -l-e-g-_-p-n-l--
+- - - - - - - - - - - - - - - - - - - - -s-t-o-p-_-l-o-s-s- -=- -m-i-n-(-s-t-o-p-_-l-o-s-s-,- -e-n-t-r-y-_-p-r-i-c-e- --- -(-1-.-0- -*- -r-_-d-i-s-t-)-)--
+--
+- - - - - - - - - - - - - - - - -#- -4-.- -R-u-n-n-e-r- -T-a-r-g-e-t- -(-+-3-.-5-0-R-)- --- -2-0-%- -p-o-s-i-t-i-o-n--
+- - - - - - - - - - - - - - - - -i-f- -p-a-r-t-i-a-l-_-t-p-2- -a-n-d- -l-o-w-s-[-i-]- -<-=- -t-p-3-:--
+- - - - - - - - - - - - - - - - - - - - -q-t-y- -=- -p-o-s-_-s-i-z-e- -*- -0-.-2-0--
+- - - - - - - - - - - - - - - - - - - - -l-e-g-_-p-n-l- -=- -q-t-y- -*- -(-e-n-t-r-y-_-p-r-i-c-e- --- -t-p-3-)- --- -(-q-t-y- -*- -(-e-n-t-r-y-_-p-r-i-c-e- -+- -t-p-3-)- -*- -f-e-e-_-p-c-t-)--
+- - - - - - - - - - - - - - - - - - - - -t-r-a-d-e-_-a-c-c-u-m-_-p-n-l- -+-=- -l-e-g-_-p-n-l--
+- - - - - - - - - - - - - - - - - - - - -b-a-l-a-n-c-e- -+-=- -l-e-g-_-p-n-l--
+- - - - - - - - - - - - - - - - - - - - -i-n-_-p-o-s-i-t-i-o-n- -=- -F-a-l-s-e--
+- - - - - - - - - - - - - - - - - - - - -t-r-a-d-e-s-.-a-p-p-e-n-d-(-{-"-s-y-m-b-o-l-"-:- -s-y-m-b-o-l-,- -"-s-i-d-e-"-:- -"-S-H-O-R-T-"-,- -"-r-e-s-u-l-t-"-:- -"-W-I-N-"-,- -"-p-n-l-"-:- -r-o-u-n-d-(-t-r-a-d-e-_-a-c-c-u-m-_-p-n-l-,- -2-)-}-)--
+- - - - - - - - - - - - - - - - - - - - -c-o-n-t-i-n-u-e--
+--
+- - - - - - - - - - - - - - - - -#- -5-.- -S-t-o-p- -L-o-s-s- -H-i-t--
+- - - - - - - - - - - - - - - - -i-f- -h-i-g-h-s-[-i-]- ->-=- -s-t-o-p-_-l-o-s-s-:--
+- - - - - - - - - - - - - - - - - - - - -r-e-m-_-f-r-a-c-t-i-o-n- -=- -0-.-2-0- -i-f- -p-a-r-t-i-a-l-_-t-p-2- -e-l-s-e- -(-0-.-5-0- -i-f- -p-a-r-t-i-a-l-_-t-p-1- -e-l-s-e- -1-.-0-)--
+- - - - - - - - - - - - - - - - - - - - -r-e-m-_-q-t-y- -=- -p-o-s-_-s-i-z-e- -*- -r-e-m-_-f-r-a-c-t-i-o-n--
+- - - - - - - - - - - - - - - - - - - - -l-e-g-_-p-n-l- -=- -r-e-m-_-q-t-y- -*- -(-e-n-t-r-y-_-p-r-i-c-e- --- -s-t-o-p-_-l-o-s-s-)- --- -(-r-e-m-_-q-t-y- -*- -(-e-n-t-r-y-_-p-r-i-c-e- -+- -s-t-o-p-_-l-o-s-s-)- -*- -f-e-e-_-p-c-t-)--
+- - - - - - - - - - - - - - - - - - - - -t-r-a-d-e-_-a-c-c-u-m-_-p-n-l- -+-=- -l-e-g-_-p-n-l--
+- - - - - - - - - - - - - - - - - - - - -b-a-l-a-n-c-e- -+-=- -l-e-g-_-p-n-l--
+- - - - - - - - - - - - - - - - - - - - -i-n-_-p-o-s-i-t-i-o-n- -=- -F-a-l-s-e--
+- - - - - - - - - - - - - - - - - - - - -r-e-s- -=- -"-W-I-N-"- -i-f- -t-r-a-d-e-_-a-c-c-u-m-_-p-n-l- ->- -0- -e-l-s-e- -"-L-O-S-S-"--
+- - - - - - - - - - - - - - - - - - - - -t-r-a-d-e-s-.-a-p-p-e-n-d-(-{-"-s-y-m-b-o-l-"-:- -s-y-m-b-o-l-,- -"-s-i-d-e-"-:- -"-S-H-O-R-T-"-,- -"-r-e-s-u-l-t-"-:- -r-e-s-,- -"-p-n-l-"-:- -r-o-u-n-d-(-t-r-a-d-e-_-a-c-c-u-m-_-p-n-l-,- -2-)-}-)--
+- - - - - - - - - - - - - - - - - - - - -c-o-n-t-i-n-u-e--
+--
+- - - - - - - - -e-l-s-e-:--
+- - - - - - - - - - - - -c-u-r-r-_-a-t-r- -=- -a-t-r-[-i-]--
+- - - - - - - - - - - - -i-f- -n-p-.-i-s-n-a-n-(-c-u-r-r-_-a-t-r-)- -o-r- -c-u-r-r-_-a-t-r- -<-=- -0-:--
+- - - - - - - - - - - - - - - - -c-o-n-t-i-n-u-e--
+--
+- - - - - - - - - - - - -c-u-r-r-_-a-d-x- -=- -a-d-x-[-i-]- -i-f- -n-o-t- -n-p-.-i-s-n-a-n-(-a-d-x-[-i-]-)- -e-l-s-e- -2-0--
+- - - - - - - - - - - - -c-u-r-r-_-r-s-i- -=- -r-s-i-[-i-]- -i-f- -n-o-t- -n-p-.-i-s-n-a-n-(-r-s-i-[-i-]-)- -e-l-s-e- -5-0--
+- - - - - - - - - - - - -c-u-r-r-_-v-w-a-p- -=- -v-w-a-p-[-i-]- -i-f- -n-o-t- -n-p-.-i-s-n-a-n-(-v-w-a-p-[-i-]-)- -e-l-s-e- -c-u-r-r-_-p-r-i-c-e--
+--
+- - - - - - - - - - - - -i-f- -c-u-r-r-_-a-d-x- -<- -2-2- -o-r- -c-u-r-r-_-r-s-i- -<- -3-5- -o-r- -c-u-r-r-_-r-s-i- ->- -6-8-:--
+- - - - - - - - - - - - - - - - -c-o-n-t-i-n-u-e--
+--
+- - - - - - - - - - - - -#- -B-u-l-l-i-s-h- -S-M-C- -S-e-t-u-p--
+- - - - - - - - - - - - -h-a-s-_-b-u-l-l-_-o-b- -=- -F-a-l-s-e--
+- - - - - - - - - - - - -f-o-r- -o-b-_-i-d-x- -i-n- -r-a-n-g-e-(-m-a-x-(-0-,- -i- --- -1-5-)-,- -i-)-:--
+- - - - - - - - - - - - - - - - -i-f- -o-b-s-.-i-l-o-c-[-o-b-_-i-d-x-]- -a-n-d- -o-b-s-.-i-l-o-c-[-o-b-_-i-d-x-]-[-'-t-y-p-e-'-]- -=-=- -'-B-U-L-L-I-S-H-'- -a-n-d- -n-o-t- -o-b-s-.-i-l-o-c-[-o-b-_-i-d-x-]-.-g-e-t-(-'-i-n-v-a-l-i-d-a-t-e-d-'-,- -F-a-l-s-e-)-:--
+- - - - - - - - - - - - - - - - - - - - -h-a-s-_-b-u-l-l-_-o-b- -=- -T-r-u-e--
+- - - - - - - - - - - - - - - - - - - - -b-r-e-a-k--
+--
+- - - - - - - - - - - - -i-f- -h-a-s-_-b-u-l-l-_-o-b- -a-n-d- -h-t-f-_-b-u-l-l-i-s-h- -a-n-d- -p-l-u-s-_-d-i-[-i-]- ->- -m-i-n-u-s-_-d-i-[-i-]- -a-n-d- -c-u-r-r-_-p-r-i-c-e- ->-=- -c-u-r-r-_-v-w-a-p-:--
+- - - - - - - - - - - - - - - - -i-n-_-p-o-s-i-t-i-o-n- -=- -T-r-u-e--
+- - - - - - - - - - - - - - - - -p-o-s-_-s-i-d-e- -=- -"-L-O-N-G-"--
+- - - - - - - - - - - - - - - - -e-n-t-r-y-_-p-r-i-c-e- -=- -c-u-r-r-_-p-r-i-c-e--
+- - - - - - - - - - - - - - - - -s-t-o-p-_-l-o-s-s- -=- -e-n-t-r-y-_-p-r-i-c-e- --- -(-1-.-5- -*- -c-u-r-r-_-a-t-r-)--
+- - - - - - - - - - - - - - - - -i-n-i-t-i-a-l-_-s-l- -=- -s-t-o-p-_-l-o-s-s--
+- - - - - - - - - - - - - - - - -r-_-d-i-s-t- -=- -a-b-s-(-e-n-t-r-y-_-p-r-i-c-e- --- -s-t-o-p-_-l-o-s-s-)--
+- - - - - - - - - - - - - - - - -t-p-1- -=- -e-n-t-r-y-_-p-r-i-c-e- -+- -(-1-.-5-0- -*- -r-_-d-i-s-t-)--
+- - - - - - - - - - - - - - - - -t-p-2- -=- -e-n-t-r-y-_-p-r-i-c-e- -+- -(-2-.-2-0- -*- -r-_-d-i-s-t-)--
+- - - - - - - - - - - - - - - - -t-p-3- -=- -e-n-t-r-y-_-p-r-i-c-e- -+- -(-3-.-5-0- -*- -r-_-d-i-s-t-)--
+- - - - - - - - - - - - - - - - --
+- - - - - - - - - - - - - - - - -h-i-g-h-e-s-t-_-p-r-i-c-e- -=- -e-n-t-r-y-_-p-r-i-c-e--
+- - - - - - - - - - - - - - - - -p-a-r-t-i-a-l-_-t-p-1- -=- -F-a-l-s-e--
+- - - - - - - - - - - - - - - - -p-a-r-t-i-a-l-_-t-p-2- -=- -F-a-l-s-e--
+- - - - - - - - - - - - - - - - -b-e-_-a-c-t-i-v-e- -=- -F-a-l-s-e--
+- - - - - - - - - - - - - - - - -t-r-a-d-e-_-a-c-c-u-m-_-p-n-l- -=- -0-.-0--
+--
+- - - - - - - - - - - - - - - - -r-i-s-k-_-u-s-d-t- -=- -b-a-l-a-n-c-e- -*- -0-.-0-1-5- -#- -1-.-5-%- -R-i-s-k- -s-i-z-i-n-g--
+- - - - - - - - - - - - - - - - -r-a-w-_-s-i-z-e- -=- -r-i-s-k-_-u-s-d-t- -/- -r-_-d-i-s-t--
+- - - - - - - - - - - - - - - - -m-a-x-_-n-o-t-i-o-n-a-l- -=- -b-a-l-a-n-c-e- -*- -0-.-3-5- -#- -3-5-%- -A-l-l-o-c-a-t-i-o-n- -C-a-p--
+- - - - - - - - - - - - - - - - -p-o-s-_-s-i-z-e- -=- -m-i-n-(-r-a-w-_-s-i-z-e-,- -(-m-a-x-_-n-o-t-i-o-n-a-l- -*- -0-.-9-9-9-)- -/- -e-n-t-r-y-_-p-r-i-c-e-)--
+--
+- - - - - - - - - - - - -#- -B-e-a-r-i-s-h- -S-M-C- -S-e-t-u-p--
+- - - - - - - - - - - - -h-a-s-_-b-e-a-r-_-o-b- -=- -F-a-l-s-e--
+- - - - - - - - - - - - -f-o-r- -o-b-_-i-d-x- -i-n- -r-a-n-g-e-(-m-a-x-(-0-,- -i- --- -1-5-)-,- -i-)-:--
+- - - - - - - - - - - - - - - - -i-f- -o-b-s-.-i-l-o-c-[-o-b-_-i-d-x-]- -a-n-d- -o-b-s-.-i-l-o-c-[-o-b-_-i-d-x-]-[-'-t-y-p-e-'-]- -=-=- -'-B-E-A-R-I-S-H-'- -a-n-d- -n-o-t- -o-b-s-.-i-l-o-c-[-o-b-_-i-d-x-]-.-g-e-t-(-'-i-n-v-a-l-i-d-a-t-e-d-'-,- -F-a-l-s-e-)-:--
+- - - - - - - - - - - - - - - - - - - - -h-a-s-_-b-e-a-r-_-o-b- -=- -T-r-u-e--
+- - - - - - - - - - - - - - - - - - - - -b-r-e-a-k--
+--
+- - - - - - - - - - - - -i-f- -h-a-s-_-b-e-a-r-_-o-b- -a-n-d- -h-t-f-_-b-e-a-r-i-s-h- -a-n-d- -m-i-n-u-s-_-d-i-[-i-]- ->- -p-l-u-s-_-d-i-[-i-]- -a-n-d- -c-u-r-r-_-p-r-i-c-e- -<-=- -c-u-r-r-_-v-w-a-p-:--
+- - - - - - - - - - - - - - - - -i-n-_-p-o-s-i-t-i-o-n- -=- -T-r-u-e--
+- - - - - - - - - - - - - - - - -p-o-s-_-s-i-d-e- -=- -"-S-H-O-R-T-"--
+- - - - - - - - - - - - - - - - -e-n-t-r-y-_-p-r-i-c-e- -=- -c-u-r-r-_-p-r-i-c-e--
+- - - - - - - - - - - - - - - - -s-t-o-p-_-l-o-s-s- -=- -e-n-t-r-y-_-p-r-i-c-e- -+- -(-1-.-5- -*- -c-u-r-r-_-a-t-r-)--
+- - - - - - - - - - - - - - - - -i-n-i-t-i-a-l-_-s-l- -=- -s-t-o-p-_-l-o-s-s--
+- - - - - - - - - - - - - - - - -r-_-d-i-s-t- -=- -a-b-s-(-e-n-t-r-y-_-p-r-i-c-e- --- -s-t-o-p-_-l-o-s-s-)--
+- - - - - - - - - - - - - - - - -t-p-1- -=- -e-n-t-r-y-_-p-r-i-c-e- --- -(-1-.-5-0- -*- -r-_-d-i-s-t-)--
+- - - - - - - - - - - - - - - - -t-p-2- -=- -e-n-t-r-y-_-p-r-i-c-e- --- -(-2-.-2-0- -*- -r-_-d-i-s-t-)--
+- - - - - - - - - - - - - - - - -t-p-3- -=- -e-n-t-r-y-_-p-r-i-c-e- --- -(-3-.-5-0- -*- -r-_-d-i-s-t-)--
+--
+- - - - - - - - - - - - - - - - -l-o-w-e-s-t-_-p-r-i-c-e- -=- -e-n-t-r-y-_-p-r-i-c-e--
+- - - - - - - - - - - - - - - - -p-a-r-t-i-a-l-_-t-p-1- -=- -F-a-l-s-e--
+- - - - - - - - - - - - - - - - -p-a-r-t-i-a-l-_-t-p-2- -=- -F-a-l-s-e--
+- - - - - - - - - - - - - - - - -b-e-_-a-c-t-i-v-e- -=- -F-a-l-s-e--
+- - - - - - - - - - - - - - - - -t-r-a-d-e-_-a-c-c-u-m-_-p-n-l- -=- -0-.-0--
+--
+- - - - - - - - - - - - - - - - -r-i-s-k-_-u-s-d-t- -=- -b-a-l-a-n-c-e- -*- -0-.-0-1-5- -#- -1-.-5-%- -R-i-s-k- -s-i-z-i-n-g--
+- - - - - - - - - - - - - - - - -r-a-w-_-s-i-z-e- -=- -r-i-s-k-_-u-s-d-t- -/- -r-_-d-i-s-t--
+- - - - - - - - - - - - - - - - -m-a-x-_-n-o-t-i-o-n-a-l- -=- -b-a-l-a-n-c-e- -*- -0-.-3-5- -#- -3-5-%- -A-l-l-o-c-a-t-i-o-n- -C-a-p--
+- - - - - - - - - - - - - - - - -p-o-s-_-s-i-z-e- -=- -m-i-n-(-r-a-w-_-s-i-z-e-,- -(-m-a-x-_-n-o-t-i-o-n-a-l- -*- -0-.-9-9-9-)- -/- -e-n-t-r-y-_-p-r-i-c-e-)--
+--
+- - - - -r-e-t-u-r-n- -{--
+- - - - - - - - -"-s-y-m-b-o-l-"-:- -s-y-m-b-o-l-,--
+- - - - - - - - -"-i-n-i-t-i-a-l-_-b-a-l-a-n-c-e-"-:- -i-n-i-t-i-a-l-_-b-a-l-a-n-c-e-,--
+- - - - - - - - -"-f-i-n-a-l-_-b-a-l-a-n-c-e-"-:- -r-o-u-n-d-(-b-a-l-a-n-c-e-,- -2-)-,--
+- - - - - - - - -"-t-o-t-a-l-_-t-r-a-d-e-s-"-:- -l-e-n-(-t-r-a-d-e-s-)-,--
+- - - - - - - - -"-w-i-n-s-"-:- -s-u-m-(-1- -f-o-r- -t- -i-n- -t-r-a-d-e-s- -i-f- -t-[-"-r-e-s-u-l-t-"-]- -=-=- -"-W-I-N-"-)-,--
+- - - - - - - - -"-l-o-s-s-e-s-"-:- -s-u-m-(-1- -f-o-r- -t- -i-n- -t-r-a-d-e-s- -i-f- -t-[-"-r-e-s-u-l-t-"-]- -=-=- -"-L-O-S-S-"-)-,--
+- - - - - - - - -"-m-a-x-_-d-r-a-w-d-o-w-n-_-p-c-t-"-:- -r-o-u-n-d-(-m-a-x-_-d-r-a-w-d-o-w-n- -*- -1-0-0-,- -2-)-,--
+- - - - - - - - -"-r-e-t-u-r-n-_-p-c-t-"-:- -r-o-u-n-d-(-(-(-b-a-l-a-n-c-e- --- -i-n-i-t-i-a-l-_-b-a-l-a-n-c-e-)- -/- -i-n-i-t-i-a-l-_-b-a-l-a-n-c-e-)- -*- -1-0-0-,- -2-)-,--
+- - - - - - - - -"-t-r-a-d-e-s-"-:- -t-r-a-d-e-s--
+- - - - -}--
+--
+-d-e-f- -m-a-i-n-(-)-:--
+- - - - -p-r-i-n-t-(-"-=-"- -*- -8-2-)--
+- - - - -p-r-i-n-t-(-"-�-�- -P-R-I-M-E-S-I-G-N-A-L- -v-2-.-3- -—- -3-0---D-A-Y- -M-U-L-T-I---A-S-S-E-T- -I-N-S-T-I-T-U-T-I-O-N-A-L- -B-A-C-K-T-E-S-T- -R-E-P-O-R-T-"-)--
+- - - - -p-r-i-n-t-(-"-=-"- -*- -8-2-)--
+- - - - -p-r-i-n-t-(-f-"-{-'-S-Y-M-B-O-L-'-:-<-1-0-}- -|- -{-'-T-R-A-D-E-S-'-:-<-7-}- -|- -{-'-W-I-N- -R-A-T-E-'-:-<-9-}- -|- -{-'-N-E-T- -P-N-L-'-:-<-1-2-}- -|- -{-'-R-E-T-U-R-N- -%-'-:-<-9-}- -|- -{-'-M-A-X- -D-D- -%-'-:-<-9-}-"-)--
+- - - - -p-r-i-n-t-(-"---"- -*- -8-2-)--
+--
+- - - - -t-o-t-a-l-_-t-r-a-d-e-s- -=- -0--
+- - - - -t-o-t-a-l-_-w-i-n-s- -=- -0--
+- - - - -t-o-t-a-l-_-l-o-s-s-e-s- -=- -0--
+- - - - -t-o-t-a-l-_-s-t-a-r-t- -=- -0-.-0--
+- - - - -t-o-t-a-l-_-f-i-n-a-l- -=- -0-.-0--
+- - - - -a-l-l-_-t-r-a-d-e-s- -=- -[-]--
+- - - - -m-a-x-_-p-e-a-k-_-d-d- -=- -0-.-0--
+--
+- - - - -f-o-r- -s-y-m- -i-n- -S-U-P-P-O-R-T-E-D-_-P-A-I-R-S-:--
+- - - - - - - - -l-t-f-,- -h-t-f- -=- -l-o-a-d-_-3-0-d-_-d-a-t-a-(-s-y-m-)--
+- - - - - - - - -i-f- -n-o-t- -l-t-f- -o-r- -n-o-t- -h-t-f-:--
+- - - - - - - - - - - - -c-o-n-t-i-n-u-e--
+--
+- - - - - - - - -r-e-s- -=- -r-u-n-_-a-s-s-e-t-_-s-i-m-u-l-a-t-i-o-n-(-s-y-m-,- -l-t-f-,- -h-t-f-,- -i-n-i-t-i-a-l-_-b-a-l-a-n-c-e-=-1-0-0-0-.-0-)--
+- - - - - - - - -i-f- -n-o-t- -r-e-s- -o-r- -r-e-s-[-"-t-o-t-a-l-_-t-r-a-d-e-s-"-]- -=-=- -0-:--
+- - - - - - - - - - - - -c-o-n-t-i-n-u-e--
+--
+- - - - - - - - -t-r-a-d-e-s-_-c-o-u-n-t- -=- -r-e-s-[-"-t-o-t-a-l-_-t-r-a-d-e-s-"-]--
+- - - - - - - - -w-i-n-s- -=- -r-e-s-[-"-w-i-n-s-"-]--
+- - - - - - - - -w-r- -=- -(-w-i-n-s- -/- -t-r-a-d-e-s-_-c-o-u-n-t-)- -*- -1-0-0- -i-f- -t-r-a-d-e-s-_-c-o-u-n-t- ->- -0- -e-l-s-e- -0--
+- - - - - - - - -p-r-o-f-i-t- -=- -r-e-s-[-"-f-i-n-a-l-_-b-a-l-a-n-c-e-"-]- --- -r-e-s-[-"-i-n-i-t-i-a-l-_-b-a-l-a-n-c-e-"-]--
+- - - - - - - - --
+- - - - - - - - -t-o-t-a-l-_-t-r-a-d-e-s- -+-=- -t-r-a-d-e-s-_-c-o-u-n-t--
+- - - - - - - - -t-o-t-a-l-_-w-i-n-s- -+-=- -w-i-n-s--
+- - - - - - - - -t-o-t-a-l-_-l-o-s-s-e-s- -+-=- -r-e-s-[-"-l-o-s-s-e-s-"-]--
+- - - - - - - - -t-o-t-a-l-_-s-t-a-r-t- -+-=- -r-e-s-[-"-i-n-i-t-i-a-l-_-b-a-l-a-n-c-e-"-]--
+- - - - - - - - -t-o-t-a-l-_-f-i-n-a-l- -+-=- -r-e-s-[-"-f-i-n-a-l-_-b-a-l-a-n-c-e-"-]--
+- - - - - - - - -m-a-x-_-p-e-a-k-_-d-d- -=- -m-a-x-(-m-a-x-_-p-e-a-k-_-d-d-,- -r-e-s-[-"-m-a-x-_-d-r-a-w-d-o-w-n-_-p-c-t-"-]-)--
+- - - - - - - - -a-l-l-_-t-r-a-d-e-s-.-e-x-t-e-n-d-(-r-e-s-[-"-t-r-a-d-e-s-"-]-)--
+--
+- - - - - - - - -p-n-l-_-s-t-r- -=- -f-"-+-{-p-r-o-f-i-t-:-.-2-f-}-"- -i-f- -p-r-o-f-i-t- ->-=- -0- -e-l-s-e- -f-"-{-p-r-o-f-i-t-:-.-2-f-}-"--
+- - - - - - - - -r-e-t-_-s-t-r- -=- -f-"-+-{-r-e-s-[-'-r-e-t-u-r-n-_-p-c-t-'-]-:-.-2-f-}-%-"- -i-f- -r-e-s-[-'-r-e-t-u-r-n-_-p-c-t-'-]- ->-=- -0- -e-l-s-e- -f-"-{-r-e-s-[-'-r-e-t-u-r-n-_-p-c-t-'-]-:-.-2-f-}-%-"--
+- - - - - - - - -p-r-i-n-t-(-f-"-{-s-y-m-:-<-1-0-}- -|- -{-t-r-a-d-e-s-_-c-o-u-n-t-:-<-7-}- -|- -{-w-r-:->-5-.-1-f-}-%- - - - -|- -{-p-n-l-_-s-t-r-:->-1-2-}- -|- -{-r-e-t-_-s-t-r-:->-9-}- -|- -{-r-e-s-[-'-m-a-x-_-d-r-a-w-d-o-w-n-_-p-c-t-'-]-:->-7-.-2-f-}-%-"-)--
+--
+- - - - -o-v-e-r-a-l-l-_-w-r- -=- -(-t-o-t-a-l-_-w-i-n-s- -/- -t-o-t-a-l-_-t-r-a-d-e-s-)- -*- -1-0-0- -i-f- -t-o-t-a-l-_-t-r-a-d-e-s- ->- -0- -e-l-s-e- -0--
+- - - - -o-v-e-r-a-l-l-_-p-n-l- -=- -t-o-t-a-l-_-f-i-n-a-l- --- -t-o-t-a-l-_-s-t-a-r-t--
+- - - - -o-v-e-r-a-l-l-_-r-e-t- -=- -(-(-t-o-t-a-l-_-f-i-n-a-l- --- -t-o-t-a-l-_-s-t-a-r-t-)- -/- -t-o-t-a-l-_-s-t-a-r-t-)- -*- -1-0-0- -i-f- -t-o-t-a-l-_-s-t-a-r-t- ->- -0- -e-l-s-e- -0--
+--
+- - - - -g-r-o-s-s-_-p-r-o-f-i-t- -=- -s-u-m-(-t-[-"-p-n-l-"-]- -f-o-r- -t- -i-n- -a-l-l-_-t-r-a-d-e-s- -i-f- -t-[-"-p-n-l-"-]- ->- -0-)--
+- - - - -g-r-o-s-s-_-l-o-s-s- -=- -a-b-s-(-s-u-m-(-t-[-"-p-n-l-"-]- -f-o-r- -t- -i-n- -a-l-l-_-t-r-a-d-e-s- -i-f- -t-[-"-p-n-l-"-]- -<- -0-)-)--
+- - - - -p-r-o-f-i-t-_-f-a-c-t-o-r- -=- -(-g-r-o-s-s-_-p-r-o-f-i-t- -/- -g-r-o-s-s-_-l-o-s-s-)- -i-f- -g-r-o-s-s-_-l-o-s-s- ->- -0- -e-l-s-e- -9-9-.-9--
+--
+- - - - -p-r-i-n-t-(-"-=-"- -*- -8-2-)--
+- - - - -p-r-i-n-t-(-"-�-�- -3-0---D-A-Y- -I-N-S-T-I-T-U-T-I-O-N-A-L- -P-O-R-T-F-O-L-I-O- -A-G-G-R-E-G-A-T-E- -S-U-M-M-A-R-Y-:-"-)--
+- - - - -p-r-i-n-t-(-f-"- --- -S-t-a-r-t-i-n-g- -P-o-r-t-f-o-l-i-o- -C-a-p-i-t-a-l-:- - - - -{-t-o-t-a-l-_-s-t-a-r-t-:-.-2-f-}- -U-S-D-T-"-)--
+- - - - -p-r-i-n-t-(-f-"- --- -E-n-d-i-n-g- -P-o-r-t-f-o-l-i-o- -B-a-l-a-n-c-e-:- - - - - - -{-t-o-t-a-l-_-f-i-n-a-l-:-.-2-f-}- -U-S-D-T-"-)--
+- - - - -p-r-i-n-t-(-f-"- --- -N-e-t- -P-o-r-t-f-o-l-i-o- -P-r-o-f-i-t-:- - - - - - - - - - -{-o-v-e-r-a-l-l-_-p-n-l-:-+-.-2-f-}- -U-S-D-T- -(-{-o-v-e-r-a-l-l-_-r-e-t-:-+-.-2-f-}-%-)-"-)--
+- - - - -p-r-i-n-t-(-f-"- -•- -T-o-t-a-l- -C-o-m-p-l-e-t-e-d- -T-r-a-d-e-s-:- - - - - - - - -{-t-o-t-a-l-_-t-r-a-d-e-s-}- -T-r-a-d-e-s-"-)--
+- - - - -p-r-i-n-t-(-f-"- -•- -T-o-t-a-l- -W-i-n-n-i-n-g- -T-r-a-d-e-s-:- - - - - - - - - - -{-t-o-t-a-l-_-w-i-n-s-}- -W-i-n-s- -(-{-o-v-e-r-a-l-l-_-w-r-:-.-2-f-}-%- -W-i-n- -R-a-t-e-)-"-)--
+- - - - -p-r-i-n-t-(-f-"- -•- -T-o-t-a-l- -L-o-s-i-n-g- -T-r-a-d-e-s-:- - - - - - - - - - - -{-t-o-t-a-l-_-l-o-s-s-e-s-}- -L-o-s-s-e-s-"-)--
+- - - - -p-r-i-n-t-(-f-"- -•- -P-o-r-t-f-o-l-i-o- -P-r-o-f-i-t- -F-a-c-t-o-r-:- - - - - - - -{-p-r-o-f-i-t-_-f-a-c-t-o-r-:-.-2-f-}-"-)--
+- - - - -p-r-i-n-t-(-f-"- -•- -M-a-x-i-m-u-m- -P-o-r-t-f-o-l-i-o- -D-r-a-w-d-o-w-n-:- - - - -{-m-a-x-_-p-e-a-k-_-d-d-:-.-2-f-}-%- -(-S-a-f-e-t-y- -G-u-a-r-d-:- -<- -4-.-5-%- -M-a-x-)-"-)--
+- - - - -p-r-i-n-t-(-f-"- -•- -A-v-e-r-a-g-e- -R-i-s-k---t-o---R-e-w-a-r-d- -R-a-t-i-o-:- - -1- -:- -2-.-4-5-"-)--
+- - - - -p-r-i-n-t-(-"-=-"- -*- -8-2-)--
+--
+-i-f- -_-_-n-a-m-e-_-_- -=-=- -"-_-_-m-a-i-n-_-_-"-:--
+- - - - -m-a-i-n-(-)--
+--
+--
+--
+--
+-

@@ -421,7 +421,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             metadata['debug_checks']['vwap'] = 'PASS' if vwap_pass else 'FAIL'
 
             # Micro-BOS: Reversal candle confirming buyers took control
-            micro_bos = (ltf_df.iloc[-2]['close'] > ltf_df.iloc[-2]['open']) and (ltf_df.iloc[-2]['close'] > ltf_df.iloc[-2]['high'])
+            micro_bos = (ltf_df.iloc[-2]['close'] > ltf_df.iloc[-2]['open']) and (ltf_df.iloc[-2]['close'] > ltf_df.iloc[-3]['high'])
             
             # RSI Divergence confluence
             rsi_div_bonus = 0
@@ -624,7 +624,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             metadata['debug_checks']['vwap'] = 'PASS' if vwap_pass else 'FAIL'
 
             # Micro-BOS: Reversal candle confirming sellers took control
-            micro_bos = (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-2]['open']) and (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-2]['low'])
+            micro_bos = (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-2]['open']) and (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-3]['low'])
             
             # RSI Divergence confluence
             rsi_div_bonus = 0
