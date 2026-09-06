@@ -22,7 +22,7 @@ class RiskManager:
         self.max_correlated_risk_pct = raw_cap / 100.0 if raw_cap > 0.2 else raw_cap
         self._lock = asyncio.Lock()
         # Portfolio-level lock for atomic risk reservation across concurrent entry tasks
-        self.portfolio_lock = asyncio.Lock()
+        self.portfolio_lock = self._lock
 
     def _recalculate_reserved_totals(self):
         """Derives current reservation metrics from active durable reservations."""
@@ -162,7 +162,8 @@ class RiskManager:
         # 1. Calculate budget to risk (Normalize and cap max risk relative to currency)
         base_risk = account_equity * (Config.RISK_PCT / 100.0)
         curr_mult = rate if effective_equity_curr == "INR" else 1.0
-        max_single_trade_risk = float(os.getenv("MAX_SINGLE_TRADE_RISK_USDT", "25.0")) * curr_mult
+        # R-01 Fix: Use Config value instead of os.getenv in hot-path
+        max_single_trade_risk = float(getattr(Config, "MAX_SINGLE_TRADE_RISK_USDT", 25.0)) * curr_mult
         threshold_equity = 1000.0 * curr_mult
         trade_risk = min(base_risk, max_single_trade_risk) if account_equity >= threshold_equity else base_risk
 
@@ -322,8 +323,9 @@ class RiskManager:
         if len(trades) < 10:
             return base  # Not enough data, use default fixed risk
         
-        wins = [t for t in trades if float(t.get('pnl_usdt', 0) or t.get('pnl', 0) or 0) > 0]
-        losses = [t for t in trades if float(t.get('pnl_usdt', 0) or t.get('pnl', 0) or 0) < 0]
+        # Fix R-03: Use pnl_usdt exclusively, ignore INR pnl to avoid sizing explosion
+        wins = [t for t in trades if float(t.get('pnl_usdt', 0)) > 0]
+        losses = [t for t in trades if float(t.get('pnl_usdt', 0)) < 0]
         
         if not losses:
             return min(base * 1.5, 2.0)  # All wins, moderate increase capped at 2%
@@ -332,8 +334,8 @@ class RiskManager:
             return max(0.2, base * 0.25)  # All losses, heavily reduce but floor at 0.2%
         
         W = len(wins) / len(trades)
-        avg_win = sum(float(t.get('pnl_usdt', 0) or t.get('pnl', 0) or 0) for t in wins) / len(wins)
-        avg_loss = abs(sum(float(t.get('pnl_usdt', 0) or t.get('pnl', 0) or 0) for t in losses) / len(losses))
+        avg_win = sum(float(t.get('pnl_usdt', 0)) for t in wins) / len(wins)
+        avg_loss = abs(sum(float(t.get('pnl_usdt', 0)) for t in losses) / len(losses))
         R = avg_win / avg_loss if avg_loss > 0 else 1.0
         
         # Kelly Formula: f* = W - (1-W)/R

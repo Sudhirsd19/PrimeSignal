@@ -93,6 +93,8 @@ class MLSignalConfirmator:
         lookahead   = int(getattr(Config,   'ML_LABEL_LOOKAHEAD', 20))   # max 20 bars
 
         close_vals = data['close'].values
+        high_vals = data['high'].values
+        low_vals = data['low'].values
         n = len(close_vals)
         labels = np.zeros(n, dtype=int)
 
@@ -104,19 +106,23 @@ class MLSignalConfirmator:
             long_alive = True
             short_alive = True
             for fwd in range(1, min(lookahead + 1, n - idx)):
-                ret = (close_vals[idx + fwd] - entry) / entry
+                fwd_high = high_vals[idx + fwd]
+                fwd_low = low_vals[idx + fwd]
+                
+                high_ret = (fwd_high - entry) / entry
+                low_ret = (fwd_low - entry) / entry
                 
                 # Check SL violations first
-                if long_alive and ret <= -sl_barrier:
+                if long_alive and low_ret <= -sl_barrier:
                     long_alive = False
-                if short_alive and ret >= sl_barrier:
+                if short_alive and high_ret >= sl_barrier:
                     short_alive = False
                     
                 # Check TP targets
-                if long_alive and ret >= tp_barrier:
+                if long_alive and high_ret >= tp_barrier:
                     hit = 1   # Long TP hit first -> favourable long
                     break
-                if short_alive and ret <= -tp_barrier:
+                if short_alive and low_ret <= -tp_barrier:
                     hit = 2   # Short TP hit first -> favourable short
                     break
                     
@@ -234,7 +240,8 @@ class MLSignalConfirmator:
 
         row = {}
         for col in feature_cols:
-            val = data[col].iloc[-1]
+            # ML-02 Fix: Use iloc[-2] to only extract features from the LAST COMPLETED candle
+            val = data[col].iloc[-2]
             row[col] = val if not (isinstance(val, float) and np.isnan(val)) else 0.0
 
         return pd.DataFrame([row])

@@ -353,8 +353,10 @@ class BacktestEngine:
                 if signal == "HOLD" and self.relaxed_enabled:
                     if ltf_ts - last_trade_time >= 30 * 60:
                         if relaxed_trades_today < 2 and ltf_ts > relaxed_disabled_until:
-                            signal, signal_meta = self.strategy.generate_signal(sub_htf, sub_ltf, relaxed=True)
-                            setup_mode = 'RELAXED' 
+                            r_signal, r_meta = self.strategy.generate_signal(sub_htf, sub_ltf, relaxed=True)
+                            if r_signal in ("BUY", "SELL"):
+                                signal, signal_meta = r_signal, r_meta
+                                setup_mode = 'RELAXED'
                 
                 if signal in ("BUY", "SELL"):
                     # ML Confidence Scaler
@@ -535,8 +537,12 @@ class BacktestEngine:
             
         final_return_pct = ((self.balance - initial_balance) / initial_balance) * 100.0
         
-        strict_df = trade_df[trade_df.get('setup_mode', 'STRICT') == 'STRICT']
-        relaxed_df = trade_df[trade_df.get('setup_mode', 'STRICT') == 'RELAXED']
+        if 'setup_mode' in trade_df.columns:
+            strict_df = trade_df[trade_df['setup_mode'] == 'STRICT']
+            relaxed_df = trade_df[trade_df['setup_mode'] == 'RELAXED']
+        else:
+            strict_df = trade_df
+            relaxed_df = pd.DataFrame(columns=trade_df.columns)
         
         swr, spf, sdd = get_subset_metrics(strict_df)
         rwr, rpf, rdd = get_subset_metrics(relaxed_df)

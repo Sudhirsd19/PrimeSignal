@@ -821,8 +821,9 @@ class ExecutionEngine:
                         error="Authoritatively verified absent on exchange (OrderNotFound)"
                     )
                 except Exception as e:
-                    # Targeted query failed; fall through to order list inspection
-                    pass
+                    print(f"[RECONCILE] Targeted query failed for {client_order_id}: {e}")
+                    # A network error during lookup should not be silently swallowed.
+                    # It means we genuinely don't know the state, and must fall back.
 
             # 2. Check open orders
             open_orders = await self.execute_with_retry(self.trade_client.fetch_open_orders, symbol)

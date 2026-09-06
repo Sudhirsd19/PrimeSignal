@@ -426,7 +426,18 @@ class PrimeSignalBot:
             self.tp_cooldown_until[sym] = 0.0
             self.position_mode[sym] = "STRICT"
 
-            # Reset order state machine
+            # M-02 Fix: Reset order state machine context
+            if hasattr(self, 'order_state_machine'):
+                ctx = self.order_state_machine.get_context(sym)
+                if hasattr(ctx, 'reset'):
+                    ctx.reset()
+                else:
+                    from core.order_state_machine import OrderState
+                    ctx.transition_to(OrderState.CLOSED, reason="Manual account reset")
+                    ctx.native_sl_order_id = None
+                    ctx.entry_order_id = None
+                    ctx.entry_intent_id = None
+
         self.traded_zones_cache.clear()
         self.trade_history.clear()
         self.global_pause_until = 0.0
@@ -630,7 +641,7 @@ class PrimeSignalBot:
             return True, "US Main Macro Data Window (13:20-13:45 UTC)"
             
         # Window 3: 18:00 - 19:30 UTC (Fed FOMC Rate Decision & Press Conf, typically Wednesdays)
-        if (weekday == 2) and (18 <= hour <= 19):
+        if (weekday == 2) and (hour == 18 or (hour == 19 and minute <= 30)):
             return True, "Fed FOMC Rate Decision Window (18:00-19:30 UTC)"
             
         return False, ""
@@ -2691,6 +2702,8 @@ class PrimeSignalBot:
                     self.take_profit[symbol] = 0.0
                     self.take_profit_1r[symbol] = 0.0
                     self.take_profit_2r[symbol] = 0.0
+                    self.highest_price_reached[symbol] = 0.0
+                    self.lowest_price_reached[symbol] = 999999.0
                     self.partial_tp_taken[symbol] = False
                     self.tp2_taken[symbol] = False
                     self.current_trade_id[symbol] = ""
