@@ -185,16 +185,10 @@ class MLSignalConfirmator:
             # NOTE: multi_class='ovr' required because we now use 3-class labels {0, 1, 2}
             try:
                 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
-                from sklearn.metrics import make_scorer, roc_auc_score
                 if len(X) >= 100:
                     tscv = TimeSeriesSplit(n_splits=min(5, len(X) // 50))
-                    # multi_class='ovr' + average='macro' handles 3 classes correctly
-                    multiclass_auc = make_scorer(
-                        roc_auc_score,
-                        multi_class='ovr',
-                        average='macro',
-                        needs_proba=True
-                    )
+                    # In scikit-learn 1.4+, make_scorer's needs_proba is removed. 
+                    # We can use the built-in string 'roc_auc_ovr' which automatically handles this.
                     cv_scores = cross_val_score(
                         GradientBoostingClassifier(
                             n_estimators=self.model.n_estimators,
@@ -203,7 +197,7 @@ class MLSignalConfirmator:
                             subsample=self.model.subsample,
                             random_state=42
                         ),
-                        X, y, cv=tscv, scoring=multiclass_auc, n_jobs=-1
+                        X, y, cv=tscv, scoring='roc_auc_ovr', n_jobs=-1
                     )
                     mean_auc = cv_scores.mean()
                     std_auc  = cv_scores.std()
