@@ -35,7 +35,7 @@ class Config:
     MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.5")) # TP1 Target: 1.2R
     RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.2")) # TP2 Target: 2.2R
     TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "0.65")) # 65% profit booking at 1.2R target
-    ML_CONFIDENCE_THRESHOLD = float(os.getenv("ML_CONFIDENCE_THRESHOLD", "0.60"))
+    
     # Triple-Barrier Label constants (used in ml/confirmation.py FIX-B)
     # TP barrier: +0.6% = TP1 at 1.2R of 0.5% minimum SL
     ML_LABEL_TP_PCT      = float(os.getenv("ML_LABEL_TP_PCT",      "0.006"))
@@ -62,7 +62,6 @@ class Config:
     
     # 5. Macro Economic News Blackout Window Filter (CPI/FOMC auto-pause)
     ENABLE_MACRO_NEWS_FILTER = os.getenv("ENABLE_MACRO_NEWS_FILTER", "True").lower() in ("true", "1", "yes")
-    MACRO_PAUSE_MINUTES = int(os.getenv("MACRO_PAUSE_MINUTES", "15"))
     
     # ─── NEXT-GEN PROPRIETARY QUANT INNOVATIONS ───
     # 1. Liquidation Magnetic Heatmap & Hunt Engine

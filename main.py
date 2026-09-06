@@ -112,7 +112,6 @@ class PrimeSignalBot:
         self.original_position_size = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.last_exit_time: dict[str, float] = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
         self.tp_cooldown_until: dict[str, float] = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.consecutive_losses = 0
         self.global_pause_until: float = 0.0
         self.relaxed_losses = 0
         self.relaxed_disabled_until: float = 0.0
@@ -123,6 +122,12 @@ class PrimeSignalBot:
         self.cluster_loss_pause_until: float = 0.0
         self.cluster_risk_penalty = False
         self.global_last_trade_time: float = 0.0
+        
+        self.hourly_peak_equity = 0.0
+        self.last_hour_ts = 0.0
+        self.hourly_dd_penalty = False
+        self._profit_lock_alert_sent = False
+        self._circuit_breaker_alert_sent = False
         self.traded_zones_cache = {}
 
         # ─── PROFIT-BASED LOGIC: New state tracking ───
@@ -189,6 +194,11 @@ class PrimeSignalBot:
                 'current_trade_id': self.current_trade_id,
                 'entry_fx_rate': self.entry_fx_rate,
                 'accumulated_fees': self.accumulated_fees,
+                'hourly_peak_equity': self.hourly_peak_equity,
+                'last_hour_ts': self.last_hour_ts,
+                'hourly_dd_penalty': self.hourly_dd_penalty,
+                '_profit_lock_alert_sent': self._profit_lock_alert_sent,
+                '_circuit_breaker_alert_sent': self._circuit_breaker_alert_sent,
                 'closed_trades': list(DashboardState.trades[-100:]),
                 'order_state_machine': self.order_state_machine.serialize_all(),
                 'active_risk_reservations': self.risk.serialize_reservations() if hasattr(self, 'risk') else {},
@@ -311,6 +321,13 @@ class PrimeSignalBot:
                 self.entry_fx_rate = {k: float(v or 0.0) for k, v in safe_load('entry_fx_rate', 0.0).items()}
                 self.accumulated_fees = {k: float(v or 0.0) for k, v in safe_load('accumulated_fees', 0.0).items()}
                 
+                if isinstance(state, dict):
+                    self.hourly_peak_equity = float(state.get('hourly_peak_equity', self._dry_run_balance_usdt))
+                    self.last_hour_ts = float(state.get('last_hour_ts', time.time()))
+                    self.hourly_dd_penalty = bool(state.get('hourly_dd_penalty', False))
+                    self._profit_lock_alert_sent = bool(state.get('_profit_lock_alert_sent', False))
+                    self._circuit_breaker_alert_sent = bool(state.get('_circuit_breaker_alert_sent', False))
+                
                 # Restore closed trades history
                 saved_trades = state.get('closed_trades', []) if isinstance(state, dict) else []
                 if saved_trades:
@@ -407,7 +424,9 @@ class PrimeSignalBot:
             self.original_position_size[sym] = 0.0
             self.last_exit_time[sym] = 0.0
             self.tp_cooldown_until[sym] = 0.0
+            self.position_mode[sym] = "STRICT"
 
+            # Reset order state machine
         self.traded_zones_cache.clear()
         self.trade_history.clear()
         self.global_pause_until = 0.0
@@ -882,9 +901,11 @@ class PrimeSignalBot:
             add_log_message(f"[{symbol}] Trade skipped: already traded in this zone ({zone_id}).")
             return
             
-        # Clear out old cache (basic cleanup - ideally based on candle count but here based on simple dict size)
-        if len(self.traded_zones_cache) > 1000:
-            self.traded_zones_cache.clear()
+        # Clear out old cache based on TTL expiry (24h)
+        current_time = time.time()
+        keys_to_remove = [k for k, v in self.traded_zones_cache.items() if isinstance(v, float) and current_time - v > 86400]
+        for k in keys_to_remove:
+            del self.traded_zones_cache[k]
             
         # FIX #2: Define entry_price BEFORE ML block uses it
         entry_price = ltf_df['close'].iloc[-1]
@@ -1295,7 +1316,7 @@ class PrimeSignalBot:
                     self.last_trade_time[symbol] = time.time()
                     # --- PROFIT-BASED LOGIC: Trade lifecycle init ---
                     self.current_trade_id[symbol] = f"TRADE_{symbol.replace('/', '')}_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
-                    self.entry_fx_rate[symbol] = float(getattr(Config, 'USDT_INR_RATE', 85.0))
+                    self.entry_fx_rate[symbol] = float(conversion_rate)
                     entry_fee = filled_amount * fill_price * Config.FEE_RATE
                     self.accumulated_fees[symbol] = entry_fee
                     self.position_mode[symbol] = str(metadata.get('mode') or 'STRICT')
@@ -1303,7 +1324,7 @@ class PrimeSignalBot:
                     zone_id = str(zone_id_raw) if zone_id_raw is not None else None
                     self.last_zone_traded[symbol] = zone_id
                     if zone_id:
-                        self.traded_zones_cache[f"{symbol}_{zone_id}"] = True
+                        self.traded_zones_cache[f"{symbol}_{zone_id}"] = time.time()
                     self.trades_today += 1
                     self.global_last_trade_time = time.time()
                     if metadata.get('mode') == 'RELAXED':
@@ -1502,7 +1523,7 @@ class PrimeSignalBot:
                     self.last_trade_time[symbol] = time.time()
                     # --- PROFIT-BASED LOGIC: Trade lifecycle init ---
                     self.current_trade_id[symbol] = f"TRADE_{symbol.replace('/', '')}_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
-                    self.entry_fx_rate[symbol] = float(getattr(Config, 'USDT_INR_RATE', 85.0))
+                    self.entry_fx_rate[symbol] = float(conversion_rate)
                     entry_fee = filled_amount * fill_price * Config.FEE_RATE
                     self.accumulated_fees[symbol] = entry_fee
                     self.position_mode[symbol] = str(metadata.get('mode') or 'STRICT')
@@ -1510,7 +1531,7 @@ class PrimeSignalBot:
                     zone_id = str(zone_id_raw) if zone_id_raw is not None else None
                     self.last_zone_traded[symbol] = zone_id
                     if zone_id:
-                        self.traded_zones_cache[f"{symbol}_{zone_id}"] = True
+                        self.traded_zones_cache[f"{symbol}_{zone_id}"] = time.time()
                     self.trades_today += 1
                     self.global_last_trade_time = time.time()
                     if metadata.get('mode') == 'RELAXED':
@@ -2582,14 +2603,14 @@ class PrimeSignalBot:
                 self.trade_history.append(1 if is_loss else 0)
                 if len(self.trade_history) > 6:
                     self.trade_history.pop(0)
-                    
-                if len(self.trade_history) >= 2 and all(self.trade_history[-2:]):
+                loss_limit = getattr(Config, 'CONSECUTIVE_LOSS_LIMIT', 2)
+                if len(self.trade_history) >= loss_limit and all(self.trade_history[-loss_limit:]):
                     cooldown_secs = 900.0 if Config.PAPER_TRADING else 3600.0
                     cooldown_mins = int(cooldown_secs // 60)
                     cooldown_time = time.time() + cooldown_secs
                     self.cluster_loss_pause_until = cooldown_time
                     self.global_pause_until = cooldown_time  # Update global pause
-                    add_log_message(f"🚨 [SAFETY] 2 consecutive losses. Trading paused globally for {cooldown_mins} minutes.")
+                    add_log_message(f"🚨 [SAFETY] {loss_limit} consecutive losses. Trading paused globally for {cooldown_mins} minutes.")
                     self.trade_history.clear()
                 elif len(self.trade_history) >= 6 and sum(self.trade_history) >= 3:
                     self.cluster_risk_penalty = True
