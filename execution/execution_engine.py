@@ -415,7 +415,9 @@ class ExecutionEngine:
 
         if order_type.upper() == "MARKET":
             fn = self.trade_client.create_market_order
-            args = [symbol, side.lower(), amount, params]
+            # L-02 Fix: CCXT signature is (symbol, side, amount, price, params).
+            # price must be None for market orders — passing params directly as 4th arg was corrupting the call.
+            args = [symbol, side.lower(), amount, None, params]
         elif order_type.upper() == "LIMIT":
             if price is None:
                 print("[EXECUTION] Order error: Limit orders require a price.")
@@ -556,7 +558,6 @@ class ExecutionEngine:
                 print(f"[EXECUTION]   Error message: {e}")
                 traceback.print_exc()
                 raise
-                break
         return None
 
     async def fetch_coindcx_user_info(self):

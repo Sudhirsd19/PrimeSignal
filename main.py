@@ -934,7 +934,8 @@ class PrimeSignalBot:
             add_log_message(f"[{symbol}] ML confidence score: {prob:.2f} (raw bullish: {raw_prob:.2f})")
 
             # Task 7: ML TP Logic - Strictly ordered 3-Stage Targets
-            risk_usdt = abs(metadata.get('stop_loss', entry_price) - entry_price)
+            # E-01 Fix: Use 'or entry_price' to handle None explicitly set by strategy
+            risk_usdt = abs((metadata.get('stop_loss') or entry_price) - entry_price)
             fee_adj = entry_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
             if prob > 0.65:
                 tp2_mult = 2.5
@@ -960,7 +961,8 @@ class PrimeSignalBot:
                 metadata['take_profit_1r'] = metadata['tp1']
                 metadata['take_profit'] = metadata['tp3']
         else:
-            risk_usdt = abs(metadata.get('stop_loss', entry_price) - entry_price)
+            # E-01 Fix: Use 'or entry_price' to handle None explicitly set by strategy
+            risk_usdt = abs((metadata.get('stop_loss') or entry_price) - entry_price)
             fee_adj = entry_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
             tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5))
             tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.2))
@@ -984,7 +986,8 @@ class PrimeSignalBot:
                 add_log_message(f"[{symbol}] Low volume session filter triggered, confidence reduced to {prob:.2f}")
                 
                 # Override TP2 to 1.5R instead of 2.2R in low volume
-                risk_usdt = abs(metadata.get('stop_loss', entry_price) - entry_price)
+                # E-01 Fix: Use 'or entry_price' to handle None explicitly set by strategy
+                risk_usdt = abs((metadata.get('stop_loss') or entry_price) - entry_price)
                 fee_adj = entry_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
                 if signal == "BUY":
                     metadata['tp2'] = entry_price + (1.5 * risk_usdt) + fee_adj
@@ -1026,7 +1029,8 @@ class PrimeSignalBot:
         if current_equity > self.hourly_peak_equity:
             self.hourly_peak_equity = current_equity
             
-        hourly_dd_pct = (self.hourly_peak_equity - current_equity) / self.hourly_peak_equity
+        # L-03 Fix: Guard against ZeroDivisionError when hourly_peak_equity is 0.0 (init state)
+        hourly_dd_pct = (self.hourly_peak_equity - current_equity) / max(self.hourly_peak_equity, 1e-9)
         if hourly_dd_pct > 0.03:
             self.hourly_dd_penalty = True
         if hourly_dd_pct < 0.01:
