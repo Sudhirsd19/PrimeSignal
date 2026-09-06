@@ -1,0 +1,42 @@
+name: Remediate TP2
+on:
+  push:
+    branches:
+      - fix/trading-risk-remediation-2026-09-06
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch TP2 scale-out safely
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('main.py')
+          s = p.read_text(encoding='utf-8')
+          old = 'tp2_size = self.position_size[symbol]'
+          new = "tp2_size = self.position_size[symbol] * float(getattr(Config, 'TP2_SCALE_OUT_OF_REMAINING_PCT', 0.65))"
+          count = s.count(old)
+          if count != 1:
+              raise SystemExit(f'FAIL-CLOSED: expected exactly 1 TP2 sizing assignment, found {count}')
+          s = s.replace(old, new, 1)
+          marker = 'TP1_SCALE_OUT_PCT = 0.65'
+          if 'TP2_SCALE_OUT_OF_REMAINING_PCT' not in s:
+              if marker not in s:
+                  raise SystemExit('FAIL-CLOSED: TP1_SCALE_OUT_PCT marker not found')
+              s = s.replace(marker, marker + "\n    TP2_SCALE_OUT_OF_REMAINING_PCT = 0.65", 1)
+          p.write_text(s, encoding='utf-8')
+      - name: Validate
+        run: |
+          python -m py_compile main.py config.py
+          grep -n "TP2_SCALE_OUT_OF_REMAINING_PCT\|tp2_size = self.position_size\[symbol\]" main.py config.py
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add main.py config.py
+          git diff --cached --quiet && exit 0
+          git commit -m 'fix: preserve runner after TP2 scale-out'
+          git push origin HEAD:fix/trading-risk-remediation-2026-09-06
