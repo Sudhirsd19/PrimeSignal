@@ -54,12 +54,26 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             metadata['reason'] = "Insufficient data"
             return "HOLD", metadata
 
+        # FIX-RACE-CONDITION: Calculate target_idx safely to ensure we evaluate the closed candle.
+        # If the last candle's window hasn't expired, it's still forming, so the closed candle is iloc[-2].
+        import time
+        tf_mins = int(getattr(Config, 'LTF_TIMEFRAME', '15m').replace('m', '').replace('h', '')) * (60 if 'h' in getattr(Config, 'LTF_TIMEFRAME', '15m') else 1)
+        tf_ms = tf_mins * 60 * 1000
+        
+        last_ts_ms = ltf_df['timestamp'].iloc[-1] if 'timestamp' in ltf_df.columns else ltf_df.index[-1].timestamp() * 1000
+        current_time_ms = time.time() * 1000
+        
+        target_idx = -2 if current_time_ms < (last_ts_ms + tf_ms) else -1
+        
+        htf_mins = int(getattr(Config, 'HTF_TIMEFRAME', '1h').replace('m', '').replace('h', '')) * (60 if 'h' in getattr(Config, 'HTF_TIMEFRAME', '1h') else 1)
+        htf_ms = htf_mins * 60 * 1000
+        htf_last_ts_ms = htf_df['timestamp'].iloc[-1] if 'timestamp' in htf_df.columns else htf_df.index[-1].timestamp() * 1000
+        htf_eval_idx = -2 if current_time_ms < (htf_last_ts_ms + htf_ms) else -1
+
         htf_ema_50 = calculate_ema(htf_df, 50)
         htf_ema_200 = calculate_ema(htf_df, 200)
         
-        # F-11 FIX: Evaluate HTF trend on the last CLOSED HTF candle (iloc[-2])
-        # to prevent intra-candle trend fluctuation and mid-candle noise flips.
-        htf_eval_idx = -2 if len(htf_df) >= 2 else -1
+        # F-11 FIX: Evaluate HTF trend on the last CLOSED HTF candle (htf_eval_idx)
         latest_htf_close = htf_df['close'].iloc[htf_eval_idx]
         latest_htf_ema_50 = htf_ema_50.iloc[htf_eval_idx]
         latest_htf_ema_200 = htf_ema_200.iloc[htf_eval_idx]
@@ -112,8 +126,8 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         ema_dist = abs(latest_htf_ema_50 - latest_htf_ema_200) / latest_htf_ema_200 if (latest_htf_ema_200 and latest_htf_ema_200 > 0) else 0.0
         
         adx_df = calculate_adx(ltf_df)
-        curr_adx = adx_df['adx'].iloc[-2]
-        prev_adx = adx_df['adx'].iloc[-3]
+        curr_adx = adx_df['adx'].iloc[target_idx]
+        prev_adx = adx_df['adx'].iloc[target_idx - 1]
         
         # AUD-P2-02: Strict Fail-Closed check on uninitialized / NaN ADX indicator data
         if curr_adx is None or math.isnan(curr_adx):
@@ -123,8 +137,8 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         adx_rising = (prev_adx is not None and not math.isnan(prev_adx)) and curr_adx > prev_adx and curr_adx >= 20
         
         # Task 1: Market Regime
-        avg_atr_14 = ltf_atr.rolling(14).mean().iloc[-2]
-        curr_atr = ltf_atr.iloc[-2]
+        avg_atr_14 = ltf_atr.rolling(14).mean().iloc[target_idx]
+        curr_atr = ltf_atr.iloc[target_idx]
         if curr_atr > 1.2 * avg_atr_14:
             market_regime = 'HIGH_VOL'
         adx_threshold = getattr(Config, 'ADX_MIN_THRESHOLD', 25.0)  # FIX-1: default matches Config.ADX_MIN_THRESHOLD = 20.0
@@ -140,7 +154,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             
         if ema_dist >= 0.005 or adx_rising:
             mom_count = 0
-            avg_body = abs(ltf_df['close'] - ltf_df['open']).rolling(14).mean().iloc[-2]
+            avg_body = abs(ltf_df['close'] - ltf_df['open']).rolling(14).mean().iloc[target_idx]
             directional_closes = 0
             for i in range(1, 4):
                 idx = -1 - i
@@ -194,7 +208,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             if len(bb_df) >= 30:
                 bw_series = bb_df['bandwidth'].dropna()
                 if len(bw_series) >= 30:
-                    curr_bw = bw_series.iloc[-2]
+                    curr_bw = bw_series.iloc[target_idx]
                     lookback_bw = bw_series.iloc[-min(len(bw_series), 100):]
                     bw_percentile = (lookback_bw < curr_bw).mean() * 100.0
                     bb_thresh = getattr(Config, 'BB_SQUEEZE_PERCENTILE', 12.0)
@@ -202,7 +216,6 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                         metadata['reason'] = f"BB Volatility Squeeze (BW Percentile {bw_percentile:.1f}% <= {bb_thresh}%)"
                         return "HOLD", metadata
         
-        target_idx = -1
         curr_price = ltf_closes.iloc[target_idx]
         curr_rsi   = ltf_rsi.iloc[target_idx]
         prev_rsi   = ltf_rsi.iloc[target_idx - 1]
@@ -372,7 +385,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 entry_type = "SWEEP"
                 zone_bottom = trigger_low
                 zone_top = swing_low
-                zone_ts = ltf_df.index[-2]
+                zone_ts = ltf_df.index[target_idx]
                 reason = f"Liquidity Sweep of Swing Low [{swing_low:.2f}]"
                 
             # Dynamic Pullback Setups (ATR-scaled bands instead of fixed ±0.15%)
@@ -385,7 +398,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                     entry_type = "VWAP"
                     zone_bottom = vwap_lo
                     zone_top = vwap_hi
-                    zone_ts = ltf_df.index[-2]
+                    zone_ts = ltf_df.index[target_idx]
                     reason = f"Dynamic Setup: VWAP Bounce"
                 # EMA 21 / 50 Trend Pullback
                 else:
@@ -398,14 +411,14 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                         entry_type = "EMA"
                         zone_bottom = ema21_lo
                         zone_top = ema21_hi
-                        zone_ts = ltf_df.index[-2]
+                        zone_ts = ltf_df.index[target_idx]
                         reason = f"Dynamic Setup: EMA 21 Pullback"
                     elif in_bounds(curr_price, ema50_lo, ema50_hi):
                         in_zone = True
                         entry_type = "EMA"
                         zone_bottom = ema50_lo
                         zone_top = ema50_hi
-                        zone_ts = ltf_df.index[-2]
+                        zone_ts = ltf_df.index[target_idx]
                         reason = f"Dynamic Setup: EMA 50 Pullback"
 
             metadata['debug_checks']['zone'] = 'PASS' if in_zone else 'FAIL'
@@ -413,7 +426,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             rsi_trigger       = (prev_rsi < Config.RSI_OVERSOLD) or ((prev_rsi < Config.RSI_OVERSOLD + 5) and (curr_rsi >= Config.RSI_OVERSOLD))
             crossover_trigger = (prev_short <= prev_long) and (curr_short > curr_long)
             wick_trigger      = (candle_range > 0) and ((min(trigger_open, trigger_close) - trigger_low) / candle_range >= 0.65)
-            engulfing_trigger = (trigger_close > trigger_open) and (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-2]['open']) and (trigger_close > ltf_df.iloc[-2]['open'])
+            engulfing_trigger = (trigger_close > trigger_open) and (ltf_df.iloc[target_idx - 1]['close'] < ltf_df.iloc[target_idx - 1]['open']) and (trigger_close > ltf_df.iloc[target_idx - 1]['open'])
             trigger_pass      = rsi_trigger or crossover_trigger or wick_trigger or engulfing_trigger
             metadata['debug_checks']['trigger'] = 'PASS' if trigger_pass else 'FAIL'
 
@@ -421,7 +434,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             metadata['debug_checks']['vwap'] = 'PASS' if vwap_pass else 'FAIL'
 
             # Micro-BOS: Reversal candle confirming buyers took control
-            micro_bos = (ltf_df.iloc[-2]['close'] > ltf_df.iloc[-2]['open']) and (ltf_df.iloc[-2]['close'] > ltf_df.iloc[-3]['high'])
+            micro_bos = (ltf_df.iloc[target_idx - 1]['close'] > ltf_df.iloc[target_idx - 1]['open']) and (ltf_df.iloc[target_idx - 1]['close'] > ltf_df.iloc[target_idx - 2]['high'])
             
             # RSI Divergence confluence
             rsi_div_bonus = 0
@@ -574,7 +587,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 entry_type = "SWEEP"
                 zone_bottom = swing_high
                 zone_top = trigger_high
-                zone_ts = ltf_df.index[-2]
+                zone_ts = ltf_df.index[target_idx]
                 reason = f"Liquidity Sweep of Swing High [{swing_high:.2f}]"
                 
             # Dynamic Pullback Setups (ATR-scaled bands instead of fixed ±0.15%)
@@ -587,7 +600,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                     entry_type = "VWAP"
                     zone_bottom = vwap_lo
                     zone_top = vwap_hi
-                    zone_ts = ltf_df.index[-2]
+                    zone_ts = ltf_df.index[target_idx]
                     reason = f"Dynamic Setup: VWAP Bounce"
                 # EMA 21 / 50 Trend Pullback
                 else:
@@ -600,14 +613,14 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                         entry_type = "EMA"
                         zone_bottom = ema21_lo
                         zone_top = ema21_hi
-                        zone_ts = ltf_df.index[-2]
+                        zone_ts = ltf_df.index[target_idx]
                         reason = f"Dynamic Setup: EMA 21 Pullback"
                     elif in_bounds(curr_price, ema50_lo, ema50_hi):
                         in_zone = True
                         entry_type = "EMA"
                         zone_bottom = ema50_lo
                         zone_top = ema50_hi
-                        zone_ts = ltf_df.index[-2]
+                        zone_ts = ltf_df.index[target_idx]
                         reason = f"Dynamic Setup: EMA 50 Pullback"
 
             metadata['debug_checks']['zone'] = 'PASS' if in_zone else 'FAIL'
@@ -615,7 +628,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             rsi_trigger       = (prev_rsi > Config.RSI_OVERBOUGHT) or ((prev_rsi > Config.RSI_OVERBOUGHT - 5) and (curr_rsi <= Config.RSI_OVERBOUGHT))
             crossover_trigger = (prev_short >= prev_long) and (curr_short < curr_long)
             wick_trigger      = (candle_range > 0) and ((trigger_high - max(trigger_open, trigger_close)) / candle_range >= 0.65)
-            engulfing_trigger = (trigger_close < trigger_open) and (ltf_df.iloc[-2]['close'] > ltf_df.iloc[-2]['open']) and (trigger_close < ltf_df.iloc[-2]['open'])
+            engulfing_trigger = (trigger_close < trigger_open) and (ltf_df.iloc[target_idx - 1]['close'] > ltf_df.iloc[target_idx - 1]['open']) and (trigger_close < ltf_df.iloc[target_idx - 1]['open'])
             trigger_pass      = rsi_trigger or crossover_trigger or wick_trigger or engulfing_trigger
             metadata['debug_checks']['trigger'] = 'PASS' if trigger_pass else 'FAIL'
 
@@ -623,7 +636,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             metadata['debug_checks']['vwap'] = 'PASS' if vwap_pass else 'FAIL'
 
             # Micro-BOS: Reversal candle confirming sellers took control
-            micro_bos = (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-2]['open']) and (ltf_df.iloc[-2]['close'] < ltf_df.iloc[-3]['low'])
+            micro_bos = (ltf_df.iloc[target_idx - 1]['close'] < ltf_df.iloc[target_idx - 1]['open']) and (ltf_df.iloc[target_idx - 1]['close'] < ltf_df.iloc[target_idx - 2]['low'])
             
             # RSI Divergence confluence
             rsi_div_bonus = 0
