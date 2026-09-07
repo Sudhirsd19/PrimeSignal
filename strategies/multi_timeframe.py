@@ -521,7 +521,6 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 metadata['mode'] = "RELAXED" if relaxed else "STRICT"
                 metadata['setup_type'] = entry_type
                 metadata['zone_id']    = f"{entry_type}_{zone_ts}"
-                metadata['setup_type'] = entry_type
                 trig_str = 'RSI Recovery' if rsi_trigger else 'Golden Cross' if crossover_trigger else 'Wick Rejection' if wick_trigger else 'Engulfing' if engulfing_trigger else 'Unknown'
                 rel_str = ' (RELAXED)' if relaxed else ''
                 metadata['reason']     = f"{reason} | Trigger: {trig_str}{rel_str}"

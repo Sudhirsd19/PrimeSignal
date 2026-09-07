@@ -128,6 +128,7 @@ class RiskManager:
         equity_currency: str | None = None,
         conversion_rate: float | None = None,
         is_inr: bool | None = None,
+        risk_pct_override: float | None = None,
     ) -> float:
         """
         Calculates position size dynamically based on stop-loss distance and account risk percentage,
@@ -163,7 +164,8 @@ class RiskManager:
             stop_loss_equity_curr = stop_loss
 
         # 1. Calculate budget to risk (Normalize and cap max risk relative to currency)
-        base_risk = account_equity * (Config.RISK_PCT / 100.0)
+        active_risk_pct = risk_pct_override if risk_pct_override is not None else (Config.RISK_PCT / 100.0)
+        base_risk = account_equity * active_risk_pct
         curr_mult = rate if effective_equity_curr == "INR" else 1.0
         # R-01 Fix: Use Config value instead of os.getenv in hot-path
         max_single_trade_risk = float(getattr(Config, "MAX_SINGLE_TRADE_RISK_USDT", 25.0)) * curr_mult

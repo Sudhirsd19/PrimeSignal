@@ -924,7 +924,7 @@ class PrimeSignalBot:
 
         # ML Confidence Scaler & Soft Session Filter (Direction-Aware)
         raw_prob = 0.5
-        prob = 1.0
+        prob = 0.5
         ml_confidence_weight = 0
         if self.ml_models[symbol].is_trained:
             raw_prob = self.ml_models[symbol].predict_bias(ltf_df)
@@ -934,8 +934,10 @@ class PrimeSignalBot:
             add_log_message(f"[{symbol}] ML confidence score: {prob:.2f} (raw bullish: {raw_prob:.2f})")
 
             # Task 7: ML TP Logic - Strictly ordered 3-Stage Targets
-            # E-01 Fix: Use 'or entry_price' to handle None explicitly set by strategy
-            risk_usdt = abs((metadata.get('stop_loss') or entry_price) - entry_price)
+            # E-01 Fix: Provide safe fallback SL if None
+            sl_val = metadata.get('stop_loss')
+            if sl_val is None: sl_val = entry_price * 0.98 if signal == "BUY" else entry_price * 1.02
+            risk_usdt = abs(sl_val - entry_price)
             fee_adj = entry_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
             if prob > 0.65:
                 tp2_mult = 2.5
@@ -961,8 +963,10 @@ class PrimeSignalBot:
                 metadata['take_profit_1r'] = metadata['tp1']
                 metadata['take_profit'] = metadata['tp3']
         else:
-            # E-01 Fix: Use 'or entry_price' to handle None explicitly set by strategy
-            risk_usdt = abs((metadata.get('stop_loss') or entry_price) - entry_price)
+            # E-01 Fix: Provide safe fallback SL if None
+            sl_val = metadata.get('stop_loss')
+            if sl_val is None: sl_val = entry_price * 0.98 if signal == "BUY" else entry_price * 1.02
+            risk_usdt = abs(sl_val - entry_price)
             fee_adj = entry_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
             tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)
             tp2_mult = getattr(Config, 'RISK_REWARD_RATIO', 2.2)
@@ -986,8 +990,10 @@ class PrimeSignalBot:
                 add_log_message(f"[{symbol}] Low volume session filter triggered, confidence reduced to {prob:.2f}")
                 
                 # Override TP2 to 1.5R instead of 2.2R in low volume
-                # E-01 Fix: Use 'or entry_price' to handle None explicitly set by strategy
-                risk_usdt = abs((metadata.get('stop_loss') or entry_price) - entry_price)
+                # E-01 Fix: Provide safe fallback SL if None
+                sl_val = metadata.get('stop_loss')
+                if sl_val is None: sl_val = entry_price * 0.98 if signal == "BUY" else entry_price * 1.02
+                risk_usdt = abs(sl_val - entry_price)
                 fee_adj = entry_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
                 if signal == "BUY":
                     metadata['tp2'] = entry_price + (1.5 * risk_usdt) + fee_adj
@@ -1159,8 +1165,9 @@ class PrimeSignalBot:
                 quote_currency=quote_curr,
                 is_inr=is_inr,
                 conversion_rate=conversion_rate,
+                risk_pct_override=trade_risk_pct,
             )
-            pos_size = pos_size * (trade_risk_pct / (getattr(Config, 'RISK_PCT', 0.8) / 100.0))
+            # Scaling is now handled natively inside calculate_position_size
 
             # ── Pre-Trade Exchange Rules & Equity Validation ──
             markets_data = getattr(self.execution, 'markets', None) or getattr(getattr(self.execution, 'trade_client', None), 'markets', None) or getattr(getattr(self.execution, 'coindcx_client', None), 'markets_info', None)
