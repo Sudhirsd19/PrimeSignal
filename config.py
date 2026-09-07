@@ -205,6 +205,10 @@ class Config:
                         
                         if dynamic_symbols:
                             cls.SUPPORTED_SYMBOLS = dynamic_symbols
+                            # Update default UI chart symbol to the #1 trending coin
+                            if cls.SYMBOL not in dynamic_symbols:
+                                cls.SYMBOL = dynamic_symbols[0]
+                                
                             print(f"\n[DYNAMIC SCANNER] Loaded Top {limit} Trending Coins!")
                             print(f"-> {', '.join(dynamic_symbols)}\n")
         except Exception as e:

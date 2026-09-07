@@ -2881,9 +2881,27 @@ class PrimeSignalBot:
 
 async def start_all():
     from config import Config
-    # 🚀 Run Dynamic Market Scanner before initializing any pipelines
+    import json
+    import os
+    
+    # 1. 🚀 Run Dynamic Market Scanner before initializing any pipelines
     await Config.update_dynamic_symbols(limit=18)
     
+    # 2. 🛡️ Check local state for active positions to ensure they aren't abandoned by the dynamic scanner
+    state_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "system_state.json")
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, 'r') as f:
+                state = json.load(f)
+            active_symbols = [s for s, in_pos in state.get('in_position', {}).items() if in_pos]
+            for s in active_symbols:
+                if s not in Config.SUPPORTED_SYMBOLS:
+                    Config.SUPPORTED_SYMBOLS.append(s)
+                    print(f"[STATE RECOVERY] Re-injected active position {s} into scan list to maintain trade tracking.")
+        except Exception:
+            pass
+            
+    # 3. Start Application
     import dashboard.app as dashboard_module
     bot = PrimeSignalBot()
     dashboard_module.bot_instance = bot
