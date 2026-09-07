@@ -167,8 +167,12 @@ class RiskManager:
         active_risk_pct = risk_pct_override if risk_pct_override is not None else (Config.RISK_PCT / 100.0)
         base_risk = account_equity * active_risk_pct
         curr_mult = rate if effective_equity_curr == "INR" else 1.0
+        
+        # Scale the absolute max risk cap by the same override multiplier to maintain dynamic sizing for large accounts
+        risk_scaler = active_risk_pct / max(Config.RISK_PCT / 100.0, 1e-9)
+        
         # R-01 Fix: Use Config value instead of os.getenv in hot-path
-        max_single_trade_risk = float(getattr(Config, "MAX_SINGLE_TRADE_RISK_USDT", 25.0)) * curr_mult
+        max_single_trade_risk = float(getattr(Config, "MAX_SINGLE_TRADE_RISK_USDT", 25.0)) * curr_mult * risk_scaler
         threshold_equity = 1000.0 * curr_mult
         trade_risk = min(base_risk, max_single_trade_risk) if account_equity >= threshold_equity else base_risk
 
