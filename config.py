@@ -185,8 +185,8 @@ class Config:
                     if response.status == 200:
                         data = await response.json()
                         
-                        # Filter USDT pairs, exclude stablecoins & leveraged tokens
-                        exclude = ['USDCUSDT', 'FDUSDUSDT', 'TUSDUSDT', 'EURUSDT', 'BUSDUSDT', 'USDPUSDT', 'WBTCUSDT']
+                        # Filter USDT pairs, exclude stablecoins, fiats & leveraged tokens
+                        exclude = ['USDCUSDT', 'FDUSDUSDT', 'TUSDUSDT', 'EURUSDT', 'BUSDUSDT', 'USDPUSDT', 'WBTCUSDT', 'AUDUSDT', 'GBPUSDT', 'JPYUSDT', 'TRYUSDT', 'ZARUSDT']
                         usdt_pairs = [d for d in data if d['symbol'].endswith('USDT') and d['symbol'] not in exclude and not d['symbol'].endswith('UPUSDT') and not d['symbol'].endswith('DOWNUSDT')]
                         
                         # Sort by Quote Volume (USDT) descending to ensure deep liquidity
@@ -205,10 +205,10 @@ class Config:
                         
                         if dynamic_symbols:
                             cls.SUPPORTED_SYMBOLS = dynamic_symbols
-                            print(f"\n🚀 DYNAMIC MARKET SCANNER: Loaded Top {limit} Trending Coins!")
-                            print(f"📊 {', '.join(dynamic_symbols)}\n")
+                            print(f"\n[DYNAMIC SCANNER] Loaded Top {limit} Trending Coins!")
+                            print(f"-> {', '.join(dynamic_symbols)}\n")
         except Exception as e:
-            print(f"⚠️ Failed to update dynamic symbols (falling back to static list): {e}")
+            print(f"[WARNING] Failed to update dynamic symbols (falling back to static list): {e}")
 
     @classmethod
     def validate(cls):
