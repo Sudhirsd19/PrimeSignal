@@ -1080,7 +1080,7 @@ class PrimeSignalBot:
 
             # Atomically reserve portfolio risk capacity with durable reservation identity
             reservation_id = f"RES_{symbol.replace('/', '')}_{int(time.time()*1000)}"
-            risk_reserved = await self.risk.check_and_reserve_risk_atomic(
+            risk_reserved = self.risk.check_and_reserve_risk_nolock(
                 total_risk, trade_risk_pct, side=signal, reservation_id=reservation_id, symbol=symbol
             )
             if not risk_reserved:

@@ -44,32 +44,35 @@ class RiskManager:
         self.reserved_longs_count = max(0, longs)
         self.reserved_shorts_count = max(0, shorts)
 
+    def check_and_reserve_risk_nolock(self, current_open_risk_pct: float, proposed_risk_pct: float, side: str = "BUY", reservation_id: str | None = None, symbol: str = "") -> bool:
+        self._recalculate_reserved_totals()
+        total_projected_risk = current_open_risk_pct + self.reserved_risk_pct + proposed_risk_pct
+        if total_projected_risk > (self.max_correlated_risk_pct + 0.0001):
+            try:
+                print(f"[RISK] ⛔ Portfolio risk cap breach prevented! Projected: {total_projected_risk*100:.2f}%, Limit: {self.max_correlated_risk_pct*100:.2f}%")
+            except Exception:
+                print(f"[RISK] [BLOCK] Portfolio risk cap breach prevented! Projected: {total_projected_risk*100:.2f}%, Limit: {self.max_correlated_risk_pct*100:.2f}%")
+            return False
+        
+        res_id = reservation_id or f"RES_{symbol.replace('/', '')}_{int(time.time()*1000)}"
+        self.active_reservations[res_id] = {
+            'reservation_id': res_id,
+            'symbol': symbol,
+            'side': side.upper(),
+            'risk_pct': proposed_risk_pct,
+            'timestamp': time.time(),
+            'state': 'ACTIVE'
+        }
+        self._recalculate_reserved_totals()
+        return True
+
     async def check_and_reserve_risk_atomic(self, current_open_risk_pct: float, proposed_risk_pct: float, side: str = "BUY", reservation_id: str | None = None, symbol: str = "") -> bool:
         """
         Atomically checks and commits durable reservation in a single critical section (P0 Invariant):
         CurrentRisk + ReservedRisk + ProposedRisk <= max_correlated_risk_pct
         """
         async with self._lock:
-            self._recalculate_reserved_totals()
-            total_projected_risk = current_open_risk_pct + self.reserved_risk_pct + proposed_risk_pct
-            if total_projected_risk > (self.max_correlated_risk_pct + 0.0001):
-                try:
-                    print(f"[RISK] ⛔ Portfolio risk cap breach prevented! Projected: {total_projected_risk*100:.2f}%, Limit: {self.max_correlated_risk_pct*100:.2f}%")
-                except Exception:
-                    print(f"[RISK] [BLOCK] Portfolio risk cap breach prevented! Projected: {total_projected_risk*100:.2f}%, Limit: {self.max_correlated_risk_pct*100:.2f}%")
-                return False
-            
-            res_id = reservation_id or f"RES_{symbol.replace('/', '')}_{int(time.time()*1000)}"
-            self.active_reservations[res_id] = {
-                'reservation_id': res_id,
-                'symbol': symbol,
-                'side': side.upper(),
-                'risk_pct': proposed_risk_pct,
-                'timestamp': time.time(),
-                'state': 'ACTIVE'
-            }
-            self._recalculate_reserved_totals()
-            return True
+            return self.check_and_reserve_risk_nolock(current_open_risk_pct, proposed_risk_pct, side, reservation_id, symbol)
 
     async def can_open_trade_atomic(self, current_open_risk_pct: float, proposed_risk_pct: float, side: str = "BUY", reservation_id: str | None = None, symbol: str = "") -> bool:
         """Compatibility wrapper for atomic check and reserve."""
