@@ -150,21 +150,21 @@ class Config:
     def get_risk_config_snapshot(cls) -> dict:
         """Returns a canonical serializable dictionary of all governing risk parameters."""
         return {
-            "risk_pct": float(cls.RISK_PCT),
-            "max_daily_loss_pct": float(cls.MAX_DAILY_LOSS_PCT),
-            "max_daily_profit_pct": float(cls.MAX_DAILY_PROFIT_PCT),
-            "max_daily_trades": int(cls.MAX_DAILY_TRADES),
-            "max_trade_allocation_pct": float(cls.MAX_TRADE_ALLOCATION_PCT),
-            "trailing_atr_mult": float(cls.TRAILING_ATR_MULT),
-            "min_risk_reward_ratio": float(cls.MIN_RISK_REWARD_RATIO),
-            "risk_reward_ratio": float(cls.RISK_REWARD_RATIO),
-            "tp1_scale_out_pct": float(cls.TP1_SCALE_OUT_PCT),
-            "enable_funding_rate_filter": bool(cls.ENABLE_FUNDING_RATE_FILTER),
-            "max_funding_rate_pct": float(cls.MAX_FUNDING_RATE_PCT),
-            "exchange_type": str(cls.EXCHANGE_TYPE).lower(),
-            "futures_leverage": int(cls.FUTURES_LEVERAGE),
-            "futures_margin_mode": str(cls.FUTURES_MARGIN_MODE).lower(),
-            "trading_venue": str(cls.TRADING_VENUE).upper(),
+            "risk_pct": cls.RISK_PCT,
+            "max_daily_loss_pct": cls.MAX_DAILY_LOSS_PCT,
+            "max_daily_profit_pct": cls.MAX_DAILY_PROFIT_PCT,
+            "max_daily_trades": cls.MAX_DAILY_TRADES,
+            "max_trade_allocation_pct": cls.MAX_TRADE_ALLOCATION_PCT,
+            "trailing_atr_mult": cls.TRAILING_ATR_MULT,
+            "min_risk_reward_ratio": cls.MIN_RISK_REWARD_RATIO,
+            "risk_reward_ratio": cls.RISK_REWARD_RATIO,
+            "tp1_scale_out_pct": cls.TP1_SCALE_OUT_PCT,
+            "enable_funding_rate_filter": cls.ENABLE_FUNDING_RATE_FILTER,
+            "max_funding_rate_pct": cls.MAX_FUNDING_RATE_PCT,
+            "exchange_type": cls.EXCHANGE_TYPE.lower(),
+            "futures_leverage": cls.FUTURES_LEVERAGE,
+            "futures_margin_mode": cls.FUTURES_MARGIN_MODE.lower(),
+            "trading_venue": cls.TRADING_VENUE.upper(),
         }
 
     @classmethod
