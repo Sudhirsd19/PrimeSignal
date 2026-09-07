@@ -715,22 +715,38 @@ class PrimeSignalBot:
         ltf_df = prepare_dataframe(self.pipeline.ltf_candles[symbol])
         htf_df = prepare_dataframe(self.pipeline.htf_candles[symbol])
         
-        # Check high volatility kill switch
+        # 1. First, check if we are ALREADY paused, to prevent log spam and timer resetting
+        if time.time() < self.volatility_pause_until.get(symbol, 0.0):
+            return
+
+        # 2. Check high volatility kill switch
         if not ltf_df.empty:
             last_candle = ltf_df.iloc[-1]
             move_pct = abs(last_candle['close'] - last_candle['open']) / max(last_candle['open'], 1e-8)
             if move_pct > getattr(Config, 'MAX_CANDLE_MOVE_PCT', 0.015):
-                avg_vol = ltf_df['volume'].rolling(14).mean().iloc[-1] if len(ltf_df) > 14 else 0.0
-                if last_candle['volume'] < 1.5 * avg_vol:
+                # Calculate average volume based ONLY on previous fully closed candles
+                avg_vol = ltf_df['volume'].iloc[:-1].rolling(14).mean().iloc[-1] if len(ltf_df) > 15 else 0.0
+                
+                # Extrapolate current live candle volume based on elapsed time to make a fair comparison
+                tf_minutes = int(getattr(Config, 'LTF_TIMEFRAME', '15m').replace('m', '').replace('h', '')) * (60 if 'h' in getattr(Config, 'LTF_TIMEFRAME', '15m') else 1)
+                
+                candle_start_ms = last_candle['timestamp'] if 'timestamp' in ltf_df.columns else last_candle.name.timestamp() * 1000
+                elapsed_ms = (time.time() * 1000) - candle_start_ms
+                tf_ms = tf_minutes * 60 * 1000
+                elapsed_ratio = min(1.0, max(0.05, elapsed_ms / tf_ms))
+                
+                projected_vol = last_candle['volume'] / elapsed_ratio
+                
+                if projected_vol < 1.5 * avg_vol:
                     pause_candles = getattr(Config, 'VOLATILITY_PAUSE_CANDLES', 2)
-                    tf_minutes = int(Config.LTF_TIMEFRAME.replace('m', '').replace('h', '')) * (60 if 'h' in Config.LTF_TIMEFRAME else 1)
                     self.volatility_pause_until[symbol] = time.time() + (pause_candles * tf_minutes * 60.0)
-                    add_log_message(f"[{symbol}] Trading paused: High volatility detected ({move_pct*100:.2f}% move) on LOW volume.")
+                    add_log_message(f"[{symbol}] Trading paused: High volatility detected ({move_pct*100:.2f}% move) on LOW volume (Projected: {projected_vol:.0f} vs Avg: {avg_vol:.0f}).")
+                    return
                 else:
-                    add_log_message(f"[{symbol}] High volatility ({move_pct*100:.2f}%) on HIGH volume. Institutional move allowed.")
-
-        if time.time() < self.volatility_pause_until.get(symbol, 0.0):
-            return
+                    # Institutional move allowed, only log once per candle spike (we don't pause, so we need a mini-cooldown to prevent spam)
+                    if time.time() > getattr(self, '_last_volatility_log_time', 0) + 60:
+                        add_log_message(f"[{symbol}] High volatility ({move_pct*100:.2f}%) on HIGH volume. Institutional move allowed.")
+                        self._last_volatility_log_time = time.time()
 
         
         # Session and Execution Delay Filters
