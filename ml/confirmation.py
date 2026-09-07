@@ -187,8 +187,9 @@ class MLSignalConfirmator:
                 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
                 if len(X) >= 100:
                     tscv = TimeSeriesSplit(n_splits=min(5, len(X) // 50))
-                    # In scikit-learn 1.4+, make_scorer's needs_proba is removed. 
-                    # We can use the built-in string 'roc_auc_ovr' which automatically handles this.
+                    # FIX-D: Use standard 'accuracy' or balanced_accuracy for CV to avoid the ValueError: 
+                    # "Number of classes in y_true not equal to the number of columns in 'y_score'"
+                    # which happens during TimeSeriesSplit when a small fold is entirely missing class 0, 1, or 2.
                     cv_scores = cross_val_score(
                         GradientBoostingClassifier(
                             n_estimators=self.model.n_estimators,
@@ -197,7 +198,7 @@ class MLSignalConfirmator:
                             subsample=self.model.subsample,
                             random_state=42
                         ),
-                        X, y, cv=tscv, scoring='roc_auc_ovr', n_jobs=-1
+                        X, y, cv=tscv, scoring='balanced_accuracy', n_jobs=-1
                     )
                     mean_auc = cv_scores.mean()
                     std_auc  = cv_scores.std()
