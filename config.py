@@ -176,6 +176,41 @@ class Config:
         return hashlib.sha256(canonical_str.encode('utf-8')).hexdigest()
 
     @classmethod
+    async def update_dynamic_symbols(cls, limit: int = 15):
+        """Dynamically fetches the top trending USDT pairs from Binance based on volume and momentum."""
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get('https://api.binance.com/api/v3/ticker/24hr') as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        
+                        # Filter USDT pairs, exclude stablecoins & leveraged tokens
+                        exclude = ['USDCUSDT', 'FDUSDUSDT', 'TUSDUSDT', 'EURUSDT', 'BUSDUSDT', 'USDPUSDT', 'WBTCUSDT']
+                        usdt_pairs = [d for d in data if d['symbol'].endswith('USDT') and d['symbol'] not in exclude and not d['symbol'].endswith('UPUSDT') and not d['symbol'].endswith('DOWNUSDT')]
+                        
+                        # Sort by Quote Volume (USDT) descending to ensure deep liquidity
+                        usdt_pairs.sort(key=lambda x: float(x['quoteVolume']), reverse=True)
+                        
+                        # Take Top 60 most liquid coins
+                        top_liquid = usdt_pairs[:60]
+                        
+                        # Sort these Top 60 by absolute 24h price change (High Momentum / Trending)
+                        top_liquid.sort(key=lambda x: abs(float(x['priceChangePercent'])), reverse=True)
+                        
+                        # Select Top N
+                        top_n = top_liquid[:limit]
+                        
+                        dynamic_symbols = [f"{d['symbol'].replace('USDT', '')}/USDT" for d in top_n]
+                        
+                        if dynamic_symbols:
+                            cls.SUPPORTED_SYMBOLS = dynamic_symbols
+                            print(f"\n🚀 DYNAMIC MARKET SCANNER: Loaded Top {limit} Trending Coins!")
+                            print(f"📊 {', '.join(dynamic_symbols)}\n")
+        except Exception as e:
+            print(f"⚠️ Failed to update dynamic symbols (falling back to static list): {e}")
+
+    @classmethod
     def validate(cls):
         has_keys = True
         

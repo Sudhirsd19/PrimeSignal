@@ -2880,6 +2880,10 @@ class PrimeSignalBot:
         self.pipeline.stop()
 
 async def start_all():
+    from config import Config
+    # 🚀 Run Dynamic Market Scanner before initializing any pipelines
+    await Config.update_dynamic_symbols(limit=18)
+    
     import dashboard.app as dashboard_module
     bot = PrimeSignalBot()
     dashboard_module.bot_instance = bot
