@@ -71,6 +71,39 @@ class PrimeSignalBot:
             ))
         return False
 
+    def _sync_symbol_states(self):
+        """Ensures all internal state dictionaries have keys for current Config.SUPPORTED_SYMBOLS."""
+        for sym in Config.SUPPORTED_SYMBOLS:
+            if sym not in getattr(self, 'in_position', {}):
+                self.ml_models[sym] = MLSignalConfirmator()
+                self.in_position[sym] = False
+                self.position_side[sym] = "HOLD"
+                self.entry_price[sym] = 0.0
+                self.stop_loss[sym] = 0.0
+                self.take_profit[sym] = 0.0
+                self.highest_price_reached[sym] = 0.0
+                self.lowest_price_reached[sym] = 999999.0
+                self.position_size[sym] = 0.0
+                self.position_mode[sym] = "STRICT"
+                self.entry_time[sym] = 0.0
+                self.last_trade_time[sym] = 0.0
+                self.last_zone_traded[sym] = None
+                self.volatility_pause_until[sym] = 0.0
+                self.partial_tp_taken[sym] = False
+                self.take_profit_1r[sym] = 0.0
+                self.tp2_taken[sym] = False
+                self.take_profit_2r[sym] = 0.0
+                self.realized_pnl[sym] = 0.0
+                self.original_position_size[sym] = 0.0
+                self.last_exit_time[sym] = 0.0
+                self.tp_cooldown_until[sym] = 0.0
+                self.current_trade_id[sym] = ""
+                self.entry_fx_rate[sym] = 0.0
+                self.accumulated_fees[sym] = 0.0
+                self._candle_locks[sym] = asyncio.Lock()
+                self._pending_candle_evaluations[sym] = False
+                self._exit_locks[sym] = asyncio.Lock()
+
     def __init__(self):
         self.has_keys = Config.validate()
         
@@ -88,30 +121,38 @@ class PrimeSignalBot:
         self.config_journal.record_change(event="STARTUP_CONFIG_SNAPSHOT", source="ENGINE_STARTUP")
         self.reconciliation = ReconciliationEngine(self, check_interval=15.0)
         
-        self.ml_models: dict[str, MLSignalConfirmator] = {sym: MLSignalConfirmator() for sym in Config.SUPPORTED_SYMBOLS}
+        # Empty dictionaries
+        self.ml_models = {}
+        self.in_position = {}
+        self.position_side = {}
+        self.entry_price = {}
+        self.stop_loss = {}
+        self.take_profit = {}
+        self.highest_price_reached = {}
+        self.lowest_price_reached = {}
+        self.position_size = {}
+        self.position_mode = {}
+        self.entry_time = {}
+        self.last_trade_time = {}
+        self.last_zone_traded = {}
+        self.volatility_pause_until = {}
+        self.partial_tp_taken = {}
+        self.take_profit_1r = {}
+        self.tp2_taken = {}
+        self.take_profit_2r = {}
+        self.realized_pnl = {}
+        self.original_position_size = {}
+        self.last_exit_time = {}
+        self.tp_cooldown_until = {}
+        self.current_trade_id = {}
+        self.entry_fx_rate = {}
+        self.accumulated_fees = {}
+        self._candle_locks = {}
+        self._pending_candle_evaluations = {}
+        self._exit_locks = {}
         
-        # Internal State tracking (Per Symbol)
-        self.in_position = {sym: False for sym in Config.SUPPORTED_SYMBOLS}
-        self.position_side = {sym: "HOLD" for sym in Config.SUPPORTED_SYMBOLS}
-        self.entry_price = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.stop_loss = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.take_profit = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.highest_price_reached = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.lowest_price_reached = {sym: 999999.0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.position_size = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.position_mode: dict[str, str] = {sym: "STRICT" for sym in Config.SUPPORTED_SYMBOLS}
-        self.entry_time: dict[str, float] = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.last_trade_time: dict[str, float] = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.last_zone_traded: dict[str, str | None] = {sym: None for sym in Config.SUPPORTED_SYMBOLS}
-        self.volatility_pause_until: dict[str, float] = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.partial_tp_taken = {sym: False for sym in Config.SUPPORTED_SYMBOLS}
-        self.take_profit_1r = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.tp2_taken = {sym: False for sym in Config.SUPPORTED_SYMBOLS}
-        self.take_profit_2r = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.realized_pnl = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.original_position_size = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.last_exit_time: dict[str, float] = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
-        self.tp_cooldown_until: dict[str, float] = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
+        self._sync_symbol_states()
+
         self.global_pause_until: float = 0.0
         self.relaxed_losses = 0
         self.relaxed_disabled_until: float = 0.0
@@ -122,21 +163,12 @@ class PrimeSignalBot:
         self.cluster_loss_pause_until: float = 0.0
         self.cluster_risk_penalty = False
         self.global_last_trade_time: float = 0.0
-        
         self.hourly_peak_equity = 0.0
         self.last_hour_ts = 0.0
         self.hourly_dd_penalty = False
         self._profit_lock_alert_sent = False
         self._circuit_breaker_alert_sent = False
         self.traded_zones_cache = {}
-
-        # ─── PROFIT-BASED LOGIC: New state tracking ───
-        # Trade lifecycle ID for consolidated PnL grouping (TP1+TP2+Runner = 1 trade)
-        self.current_trade_id: dict[str, str] = {sym: "" for sym in Config.SUPPORTED_SYMBOLS}
-        # FX rate lock at entry time for CoinDCX INR trades
-        self.entry_fx_rate: dict[str, float] = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
-        # Accumulated fees per trade lifecycle (entry + partial exits)
-        self.accumulated_fees: dict[str, float] = {sym: 0.0 for sym in Config.SUPPORTED_SYMBOLS}
 
         # Dry-run virtual balance (used for paper trading & dry-run simulation)
         starting_bal = getattr(Config, 'PAPER_STARTING_BALANCE', 2000.0 if getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' else 10000.0)
@@ -150,11 +182,6 @@ class PrimeSignalBot:
             currency_symbol = "₹" if DashboardState.balance_currency == "INR" else "$"
             print(f"[INIT] ✅ Paper-trading mode: Virtual balance initialized to {currency_symbol}{self._dry_run_balance_usdt:,.2f} {DashboardState.balance_currency}")
 
-        # Per-symbol locks to prevent concurrent candle processing on the same symbol
-        self._candle_locks = {sym: asyncio.Lock() for sym in Config.SUPPORTED_SYMBOLS}
-        self._pending_candle_evaluations = {sym: False for sym in Config.SUPPORTED_SYMBOLS}
-        # Per-symbol exit locks to prevent concurrent exit_position() calls (LOGIC-001 fix)
-        self._exit_locks = {sym: asyncio.Lock() for sym in Config.SUPPORTED_SYMBOLS}
         self._active_scan_tasks: set[asyncio.Task] = set()
         self._last_reset_date = datetime.datetime.now(IST).date()
         
@@ -456,6 +483,63 @@ class PrimeSignalBot:
         self.save_state()
         add_log_message(f"🔄 [ACCOUNT RESET] Virtual paper balance reset to ${target_balance:,.2f} USDT. Cooldown cleared, all 20 pairs actively scanning.")
 
+    async def _daily_rollover_task(self):
+        """Background task that runs automatically at 00:05 UTC to hot-swap trending coins."""
+        while True:
+            now = datetime.datetime.now(datetime.timezone.utc)
+            # Find next 00:05 UTC
+            next_rollover = (now + datetime.timedelta(days=1)).replace(hour=0, minute=5, second=0, microsecond=0)
+            today_rollover = now.replace(hour=0, minute=5, second=0, microsecond=0)
+            if now < today_rollover:
+                next_rollover = today_rollover
+                
+            sleep_seconds = (next_rollover - now).total_seconds()
+            
+            # Wait until rollover time
+            await asyncio.sleep(sleep_seconds)
+            
+            add_log_message("⏳ [DAILY ROLLOVER] Initiating daily market momentum scan and symbol refresh...")
+            
+            # Pause trading for 2 minutes to allow clean restart
+            self.global_pause_until = time.time() + 120.0
+            
+            try:
+                # 1. Stop existing pipeline
+                self.pipeline.stop()
+                await asyncio.sleep(5)
+                
+                # 2. Re-run dynamic scanner
+                await Config.update_dynamic_symbols(limit=18)
+                
+                # 3. Protect active positions
+                active_symbols = [s for s, in_pos in getattr(self, 'in_position', {}).items() if in_pos]
+                for s in active_symbols:
+                    if s not in Config.SUPPORTED_SYMBOLS:
+                        Config.SUPPORTED_SYMBOLS.append(s)
+                        add_log_message(f"🛡️ [STATE RECOVERY] Retained active position {s} in scan list.")
+                
+                # 4. Sync state dicts to prevent KeyError
+                self._sync_symbol_states()
+                
+                # 5. Re-create and link new pipeline
+                self.pipeline = RealTimeDataPipeline(self.execution)
+                self.pipeline.on_candle_close_callback = self.on_candle_close
+                
+                # 6. Start new pipeline
+                await self.pipeline.start()
+                await asyncio.sleep(5)
+                
+                # 7. Retrain ML models on fresh historical data
+                for sym in Config.SUPPORTED_SYMBOLS:
+                    ltf_history = self.pipeline.ltf_candles.get(sym, [])
+                    if ltf_history:
+                        df = prepare_dataframe(ltf_history)
+                        self.ml_models[sym].train(df)
+                        
+                add_log_message("✅ [DAILY ROLLOVER] Complete! Bot is now tracking fresh trending coins.")
+            except Exception as e:
+                add_log_message(f"❌ [DAILY ROLLOVER] Failed: {e}")
+
     async def initialize(self):
         add_log_message("Starting system initialization for all supported symbols...")
 
@@ -500,6 +584,9 @@ class PrimeSignalBot:
         await self.reconciliation.start()
         
         add_log_message(f"System ready. Multi-symbol watch active ({len(Config.SUPPORTED_SYMBOLS)} pairs). UI viewing {Config.SYMBOL}")
+        
+        # Launch daily rollover task
+        asyncio.create_task(self._daily_rollover_task())
 
     async def sync_coindcx_data(self):
         """Fetches and updates CoinDCX profile and balances in DashboardState."""
