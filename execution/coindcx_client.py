@@ -561,9 +561,9 @@ class CoinDCXClient:
         url = f"{self.base_url}/exchange/v1/orders/create"
         # CoinDCX conditional / stop limit order format
         # Directional buffer for stop-limit execution (LOGIC-007 fix):
-        # Long exit (sell): Limit price placed 0.5% below stop trigger
-        # Short exit (buy): Limit price placed 0.5% above stop trigger
-        sl_buffer_pct = 0.005
+        # Long exit (sell): Limit price placed 1.5% below stop trigger
+        # Short exit (buy): Limit price placed 1.5% above stop trigger
+        sl_buffer_pct = 0.015
         if side.lower() == 'sell':
             limit_price = stop_price * (1.0 - sl_buffer_pct)
         else:

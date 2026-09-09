@@ -246,7 +246,8 @@ class ExecutionEngine:
             await asyncio.sleep(poll_interval)
             poll_interval = min(poll_interval * 1.5, 3.0)  # gradual backoff
 
-        print(f"[FILL] Order {order_id} TIMED OUT after {timeout}s — status unknown")
+        print(f"[FILL] Order {order_id} TIMED OUT after {timeout}s — cancelling before returning UNKNOWN")
+        await self.cancel_order_safe(symbol, order_id)
         return ExecutionResult(
             state=ExecutionState.EXECUTION_UNKNOWN,
             requested_qty=requested_qty or 0.0,
@@ -620,7 +621,7 @@ class ExecutionEngine:
                 params['reduceOnly'] = True
                 order_type = 'STOP_MARKET'
             else:
-                params['stopLimitPrice'] = stop_price * (0.995 if side.lower() == 'sell' else 1.005)
+                params['stopLimitPrice'] = stop_price * (0.985 if side.lower() == 'sell' else 1.015)
                 order_type = 'STOP_LOSS_LIMIT'
 
             print(f"[NATIVE SL] Submitting {order_type} {side.upper()} order for {amount} {symbol} @ {stop_price}...")

@@ -196,7 +196,9 @@ class RealTimeDataPipeline:
                                     try:
                                         backfilled = await self.execution.fetch_ohlcv(symbol=symbol, timeframe=Config.LTF_TIMEFRAME, limit=100)
                                         if backfilled:
-                                            self.ltf_candles[symbol] = backfilled
+                                            new_candles = [c for c in backfilled if c[0] > last_ts]
+                                            self.ltf_candles[symbol].extend(new_candles)
+                                            self.ltf_candles[symbol] = self.ltf_candles[symbol][-500:]
                                     except Exception as e:
                                         print(f"[DATA] ⛔ Backfill failed on {symbol}: {e}. Skipping this candle to maintain continuous stream.")
                                         continue

@@ -1819,6 +1819,9 @@ class PrimeSignalBot:
                                 if be_sl > self.stop_loss[symbol] and curr_price > be_sl:
                                     self.stop_loss[symbol] = be_sl
                                     if symbol == Config.SYMBOL: DashboardState.stop_loss = be_sl
+                                    ctx = self.order_state_machine.get_context(symbol)
+                                    if self.has_keys and not Config.PAPER_TRADING and ctx.native_sl_order_id:
+                                        await self._resize_native_sl_safe(symbol, 'sell', self.position_size[symbol], be_sl)
                                     add_log_message(f"[{symbol}] 🛡️ BREAKEVEN PROTECTION ACTIVATED: SL moved to Breakeven (+0.30% fee buffer @ {be_sl:.4f})")
 
                             # 1. ⏱️ STAGNATION KILLER: Time-based exit if trade loses momentum near entry
@@ -1870,6 +1873,9 @@ class PrimeSignalBot:
                                 rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
                                 
                                 if self.has_keys and not Config.PAPER_TRADING:
+                                    ctx = self.order_state_machine.get_context(symbol)
+                                    if getattr(Config, 'EXCHANGE_TYPE', 'spot') != 'futures' and ctx.native_sl_order_id:
+                                        await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
                                     tp1_order = await self.execution.place_order('sell', 'market', tp1_size, symbol=symbol, is_exit_order=True)
                                     tp1_success = self._is_truthy_fill(tp1_order)
                                 else:
@@ -1963,12 +1969,15 @@ class PrimeSignalBot:
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price >= self.take_profit_2r[symbol]:
                                 tp2_rr = getattr(Config, 'RISK_REWARD_RATIO', 3.0)
                                 add_log_message(f"[{symbol}] 🎯 Target 2 ({tp2_rr:.1f}R) hit! Booking remaining runner.")
-                                tp2_size = self.position_size[symbol]
+                                tp2_size = self.position_size[symbol] * getattr(Config, 'TP2_REMAINING_SCALE_PCT', 0.65)
                                 tp2_success = False
                                 tp2_order = None
                                 is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
                                 rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
                                 if self.has_keys and not Config.PAPER_TRADING:
+                                    ctx = self.order_state_machine.get_context(symbol)
+                                    if getattr(Config, 'EXCHANGE_TYPE', 'spot') != 'futures' and ctx.native_sl_order_id:
+                                        await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
                                     tp2_order = await self.execution.place_order('sell', 'market', tp2_size, symbol=symbol, is_exit_order=True)
                                     tp2_success = self._is_truthy_fill(tp2_order)
                                 else:
@@ -2060,6 +2069,9 @@ class PrimeSignalBot:
                                 if new_sl > self.stop_loss[symbol]:
                                     self.stop_loss[symbol] = new_sl
                                     if symbol == Config.SYMBOL: DashboardState.stop_loss = new_sl
+                                    ctx = self.order_state_machine.get_context(symbol)
+                                    if self.has_keys and not Config.PAPER_TRADING and ctx.native_sl_order_id:
+                                        await self._resize_native_sl_safe(symbol, 'sell', self.position_size[symbol], new_sl)
                                 
                             if curr_price >= self.take_profit[symbol]:
                                 await self.exit_position(symbol, "TAKE_PROFIT_RUNNER")
@@ -2082,6 +2094,9 @@ class PrimeSignalBot:
                                 if be_sl < self.stop_loss[symbol] and curr_price < be_sl:
                                     self.stop_loss[symbol] = be_sl
                                     if symbol == Config.SYMBOL: DashboardState.stop_loss = be_sl
+                                    ctx = self.order_state_machine.get_context(symbol)
+                                    if self.has_keys and not Config.PAPER_TRADING and ctx.native_sl_order_id:
+                                        await self._resize_native_sl_safe(symbol, 'buy', self.position_size[symbol], be_sl)
                                     add_log_message(f"[{symbol}] 🛡️ BREAKEVEN PROTECTION ACTIVATED: SL moved to Breakeven (-0.30% fee buffer @ {be_sl:.4f})")
 
                             # 1. ⏱️ STAGNATION KILLER: Time-based exit if trade loses momentum near entry
@@ -2133,6 +2148,9 @@ class PrimeSignalBot:
                                 rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
 
                                 if self.has_keys and not Config.PAPER_TRADING:
+                                    ctx = self.order_state_machine.get_context(symbol)
+                                    if getattr(Config, 'EXCHANGE_TYPE', 'spot') != 'futures' and ctx.native_sl_order_id:
+                                        await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
                                     tp1_order = await self.execution.place_order('buy', 'market', tp1_size, symbol=symbol, is_exit_order=True)
                                     tp1_success = self._is_truthy_fill(tp1_order)
                                 else:
@@ -2229,13 +2247,16 @@ class PrimeSignalBot:
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price <= self.take_profit_2r[symbol]:
                                 tp2_rr = getattr(Config, 'RISK_REWARD_RATIO', 3.0)
                                 add_log_message(f"[{symbol}] 🎯 Target 2 ({tp2_rr:.1f}R) hit! Booking remaining runner.")
-                                tp2_size = self.position_size[symbol]
+                                tp2_size = self.position_size[symbol] * getattr(Config, 'TP2_REMAINING_SCALE_PCT', 0.65)
                                 tp2_success = False
                                 tp2_order = None
                                 is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
                                 rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
 
                                 if self.has_keys and not Config.PAPER_TRADING:
+                                    ctx = self.order_state_machine.get_context(symbol)
+                                    if getattr(Config, 'EXCHANGE_TYPE', 'spot') != 'futures' and ctx.native_sl_order_id:
+                                        await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
                                     tp2_order = await self.execution.place_order('buy', 'market', tp2_size, symbol=symbol, is_exit_order=True)
                                     tp2_success = self._is_truthy_fill(tp2_order)
                                 else:
@@ -2331,6 +2352,9 @@ class PrimeSignalBot:
                                 if new_sl < self.stop_loss[symbol]:
                                     self.stop_loss[symbol] = new_sl
                                     if symbol == Config.SYMBOL: DashboardState.stop_loss = new_sl
+                                    ctx = self.order_state_machine.get_context(symbol)
+                                    if self.has_keys and not Config.PAPER_TRADING and ctx.native_sl_order_id:
+                                        await self._resize_native_sl_safe(symbol, 'buy', self.position_size[symbol], new_sl)
                                 
                             if curr_price <= self.take_profit[symbol]:
                                 await self.exit_position(symbol, "TAKE_PROFIT_RUNNER")
