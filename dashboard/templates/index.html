@@ -474,6 +474,13 @@
         </header>
 
         <!-- TOP 20 COINS MINI-SCANNER / QUICK TICKER BAR -->
+        <div class="flex items-center justify-between mb-1 px-1 mt-2">
+            <h3 class="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5"><span class="text-blue-500 animate-pulse">●</span> Active Scan List</h3>
+            <div class="flex items-center gap-1.5 bg-[#171e2e] border border-[#374151] px-2 py-0.5 rounded text-[10px] font-mono shadow-sm">
+                <span class="text-slate-400 font-bold">Next Scan:</span>
+                <span id="scan-countdown-timer" class="text-blue-400 font-black">--:--:--</span>
+            </div>
+        </div>
         <div id="top-20-ticker-bar" class="flex items-center gap-1.5 overflow-x-auto py-2 px-2 bg-[#0d121f]/95 border border-[#1f2937] rounded-xl scrollbar-thin shadow-inner mb-4 select-none">
             <!-- 20 pairs rendered via JS -->
         </div>
@@ -1631,6 +1638,10 @@
                         
                         const state = JSON.parse(event.data);
                         
+                        if (state.next_scan_timestamp) {
+                            window.nextScanTs = state.next_scan_timestamp;
+                        }
+
                         // Sync dropdown value if it doesn't match state.symbol
                         const symbolSelect = document.getElementById('symbol-select');
                         if (symbolSelect && state.symbol && symbolSelect.value !== state.symbol) {
@@ -3391,6 +3402,28 @@
                 scheduleReconnect();
             }
         }, 5000);
+
+        // Active Scan Countdown Timer
+        setInterval(() => {
+            if (window.nextScanTs) {
+                const now = Date.now();
+                const diff = window.nextScanTs - now;
+                const el = document.getElementById('scan-countdown-timer');
+                if (el) {
+                    if (diff <= 0) {
+                        el.innerText = "SCANNING...";
+                        el.className = "text-green-400 font-black animate-pulse";
+                    } else {
+                        const totalSec = Math.floor(diff / 1000);
+                        const h = String(Math.floor(totalSec / 3600)).padStart(2, '0');
+                        const m = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
+                        const s = String(totalSec % 60).padStart(2, '0');
+                        el.innerText = `${h}:${m}:${s}`;
+                        el.className = "text-blue-400 font-black";
+                    }
+                }
+            }
+        }, 1000);
     </script>
 </body>
 </html>

@@ -1167,7 +1167,16 @@ def _build_state_payload():
             DashboardState.total_equity = total_eq
             DashboardState.in_trade_margin = 0.0
 
+    import datetime
+    now = datetime.datetime.now(datetime.timezone.utc)
+    next_rollover = (now + datetime.timedelta(days=1)).replace(hour=0, minute=5, second=0, microsecond=0)
+    today_rollover = now.replace(hour=0, minute=5, second=0, microsecond=0)
+    if now < today_rollover:
+        next_rollover = today_rollover
+    next_scan_timestamp = int(next_rollover.timestamp() * 1000)
+
     return {
+        "next_scan_timestamp": next_scan_timestamp,
         "latest_price": live_p,
         "latest_prices": live_prices,
         "balance_usdt": available_bal,
