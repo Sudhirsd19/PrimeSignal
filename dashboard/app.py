@@ -1169,7 +1169,6 @@ def _build_state_payload():
             DashboardState.total_equity = total_eq
             DashboardState.in_trade_margin = 0.0
 
-    import time
     now_ts = time.time()
     midnight_utc = now_ts - (now_ts % 86400)
     today_rollover = midnight_utc + 300 # 00:05 UTC
