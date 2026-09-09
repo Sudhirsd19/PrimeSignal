@@ -1644,8 +1644,23 @@
 
                         // Sync dropdown value if it doesn't match state.symbol
                         const symbolSelect = document.getElementById('symbol-select');
-                        if (symbolSelect && state.symbol && symbolSelect.value !== state.symbol) {
-                            symbolSelect.value = state.symbol;
+                        if (symbolSelect && state.symbol) {
+                            let optionExists = false;
+                            for (let i = 0; i < symbolSelect.options.length; i++) {
+                                if (symbolSelect.options[i].value === state.symbol) {
+                                    optionExists = true;
+                                    break;
+                                }
+                            }
+                            if (!optionExists) {
+                                const newOption = document.createElement("option");
+                                newOption.value = state.symbol;
+                                newOption.text = state.symbol;
+                                symbolSelect.appendChild(newOption);
+                            }
+                            if (symbolSelect.value !== state.symbol) {
+                                symbolSelect.value = state.symbol;
+                            }
                         }
                         
                         // Sync timeframe toggle visuals dynamically
@@ -2657,9 +2672,26 @@
         // Helper: Quick-switch chart symbol when clicking an active position card
         function selectSymbolFromPosition(sym) {
             const symbolSelect = document.getElementById('symbol-select');
-            if (symbolSelect && symbolSelect.value !== sym) {
-                symbolSelect.value = sym;
-                symbolSelect.dispatchEvent(new Event('change'));
+            if (symbolSelect) {
+                // Check if the option exists. If not, add it dynamically so setting value works.
+                let optionExists = false;
+                for (let i = 0; i < symbolSelect.options.length; i++) {
+                    if (symbolSelect.options[i].value === sym) {
+                        optionExists = true;
+                        break;
+                    }
+                }
+                if (!optionExists) {
+                    const newOption = document.createElement("option");
+                    newOption.value = sym;
+                    newOption.text = sym;
+                    symbolSelect.appendChild(newOption);
+                }
+                
+                if (symbolSelect.value !== sym) {
+                    symbolSelect.value = sym;
+                    symbolSelect.dispatchEvent(new Event('change'));
+                }
             }
         }
         
