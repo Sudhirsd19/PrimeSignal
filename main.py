@@ -2999,7 +2999,7 @@ async def start_all():
     await Config.update_dynamic_symbols(limit=18)
     
     # 2. 🛡️ Check local state for active positions to ensure they aren't abandoned by the dynamic scanner
-    state_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "system_state.json")
+    state_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_state.json")
     if os.path.exists(state_file):
         try:
             with open(state_file, 'r') as f:
