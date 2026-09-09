@@ -936,10 +936,12 @@ async def websocket_endpoint(websocket: WebSocket):
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_text("pong")
-    except WebSocketDisconnect:
-        pass
-    except Exception:
-        pass
+    except WebSocketDisconnect as e:
+        print(f"[WS] Client disconnected normally: {e}")
+    except Exception as e:
+        import traceback
+        print(f"[WS] FATAL Error in websocket endpoint: {e}")
+        traceback.print_exc()
     finally:
         DashboardState.active_websockets.discard(websocket)
 
