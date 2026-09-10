@@ -71,14 +71,14 @@ class LiquidationEngine:
         proximity_thresh = getattr(Config, 'LIQUIDATION_PROXIMITY_PCT', 0.003)
 
         # Bullish Liquidation Hunt: Price swept long liquidations and snapped back up with a wick
-        if (last_c['low'] <= nearest_long_liq * 1.001) and (last_c['close'] > nearest_long_liq):
+        if (last_c['low'] <= nearest_long_liq * (1 + proximity_thresh)) and (last_c['close'] > nearest_long_liq):
             candle_range = last_c['high'] - last_c['low']
             lower_wick = min(last_c['open'], last_c['close']) - last_c['low']
             if candle_range > 0 and (lower_wick / candle_range) >= 0.35:
                 hunt_signal = 'BULLISH_LIQUIDATION_HUNT'
 
         # Bearish Liquidation Hunt: Price swept short liquidations and rejected back down with a wick
-        elif (last_c['high'] >= nearest_short_liq * 0.999) and (last_c['close'] < nearest_short_liq):
+        elif (last_c['high'] >= nearest_short_liq * (1 - proximity_thresh)) and (last_c['close'] < nearest_short_liq):
             candle_range = last_c['high'] - last_c['low']
             upper_wick = last_c['high'] - max(last_c['open'], last_c['close'])
             if candle_range > 0 and (upper_wick / candle_range) >= 0.35:

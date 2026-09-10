@@ -29,6 +29,11 @@ class OrderFlowEngine:
     def detect_absorption_divergence(self, df: pd.DataFrame, lookback: int = 20) -> dict:
         """
         Detects Bullish or Bearish Institutional Absorption Divergences.
+        
+        NOTE: CVD is estimated via close-position heuristic (not tick-level Lee-Ready).
+        This proxy is directionally correlated but unreliable on doji/small-body candles
+        where close ≈ midrange produces near-zero delta regardless of actual order flow.
+        Confidence values reflect this approximation uncertainty.
         """
         lookback = getattr(Config, 'CVD_DIVERGENCE_LOOKBACK', lookback)
         if len(df) < lookback:
@@ -59,12 +64,12 @@ class OrderFlowEngine:
         # 1. Bullish Absorption: Price made a Lower Low or equal low, but CVD made a Higher Low
         if (recent_p <= prev_min_p * 1.002) and (recent_cvd > prev_min_cvd):
             absorption = 'BULLISH_ABSORPTION'
-            confidence = 0.85
+            confidence = 0.65
 
         # 2. Bearish Absorption: Price made a Higher High or equal high, but CVD made a Lower High
         elif (recent_p >= prev_max_p * 0.998) and (recent_cvd < prev_max_cvd):
             absorption = 'BEARISH_ABSORPTION'
-            confidence = 0.85
+            confidence = 0.65
 
         # Recent 3-bar delta ratio
         recent_delta = cvd_vals[-1] - cvd_vals[-4] if len(cvd_vals) >= 4 else 0.0

@@ -24,8 +24,24 @@ class RiskManager:
         # Portfolio-level lock for atomic risk reservation across concurrent entry tasks
         self.portfolio_lock = self._lock
 
+    # Maximum age (seconds) for a risk reservation before auto-expiry
+    MAX_RESERVATION_AGE_SEC = 300  # 5 minutes
+
     def _recalculate_reserved_totals(self):
-        """Derives current reservation metrics from active durable reservations."""
+        """Derives current reservation metrics from active durable reservations.
+        Auto-expires stale reservations older than MAX_RESERVATION_AGE_SEC."""
+        now = time.time()
+        expired_ids = []
+        for r_id, res in self.active_reservations.items():
+            if res.get('state') == 'ACTIVE':
+                age = now - float(res.get('timestamp', now))
+                if age > self.MAX_RESERVATION_AGE_SEC:
+                    expired_ids.append(r_id)
+
+        for r_id in expired_ids:
+            print(f"[RISK] ⚠️ Auto-expiring stale reservation {r_id} (age: {now - self.active_reservations[r_id].get('timestamp', now):.0f}s > {self.MAX_RESERVATION_AGE_SEC}s)")
+            del self.active_reservations[r_id]
+
         total_risk = 0.0
         open_count = 0
         longs = 0

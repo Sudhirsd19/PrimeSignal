@@ -1,4 +1,6 @@
 import math
+import time
+import datetime
 import pandas as pd
 import numpy as np
 from typing import Any
@@ -56,18 +58,32 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
 
         # FIX-RACE-CONDITION: Calculate target_idx safely to ensure we evaluate the closed candle.
         # If the last candle's window hasn't expired, it's still forming, so the closed candle is iloc[-2].
-        import time
         tf_mins = int(getattr(Config, 'LTF_TIMEFRAME', '15m').replace('m', '').replace('h', '')) * (60 if 'h' in getattr(Config, 'LTF_TIMEFRAME', '15m') else 1)
         tf_ms = tf_mins * 60 * 1000
         
-        last_ts_ms = ltf_df['timestamp'].iloc[-1] if 'timestamp' in ltf_df.columns else ltf_df.index[-1].timestamp() * 1000
+        if 'timestamp' in ltf_df.columns:
+            last_ts_ms = ltf_df['timestamp'].iloc[-1]
+        else:
+            # AUD-M1: Ensure fallback to index respects timezone
+            last_idx = ltf_df.index[-1]
+            if last_idx.tzinfo is None:
+                last_idx = last_idx.tz_localize('UTC')
+            last_ts_ms = last_idx.timestamp() * 1000
+            
         current_time_ms = time.time() * 1000
         
         target_idx = -2 if current_time_ms < (last_ts_ms + tf_ms) else -1
         
         htf_mins = int(getattr(Config, 'HTF_TIMEFRAME', '1h').replace('m', '').replace('h', '')) * (60 if 'h' in getattr(Config, 'HTF_TIMEFRAME', '1h') else 1)
         htf_ms = htf_mins * 60 * 1000
-        htf_last_ts_ms = htf_df['timestamp'].iloc[-1] if 'timestamp' in htf_df.columns else htf_df.index[-1].timestamp() * 1000
+        if 'timestamp' in htf_df.columns:
+            htf_last_ts_ms = htf_df['timestamp'].iloc[-1]
+        else:
+            htf_last_idx = htf_df.index[-1]
+            if htf_last_idx.tzinfo is None:
+                htf_last_idx = htf_last_idx.tz_localize('UTC')
+            htf_last_ts_ms = htf_last_idx.timestamp() * 1000
+            
         htf_eval_idx = -2 if current_time_ms < (htf_last_ts_ms + htf_ms) else -1
 
         htf_ema_50 = calculate_ema(htf_df, 50)
@@ -139,12 +155,16 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         # Task 1: Market Regime
         avg_atr_14 = ltf_atr.rolling(14).mean().iloc[target_idx]
         curr_atr = ltf_atr.iloc[target_idx]
-        if curr_atr > 1.2 * avg_atr_14:
-            market_regime = 'HIGH_VOL'
-        adx_threshold = getattr(Config, 'ADX_MIN_THRESHOLD', 25.0)  # FIX-1: default matches Config.ADX_MIN_THRESHOLD = 20.0
+        
+        adx_threshold = getattr(Config, 'ADX_MIN_THRESHOLD', 25.0)  # FIX-1: default matches Config.ADX_MIN_THRESHOLD = 25.0
         if curr_adx >= adx_threshold: market_regime = 'TREND'
         elif curr_adx >= 20.0: market_regime = 'MIXED'
         else: market_regime = 'RANGE'
+        
+        # AUD-H1: Apply HIGH_VOL override AFTER ADX assignment to prevent clobbering
+        if curr_atr > 1.2 * avg_atr_14:
+            market_regime = 'HIGH_VOL'
+            
         metadata['market_regime'] = market_regime
 
         # Trend Regime Filter: Block trades in chop/consolidation (ADX < 25)
@@ -180,8 +200,6 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         # datetime.now() gives the REAL wall-clock time — correct in live trading, but
         # in backtesting every historical bar would get classified by the time you run
         # the script (e.g. all bars labelled "NY session" if run at 15:00 UTC on a weekday).
-        import datetime
-        import pandas as pd
         last_bar_ts = ltf_df.index[-1]
         if isinstance(last_bar_ts, pd.Timestamp):
             current_hour = last_bar_ts.hour
@@ -198,7 +216,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         metadata['session'] = session_name
         
         # Weekend Filter: Block trades during low-liquidity weekend chop unless in powerful trend
-        if getattr(Config, 'ENABLE_WEEKEND_FILTER', False) and current_weekday in (5, 6) and not strong_trend:
+        if getattr(Config, 'ENABLE_WEEKEND_FILTER', True) and current_weekday in (5, 6) and not strong_trend:
             metadata['reason'] = "Weekend Low-Liquidity Filter (Sat/Sun)"
             return "HOLD", metadata
             
@@ -209,7 +227,10 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 bw_series = bb_df['bandwidth'].dropna()
                 if len(bw_series) >= 30:
                     curr_bw = bw_series.iloc[target_idx]
-                    lookback_bw = bw_series.iloc[-min(len(bw_series), 100):]
+                    # AUD-M6: Align lookback window with target_idx (closed candle)
+                    bw_end = len(bw_series) + target_idx + 1  # convert negative idx to positive end
+                    bw_start = max(0, bw_end - 100)
+                    lookback_bw = bw_series.iloc[bw_start:bw_end]
                     bw_percentile = (lookback_bw < curr_bw).mean() * 100.0
                     bb_thresh = getattr(Config, 'BB_SQUEEZE_PERCENTILE', 12.0)
                     if bw_percentile <= bb_thresh and not strong_trend:
@@ -219,6 +240,10 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         curr_price = ltf_closes.iloc[target_idx]
         curr_rsi   = ltf_rsi.iloc[target_idx]
         prev_rsi   = ltf_rsi.iloc[target_idx - 1]
+        
+        # AUD-M4: RSI now returns NaN during warm-up (instead of 50.0). Guard against NaN here.
+        if np.isnan(curr_rsi): curr_rsi = 50.0
+        if np.isnan(prev_rsi): prev_rsi = 50.0
         curr_atr   = ltf_atr.iloc[target_idx]
         curr_vwap  = ltf_vwap.iloc[target_idx]
         prev_vwap  = ltf_vwap.iloc[target_idx - 1]
@@ -292,14 +317,16 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                     return False
             return True
 
-        # 1. Search HTF Institutional Zones (Highest Conviction)
+        # 1. Search HTF Institutional Zones (with LTF structural cross-validation — AUD-H3 fix)
         for idx in range(len(htf_df) - 2, max(0, len(htf_df) - 2 - Config.MAX_ZONE_AGE_CANDLES), -1):
             ob = htf_obs.iloc[idx]
             if ob:
                 if ob['type'] == 'BULLISH' and is_zone_active(ob) and active_bullish_ob is None:
-                    active_bullish_ob = ob
+                    if is_zone_structurally_valid(ob, 'BULLISH'):
+                        active_bullish_ob = ob
                 elif ob['type'] == 'BEARISH' and is_zone_active(ob) and active_bearish_ob is None:
-                    active_bearish_ob = ob
+                    if is_zone_structurally_valid(ob, 'BEARISH'):
+                        active_bearish_ob = ob
 
         # 2. Search LTF Zones if HTF not already found
         for idx in range(len(ltf_df) - 2, max(0, len(ltf_df) - 2 - Config.MAX_ZONE_AGE_CANDLES), -1):
@@ -315,14 +342,16 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         active_bullish_fvg = None
         active_bearish_fvg = None
 
-        # 1. Search HTF FVGs
+        # 1. Search HTF FVGs (with LTF structural cross-validation — AUD-H3 fix)
         for idx in range(len(htf_df) - 2, max(0, len(htf_df) - 2 - Config.MAX_ZONE_AGE_CANDLES), -1):
             fvg = htf_fvgs.iloc[idx]
             if fvg:
                 if fvg['type'] == 'BULLISH' and is_zone_active(fvg) and active_bullish_fvg is None:
-                    active_bullish_fvg = fvg
+                    if is_zone_structurally_valid(fvg, 'BULLISH'):
+                        active_bullish_fvg = fvg
                 elif fvg['type'] == 'BEARISH' and is_zone_active(fvg) and active_bearish_fvg is None:
-                    active_bearish_fvg = fvg
+                    if is_zone_structurally_valid(fvg, 'BEARISH'):
+                        active_bearish_fvg = fvg
 
         # 2. Search LTF FVGs
         for idx in range(len(ltf_df) - 2, max(0, len(ltf_df) - 2 - Config.MAX_ZONE_AGE_CANDLES), -1):
@@ -334,8 +363,6 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 elif fvg['type'] == 'BEARISH' and is_zone_active(fvg) and active_bearish_fvg is None:
                     if is_zone_structurally_valid(fvg, 'BEARISH'):
                         active_bearish_fvg = fvg
-
-        vwap_tol = Config.VWAP_TOLERANCE * 2 if relaxed else Config.VWAP_TOLERANCE
 
         if htf_trend == 'BULLISH':
             in_zone = False
@@ -483,16 +510,15 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             # Multi-Trigger Valid Entry:
             # 1. Zone Setups (OB, FVG, SWEEP) with rejection trigger OR micro_bos
             # 2. Dynamic Pullback Setups (EMA, VWAP) with trend alignment + trigger
+            # All paths enforce regime-aware score_thresh (AUD-C1 fix)
             valid_entry = False
             if in_zone and entry_type in ["OB", "FVG", "SWEEP"]:
-                if (micro_bos or trigger_pass or rsi_trigger) and (vwap_pass or strong_trend or score >= 2):
+                if (micro_bos or trigger_pass or rsi_trigger) and (vwap_pass or strong_trend) and score >= score_thresh:
                     valid_entry = True
             elif in_zone and entry_type in ["EMA", "VWAP"]:
-                if (micro_bos or trigger_pass) and (curr_rsi < 65 and vwap_pass):
+                if (micro_bos or trigger_pass) and (curr_rsi < 65 and vwap_pass) and score >= score_thresh:
                     valid_entry = True
-            elif relaxed and in_zone and (trigger_pass or vwap_pass) and score >= 3:
-                # FIX-D: Relaxed mode now requires score >= 3 (zone=2pts + ≥1 more confluence).
-                # Prevents single-condition noise entries in choppy/sideways markets.
+            elif relaxed and in_zone and (trigger_pass or vwap_pass) and score >= score_thresh:
                 valid_entry = True
 
             # Sudden Wick Filter (1.8%) — applied after valid_entry evaluation
@@ -504,7 +530,11 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 if entry_type == 'FVG': valid_entry = False
                 elif entry_type == 'OB' and not strong_trend: valid_entry = False
 
-            # FIX #3: Removed redundant vol_pass check - vol_pass already validated at line 146
+            # AUD-H4: Enforce vol_pass — block entries in dead-flat markets (ATR/price < MIN_ATR_PCT)
+            if not vol_pass:
+                metadata['reason'] = f"Low Volatility Filter (ATR/price < {Config.MIN_ATR_PCT*100:.2f}%)"
+                return "HOLD", metadata
+
             if valid_entry:
                 if entry_type in ["OB", "FVG"]:
                     ob_sl = zone_bottom * 0.9985
@@ -522,12 +552,12 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 risk        = max(curr_price - stop_loss, 1e-9)
                 fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
                 take_profit_1r = curr_price + (risk * getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)) + fee_adj
-                take_profit_2r = curr_price + (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.5)) + fee_adj
+                take_profit_2r = curr_price + (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.2)) + fee_adj
                 take_profit_3r = curr_price + (risk * 4.0) + fee_adj
 
                 metadata['stop_loss']  = stop_loss
                 metadata['take_profit_1r'] = take_profit_1r
-                metadata['take_profit'] = take_profit_3r
+                metadata['take_profit'] = take_profit_1r
                 metadata['tp1'] = take_profit_1r
                 metadata['tp2'] = take_profit_2r
                 metadata['tp3'] = take_profit_3r
@@ -685,16 +715,15 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             # Multi-Trigger Valid Entry:
             # 1. Zone Setups (OB, FVG, SWEEP) with rejection trigger OR micro_bos
             # 2. Dynamic Pullback Setups (EMA, VWAP) with trend alignment + trigger
+            # All paths enforce regime-aware score_thresh (AUD-C1 fix)
             valid_entry = False
             if in_zone and entry_type in ["OB", "FVG", "SWEEP"]:
-                if (micro_bos or trigger_pass or rsi_trigger) and (vwap_pass or strong_trend or score >= 2):
+                if (micro_bos or trigger_pass or rsi_trigger) and (vwap_pass or strong_trend) and score >= score_thresh:
                     valid_entry = True
             elif in_zone and entry_type in ["EMA", "VWAP"]:
-                if (micro_bos or trigger_pass) and (curr_rsi > 35 and vwap_pass):
+                if (micro_bos or trigger_pass) and (curr_rsi > 35 and vwap_pass) and score >= score_thresh:
                     valid_entry = True
-            elif relaxed and in_zone and (trigger_pass or vwap_pass) and score >= 3:
-                # FIX-D: Relaxed mode now requires score >= 3 (zone=2pts + ≥1 more confluence).
-                # Prevents single-condition noise entries in choppy/sideways markets.
+            elif relaxed and in_zone and (trigger_pass or vwap_pass) and score >= score_thresh:
                 valid_entry = True
 
             # Sudden Wick Filter (1.8%) — applied after valid_entry evaluation
@@ -723,12 +752,12 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 risk        = max(stop_loss - curr_price, 1e-9)
                 fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
                 take_profit_1r = curr_price - (risk * getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)) - fee_adj
-                take_profit_2r = curr_price - (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.5)) - fee_adj
+                take_profit_2r = curr_price - (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.2)) - fee_adj
                 take_profit_3r = curr_price - (risk * 4.0) - fee_adj
 
                 metadata['stop_loss']  = stop_loss
                 metadata['take_profit_1r'] = take_profit_1r
-                metadata['take_profit'] = take_profit_3r
+                metadata['take_profit'] = take_profit_1r
                 metadata['tp1'] = take_profit_1r
                 metadata['tp2'] = take_profit_2r
                 metadata['tp3'] = take_profit_3r

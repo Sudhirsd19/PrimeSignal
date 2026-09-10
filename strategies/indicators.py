@@ -14,7 +14,7 @@ def calculate_rsi(df, period=14, column='close'):
     Calculates Relative Strength Index (RSI) using Wilder's smoothing.
     """
     if len(df) < period:
-        return pd.Series([50.0] * len(df), index=df.index)
+        return pd.Series([np.nan] * len(df), index=df.index)
     
     delta = df[column].diff()
     gain = delta.clip(lower=0)
@@ -51,16 +51,12 @@ def calculate_vwap(df):
     typical_price = (df['high'] + df['low'] + df['close']) / 3
     volume = df['volume']
 
-    # Group by UTC date for daily session reset
+    # Group by UTC date for daily session reset — vectorized via groupby
     date_groups = df.index.date
 
-    cum_tp_vol = pd.Series(0.0, index=df.index)
-    cum_vol = pd.Series(0.0, index=df.index)
-
-    for date in sorted(set(date_groups)):  # sorted() ensures chronological order for correct cumsum
-        mask = date_groups == date
-        cum_tp_vol[mask] = (typical_price[mask] * volume[mask]).cumsum()
-        cum_vol[mask] = volume[mask].cumsum()
+    tp_vol = typical_price * volume
+    cum_tp_vol = tp_vol.groupby(date_groups).cumsum()
+    cum_vol = volume.groupby(date_groups).cumsum()
 
     vwap = cum_tp_vol / cum_vol.replace(0, 1e-9)
     return vwap

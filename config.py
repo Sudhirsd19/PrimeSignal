@@ -1,4 +1,4 @@
-# PrimeSignal v2.5.0 - Institutional Strategy Engine (1.8R Payoff, 20.0 ADX, EMA 21 Pullback, Max 6 Daily Trades)
+# PrimeSignal v2.5.0 - Institutional Strategy Engine (1.5R TP1 / 2.2R TP2, 25.0 ADX, EMA 21 Pullback, Max 6 Daily Trades)
 import os
 from dotenv import load_dotenv
 
@@ -31,10 +31,10 @@ class Config:
     MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "6"))
     TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015")) # Deprecated in favor of ATR
     TRAILING_ATR_MULT = float(os.getenv("TRAILING_ATR_MULT", "1.5"))
-    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.2")) # Breakeven Lock aligns with TP1 target (1.2R)
-    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.5")) # TP1 Target: 1.2R
+    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.2")) # Breakeven Lock activation (NOT TP1 — see MIN_RISK_REWARD_RATIO for TP1)
+    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.5")) # TP1 Target: 1.5R
     RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.2")) # TP2 Target: 2.2R
-    TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "0.65")) # 65% profit booking at 1.2R target
+    TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "0.65")) # 65% profit booking at TP1 (1.5R) target
     
     # Triple-Barrier Label constants (used in ml/confirmation.py FIX-B)
     # TP barrier: +0.6% = TP1 at 1.2R of 0.5% minimum SL
