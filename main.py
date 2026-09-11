@@ -150,6 +150,7 @@ class PrimeSignalBot:
         self._candle_locks = {}
         self._pending_candle_evaluations = {}
         self._exit_locks = {}
+        self.symbol_loss_cooldown = {}
         
         self._sync_symbol_states()
 
@@ -498,6 +499,11 @@ class PrimeSignalBot:
             # Wait until rollover time
             await asyncio.sleep(sleep_seconds)
             
+            if not getattr(Config, 'ENABLE_DYNAMIC_SCANNER', False):
+                add_log_message("ℹ️ [DAILY ROLLOVER] Dynamic scanner hot-swap is disabled. Keeping permanent Top 20 Institutional symbols.")
+                await asyncio.sleep(300)
+                continue
+                
             add_log_message("⏳ [DAILY ROLLOVER] Initiating daily market momentum scan and symbol refresh...")
             
             # Pause trading for 2 minutes to allow clean restart
@@ -735,6 +741,9 @@ class PrimeSignalBot:
 
     async def _on_candle_close_impl(self, symbol):
         if time.time() < self.global_pause_until:
+            return
+            
+        if time.time() < self.symbol_loss_cooldown.get(symbol, 0.0):
             return
             
         # GAP-02 INVARIANT: Block new candle signal evaluation until startup broker reconciliation has completed
@@ -1427,8 +1436,8 @@ class PrimeSignalBot:
                     self.partial_tp_taken[symbol] = False
                     self.tp2_taken[symbol] = False
                     r_amount = abs(sl - fill_price)
-                    tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)
-                    tp2_mult = getattr(Config, 'RISK_REWARD_RATIO', 2.2)
+                    tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0)
+                    tp2_mult = getattr(Config, 'RISK_REWARD_RATIO', 2.0)
                     self.take_profit_1r[symbol] = float(fill_price + (tp1_mult * r_amount) + fee_adj)
                     self.take_profit_2r[symbol] = float(fill_price + (tp2_mult * r_amount) + fee_adj)
                     self.take_profit[symbol] = float(fill_price + (4.0 * r_amount) + fee_adj)
@@ -1634,8 +1643,8 @@ class PrimeSignalBot:
                     self.partial_tp_taken[symbol] = False
                     self.tp2_taken[symbol] = False
                     r_amount = abs(sl - fill_price)
-                    tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)
-                    tp2_mult = getattr(Config, 'RISK_REWARD_RATIO', 2.2)
+                    tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0)
+                    tp2_mult = getattr(Config, 'RISK_REWARD_RATIO', 2.0)
                     self.take_profit_1r[symbol] = float(fill_price - (tp1_mult * r_amount) - fee_adj)
                     self.take_profit_2r[symbol] = float(fill_price - (tp2_mult * r_amount) - fee_adj)
                     self.take_profit[symbol] = float(fill_price - (4.0 * r_amount) - fee_adj)
@@ -1805,12 +1814,12 @@ class PrimeSignalBot:
                         
                         if self.position_side[symbol] == "LONG":
                             self.highest_price_reached[symbol] = max(self.highest_price_reached[symbol], curr_price)
-                            fee_adj = self.entry_price[symbol] * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5); r_dist = (self.take_profit_1r[symbol] - self.entry_price[symbol] - fee_adj) / tp1_mult if self.position_side[symbol] == 'LONG' else (self.entry_price[symbol] - self.take_profit_1r[symbol] - fee_adj) / tp1_mult; r_dist = r_dist if r_dist > 0 else abs(self.entry_price[symbol] - self.stop_loss[symbol])
+                            fee_adj = self.entry_price[symbol] * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0); r_dist = (self.take_profit_1r[symbol] - self.entry_price[symbol] - fee_adj) / tp1_mult if self.position_side[symbol] == 'LONG' else (self.entry_price[symbol] - self.take_profit_1r[symbol] - fee_adj) / tp1_mult; r_dist = r_dist if r_dist > 0 else abs(self.entry_price[symbol] - self.stop_loss[symbol])
                             
                             # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven
                             fee_buffer_pct = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
                             fee_offset = self.entry_price[symbol] * fee_buffer_pct
-                            tsl_activation = getattr(Config, 'TSL_ACTIVATION_R', 1.2)
+                            tsl_activation = getattr(Config, 'TSL_ACTIVATION_R', 0.55)
                             min_required_profit = max(tsl_activation * r_dist, fee_offset * 1.5)
                             
                             # Only activate Breakeven after TP1 profit is secured OR price has reached full activation threshold
@@ -2076,16 +2085,17 @@ class PrimeSignalBot:
                             if curr_price >= self.take_profit[symbol]:
                                 await self.exit_position(symbol, "TAKE_PROFIT_RUNNER")
                             elif curr_price <= self.stop_loss[symbol]:
-                                await self.exit_position(symbol, "TRAILING_STOP")
+                                exit_r = "TRAILING_STOP" if (self.partial_tp_taken[symbol] or self.stop_loss[symbol] > self.entry_price[symbol]) else "INITIAL_STOP_LOSS"
+                                await self.exit_position(symbol, exit_r)
                                 
                         elif self.position_side[symbol] == "SHORT":
                             self.lowest_price_reached[symbol] = min(self.lowest_price_reached[symbol], curr_price)
-                            fee_adj = self.entry_price[symbol] * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5); r_dist = (self.take_profit_1r[symbol] - self.entry_price[symbol] - fee_adj) / tp1_mult if self.position_side[symbol] == 'LONG' else (self.entry_price[symbol] - self.take_profit_1r[symbol] - fee_adj) / tp1_mult; r_dist = r_dist if r_dist > 0 else abs(self.entry_price[symbol] - self.stop_loss[symbol])
+                            fee_adj = self.entry_price[symbol] * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0); r_dist = (self.take_profit_1r[symbol] - self.entry_price[symbol] - fee_adj) / tp1_mult if self.position_side[symbol] == 'LONG' else (self.entry_price[symbol] - self.take_profit_1r[symbol] - fee_adj) / tp1_mult; r_dist = r_dist if r_dist > 0 else abs(self.entry_price[symbol] - self.stop_loss[symbol])
                             
                             # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven
                             fee_buffer_pct = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
                             fee_offset = self.entry_price[symbol] * fee_buffer_pct
-                            tsl_activation = getattr(Config, 'TSL_ACTIVATION_R', 1.2)
+                            tsl_activation = getattr(Config, 'TSL_ACTIVATION_R', 0.55)
                             min_required_profit = max(tsl_activation * r_dist, fee_offset * 1.5)
                             
                             # Only activate Breakeven after TP1 profit is secured OR price has reached full activation threshold
@@ -2359,7 +2369,8 @@ class PrimeSignalBot:
                             if curr_price <= self.take_profit[symbol]:
                                 await self.exit_position(symbol, "TAKE_PROFIT_RUNNER")
                             elif curr_price >= self.stop_loss[symbol]:
-                                await self.exit_position(symbol, "TRAILING_STOP")
+                                exit_r = "TRAILING_STOP" if (self.partial_tp_taken[symbol] or self.stop_loss[symbol] < self.entry_price[symbol]) else "INITIAL_STOP_LOSS"
+                                await self.exit_position(symbol, exit_r)
 
                 # Update UI for selected Config.SYMBOL
                 sym = Config.SYMBOL
@@ -2763,6 +2774,10 @@ class PrimeSignalBot:
                 # Task 5: Cluster Loss Tracking (Evaluates Total Trade Return = Realized TP1/TP2 Cash + Final Runner PnL)
                 total_trade_pnl = self.realized_pnl.get(symbol, 0.0) + pnl_usdt
                 is_loss = total_trade_pnl < -0.01
+                if is_loss:
+                    cooldown_secs = 10800.0 # 3 Hours ban on symbol after a loss
+                    self.symbol_loss_cooldown[symbol] = time.time() + cooldown_secs
+                    add_log_message(f"🛡️ [SYMBOL COOLDOWN] {symbol} locked for 3 hours after loss to prevent revenge trading.")
                 self.trade_history.append(1 if is_loss else 0)
                 if len(self.trade_history) > 6:
                     self.trade_history.pop(0)

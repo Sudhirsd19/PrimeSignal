@@ -10,10 +10,11 @@ class Config:
     SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "")
     USE_TESTNET = os.getenv("USE_TESTNET", "True").lower() in ("true", "1", "yes")
     
-    # Product Settings (20 High-Liquidity SMC Momentum Pairs)
+    # Product Settings (Top 20 High-Liquidity Institutional USDT Pairs)
     SYMBOL = os.getenv("SYMBOL", "BTC/USDT")
-    SUPPORTED_SYMBOLS = os.getenv("SUPPORTED_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,DOGE/USDT,DOT/USDT,LTC/USDT,SUI/USDT,LINK/USDT,TIA/USDT,INJ/USDT,RENDER/USDT,APT/USDT,NEAR/USDT,ARB/USDT,OP/USDT,POL/USDT").split(",")
+    SUPPORTED_SYMBOLS = os.getenv("SUPPORTED_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,DOGE/USDT,ADA/USDT,AVAX/USDT,SUI/USDT,LINK/USDT,DOT/USDT,NEAR/USDT,LTC/USDT,BCH/USDT,UNI/USDT,APT/USDT,ICP/USDT,TRX/USDT,ATOM/USDT,OP/USDT").split(",")
     TRADE_AMOUNT = float(os.getenv("TRADE_AMOUNT", "0.001"))
+    ENABLE_DYNAMIC_SCANNER = os.getenv("ENABLE_DYNAMIC_SCANNER", "False").lower() in ("true", "1", "yes")
     
     # Risk parameters (Zero Net Capital Loss Architecture)
     RISK_PCT = float(os.getenv("RISK_PCT", "0.8"))
@@ -31,10 +32,10 @@ class Config:
     MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "6"))
     TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015")) # Deprecated in favor of ATR
     TRAILING_ATR_MULT = float(os.getenv("TRAILING_ATR_MULT", "1.5"))
-    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.2")) # Breakeven Lock activation (NOT TP1 — see MIN_RISK_REWARD_RATIO for TP1)
-    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.5")) # TP1 Target: 1.5R
-    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.2")) # TP2 Target: 2.2R
-    TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "0.65")) # 65% profit booking at TP1 (1.5R) target
+    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "0.55")) # Early Breakeven Lock activation at +0.55R
+    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.0")) # TP1 Target: 1.0R
+    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.0")) # TP2 Target: 2.0R
+    TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "0.65")) # 65% profit booking at TP1 (1.0R) target
     
     # Triple-Barrier Label constants (used in ml/confirmation.py FIX-B)
     # TP barrier: +0.6% = TP1 at 1.2R of 0.5% minimum SL
@@ -178,6 +179,9 @@ class Config:
     @classmethod
     async def update_dynamic_symbols(cls, limit: int = 15):
         """Dynamically fetches the top trending USDT pairs from Binance based on volume and momentum."""
+        if not getattr(cls, 'ENABLE_DYNAMIC_SCANNER', False):
+            print(f"[DYNAMIC SCANNER] Dynamic hot-swap is disabled. Retaining Top 20 Institutional list: {len(cls.SUPPORTED_SYMBOLS)} pairs.")
+            return
         import aiohttp
         try:
             async with aiohttp.ClientSession() as session:

@@ -498,11 +498,11 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 score += 1.5
                 metadata['debug_checks']['liq_hunt'] = 'BULLISH_LIQ_HUNT_PASS'
             
-            if market_regime == 'TREND': score_thresh = 2.5
-            elif market_regime == 'MIXED': score_thresh = 3.0
+            if market_regime == 'TREND': score_thresh = 3.0
+            elif market_regime == 'MIXED': score_thresh = 3.5
             elif market_regime == 'RANGE': score_thresh = 3.5
             elif market_regime == 'HIGH_VOL': score_thresh = 4.0
-            else: score_thresh = 3.0
+            else: score_thresh = 3.5
                 
             metadata['score'] = score
             metadata['score_threshold'] = score_thresh
@@ -521,10 +521,15 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             elif relaxed and in_zone and (trigger_pass or vwap_pass) and score >= score_thresh:
                 valid_entry = True
 
+            # Anti-Exhaustion Filter: Prevent buying the top of an exhausted impulse (RSI >= 60)
+            if valid_entry and curr_rsi >= 60.0:
+                valid_entry = False
+                metadata['reason'] = f"Anti-Exhaustion Filter: RSI too high for LONG ({curr_rsi:.1f} >= 60.0)"
+
             # Sudden Wick Filter (1.8%) — applied after valid_entry evaluation
             if valid_entry and trigger_low > 0 and (candle_range / trigger_low > 0.018):
                 valid_entry = False
-                reason = "Rejected: Setup candle wick/range > 1.8% (Slippage risk)"
+                metadata['reason'] = "Rejected: Setup candle wick/range > 1.8% (Slippage risk)"
                 
             if valid_entry and market_regime == 'HIGH_VOL':
                 if entry_type == 'FVG': valid_entry = False
@@ -544,15 +549,15 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 
                 # Structural invalidation SL: tighter of OB boundary or 1.5x ATR
                 stop_loss = max(ob_sl, atr_sl) if ob_sl > 0 else atr_sl
-                # FIX-2: Minimum SL raised 0.3% → 0.5% so TP1 at 1.2R gives ≥0.45% net after round-trip fees (~0.15%).
+                # FIX-2: Minimum SL raised 0.3% → 0.5% so TP1 at 1.0R gives ≥0.45% net after round-trip fees (~0.15%).
                 # At 0.3% SL, TP1 = 0.36% gross; after fees effective profit ≈ 0.21% — barely viable.
                 stop_loss = min(stop_loss, curr_price * (1 - 0.005))
                 stop_loss = max(stop_loss, curr_price * (1 - 0.025))
 
                 risk        = max(curr_price - stop_loss, 1e-9)
                 fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
-                take_profit_1r = curr_price + (risk * getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)) + fee_adj
-                take_profit_2r = curr_price + (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.2)) + fee_adj
+                take_profit_1r = curr_price + (risk * getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0)) + fee_adj
+                take_profit_2r = curr_price + (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.0)) + fee_adj
                 take_profit_3r = curr_price + (risk * 4.0) + fee_adj
 
                 metadata['stop_loss']  = stop_loss
@@ -703,11 +708,11 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 score += 1.5
                 metadata['debug_checks']['liq_hunt'] = 'BEARISH_LIQ_HUNT_PASS'
             
-            if market_regime == 'TREND': score_thresh = 2.5
-            elif market_regime == 'MIXED': score_thresh = 3.0
+            if market_regime == 'TREND': score_thresh = 3.0
+            elif market_regime == 'MIXED': score_thresh = 3.5
             elif market_regime == 'RANGE': score_thresh = 3.5
             elif market_regime == 'HIGH_VOL': score_thresh = 4.0
-            else: score_thresh = 3.0
+            else: score_thresh = 3.5
                 
             metadata['score'] = score
             metadata['score_threshold'] = score_thresh
@@ -726,10 +731,15 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             elif relaxed and in_zone and (trigger_pass or vwap_pass) and score >= score_thresh:
                 valid_entry = True
 
+            # Anti-Exhaustion Filter: Prevent shorting the bottom of an oversold dump (RSI <= 40)
+            if valid_entry and curr_rsi <= 40.0:
+                valid_entry = False
+                metadata['reason'] = f"Anti-Exhaustion Filter: RSI too low for SHORT ({curr_rsi:.1f} <= 40.0)"
+
             # Sudden Wick Filter (1.8%) — applied after valid_entry evaluation
             if valid_entry and trigger_low > 0 and ((trigger_high - trigger_low) / trigger_low > 0.018):
                 valid_entry = False
-                reason = "Rejected: Setup candle wick/range > 1.8% (Slippage risk)"
+                metadata['reason'] = "Rejected: Setup candle wick/range > 1.8% (Slippage risk)"
                 
             if valid_entry and market_regime == 'HIGH_VOL':
                 if entry_type == 'FVG': valid_entry = False
@@ -744,15 +754,15 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 
                 # Structural invalidation SL: tighter of OB boundary or 1.5x ATR
                 stop_loss = min(ob_sl, atr_sl) if entry_type in ["OB", "FVG"] else atr_sl
-                # FIX-3: Minimum SL raised 0.3% → 0.5% so TP1 at 1.2R gives ≥0.45% net after round-trip fees (~0.15%).
+                # FIX-3: Minimum SL raised 0.3% → 0.5% so TP1 at 1.0R gives ≥0.45% net after round-trip fees (~0.15%).
                 # At 0.3% SL, TP1 = 0.36% gross; after fees effective profit ≈ 0.21% — barely viable.
                 stop_loss = max(stop_loss, curr_price * (1 + 0.005))
                 stop_loss = min(stop_loss, curr_price * (1 + 0.025))
 
                 risk        = max(stop_loss - curr_price, 1e-9)
                 fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
-                take_profit_1r = curr_price - (risk * getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)) - fee_adj
-                take_profit_2r = curr_price - (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.2)) - fee_adj
+                take_profit_1r = curr_price - (risk * getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0)) - fee_adj
+                take_profit_2r = curr_price - (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.0)) - fee_adj
                 take_profit_3r = curr_price - (risk * 4.0) - fee_adj
 
                 metadata['stop_loss']  = stop_loss
