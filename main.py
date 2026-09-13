@@ -21,7 +21,7 @@ if sys.platform == 'win32':
         pass
 
 # Indian Standard Time (IST / UTC+5:30)
-IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))  # Indian Standard Time
 
 from config import Config
 from execution.execution_engine import ExecutionEngine
@@ -37,6 +37,7 @@ from strategies.indicators import prepare_dataframe, calculate_atr, calculate_em
 from ml.confirmation import MLSignalConfirmator
 from ml.adversarial_debate import AdversarialDebateCourtroom
 from core.lead_lag_arbitrage import LeadLagArbitrageEngine
+from core.macro_calendar import MacroNewsCalendar
 from risk.risk_manager import RiskManager
 from alerts.notifier import TelegramNotifier
 from dashboard.app import app, DashboardState, add_log_message
@@ -115,6 +116,7 @@ class PrimeSignalBot:
         self.notifier = TelegramNotifier()
         self.lead_lag = LeadLagArbitrageEngine()
         self.courtroom = AdversarialDebateCourtroom()
+        self.macro_calendar = MacroNewsCalendar()
         self.order_state_machine = OrderStateMachine(Config.SUPPORTED_SYMBOLS)
         self.immutable_ledger = ImmutableLedger()
         self.config_journal = ConfigAuditJournal()
@@ -185,6 +187,9 @@ class PrimeSignalBot:
 
         self._active_scan_tasks: set[asyncio.Task] = set()
         self._last_reset_date = datetime.datetime.now(IST).date()
+        # M-04/M-05: populated by run_live_risk_monitor
+        self._risk_halt_active: bool = False
+        self._monitor_frame_cache: dict[Any, Any] = {}
         
         # Link callbacks
         self.pipeline.on_candle_close_callback = self.on_candle_close
@@ -230,6 +235,25 @@ class PrimeSignalBot:
                 'closed_trades': list(DashboardState.trades[-100:]),
                 'order_state_machine': self.order_state_machine.serialize_all(),
                 'active_risk_reservations': self.risk.serialize_reservations() if hasattr(self, 'risk') else {},
+                # C-04 FIX: the daily risk envelope and the daily counters used to
+                # be dropped on save, so every restart silently re-baselined the
+                # daily loss circuit breaker, the daily profit lock and
+                # MAX_DAILY_TRADES. Persist them so the day survives a restart.
+                'daily_risk_state': self.risk.serialize_daily_state() if hasattr(self, 'risk') else {},
+                'daily_counters': {
+                    'last_trade_day': self.last_trade_day.isoformat() if hasattr(self.last_trade_day, 'isoformat') else str(self.last_trade_day),
+                    'trades_today': self.trades_today,
+                    'relaxed_trades_today': self.relaxed_trades_today,
+                    'relaxed_losses': self.relaxed_losses,
+                    'trade_history': list(self.trade_history),
+                },
+                'global_risk_gates': {
+                    'global_pause_until': self.global_pause_until,
+                    'cluster_loss_pause_until': self.cluster_loss_pause_until,
+                    'cluster_risk_penalty': self.cluster_risk_penalty,
+                    'relaxed_disabled_until': self.relaxed_disabled_until,
+                    'symbol_loss_cooldown': dict(self.symbol_loss_cooldown),
+                },
                 'saved_at_ts': time.time(),
             }
             temp_file = self._STATE_FILE.with_name(f"{self._STATE_FILE.name}.tmp.{os.getpid()}.{time.time_ns()}")
@@ -368,7 +392,67 @@ class PrimeSignalBot:
                 # Restore Durable Risk Reservations
                 if hasattr(self, 'risk') and isinstance(state, dict) and 'active_risk_reservations' in state:
                     self.risk.load_reservations(state['active_risk_reservations'])
-                
+
+                # ── C-04 FIX: Restore the daily risk envelope + counters ──
+                # Only honoured when the saved state belongs to the SAME IST
+                # trading day; a stale day must not lock the bot out today.
+                if isinstance(state, dict):
+                    today_ist = datetime.datetime.now(IST).date()
+                    saved_day_raw = (state.get('daily_counters') or {}).get('last_trade_day')
+                    saved_day = None
+                    if saved_day_raw:
+                        try:
+                            saved_day = datetime.date.fromisoformat(str(saved_day_raw))
+                        except (ValueError, TypeError):
+                            saved_day = None
+                    same_day = (saved_day == today_ist)
+
+                    if hasattr(self, 'risk') and 'daily_risk_state' in state:
+                        self.risk.load_daily_state(state['daily_risk_state'], same_trading_day=same_day)
+
+                    counters = state.get('daily_counters') or {}
+                    if same_day and isinstance(counters, dict):
+                        try:
+                            self.trades_today = int(counters.get('trades_today', 0) or 0)
+                            self.relaxed_trades_today = int(counters.get('relaxed_trades_today', 0) or 0)
+                            self.relaxed_losses = int(counters.get('relaxed_losses', 0) or 0)
+                            hist = counters.get('trade_history', [])
+                            self.trade_history = [int(x) for x in hist][-6:] if isinstance(hist, list) else []
+                        except (TypeError, ValueError):
+                            pass
+                        add_log_message(
+                            f"[STATE] Daily counters restored for {today_ist.isoformat()}: "
+                            f"{self.trades_today}/{getattr(Config, 'MAX_DAILY_TRADES', 6)} trades used, "
+                            f"day PnL {self.risk.current_drawdown_pct:+.2f}%"
+                            + (" (PROFIT LOCK WAS ACTIVE)" if getattr(self.risk, 'daily_profit_locked', False) else "")
+                        )
+                    elif saved_day is not None:
+                        add_log_message(
+                            f"[STATE] Previous trading day {saved_day.isoformat()} detected — "
+                            f"daily counters intentionally re-baselined for {today_ist.isoformat()}."
+                        )
+
+                    gates = state.get('global_risk_gates') or {}
+                    if isinstance(gates, dict):
+                        now_ts = time.time()
+                        try:
+                            # Only restore gates that have not already expired.
+                            gp = float(gates.get('global_pause_until', 0.0) or 0.0)
+                            self.global_pause_until = gp if gp > now_ts else 0.0
+                            cp = float(gates.get('cluster_loss_pause_until', 0.0) or 0.0)
+                            self.cluster_loss_pause_until = cp if cp > now_ts else 0.0
+                            rd = float(gates.get('relaxed_disabled_until', 0.0) or 0.0)
+                            self.relaxed_disabled_until = rd if rd > now_ts else 0.0
+                            cd = gates.get('symbol_loss_cooldown', {})
+                            if isinstance(cd, dict):
+                                self.symbol_loss_cooldown = {
+                                    str(k): float(v) for k, v in cd.items()
+                                    if float(v or 0.0) > now_ts
+                                }
+                            self.cluster_risk_penalty = bool(gates.get('cluster_risk_penalty', False))
+                        except (TypeError, ValueError):
+                            pass
+
                 # Sync any additional logs from data/trade_logs.jsonl
                 self._load_trade_logs()
 
@@ -710,34 +794,19 @@ class PrimeSignalBot:
 
     def is_macro_news_blackout(self):
         """
-        Checks if current UTC time falls in high-impact economic news windows
-        (US CPI / PPI / NFP / FOMC release times e.g. 12:20-12:45 UTC, 13:20-13:45 UTC, 18:00-19:30 UTC).
+        Checks whether the current UTC time falls inside the blackout window of a
+        REAL scheduled high-impact economic release (CPI / PPI / NFP / FOMC...).
+
+        H-06 FIX: this is now backed by a live economic calendar feed instead of
+        the previous hardcoded recurring clock. It fails OPEN with a visible
+        status when the feed is unavailable, because a missing feed must never
+        become a silent trading outage. See core/macro_calendar.py.
         """
-        if not getattr(Config, 'ENABLE_MACRO_NEWS_FILTER', True):
+        try:
+            return self.macro_calendar.is_blackout()
+        except Exception as exc:
+            print(f"[NEWS] Calendar evaluation error ({exc}); filter failing open.")
             return False, ""
-            
-        now_utc = datetime.datetime.now(datetime.timezone.utc)
-        hour = now_utc.hour
-        minute = now_utc.minute
-        weekday = now_utc.weekday() # 0=Mon, 4=Fri
-        
-        # Only weekdays have high-impact macro economic data releases
-        if weekday >= 5:
-            return False, ""
-            
-        # Window 1: 12:20 - 12:45 UTC (US 8:30 AM EDT daylight savings / 8:30 AM EST releases)
-        if hour == 12 and (20 <= minute <= 45):
-            return True, "US Morning Macro Data Window (12:20-12:45 UTC)"
-            
-        # Window 2: 13:20 - 13:45 UTC (US 8:30 AM EST standard winter releases)
-        if hour == 13 and (20 <= minute <= 45):
-            return True, "US Main Macro Data Window (13:20-13:45 UTC)"
-            
-        # Window 3: 18:00 - 19:30 UTC (Fed FOMC Rate Decision & Press Conf, typically Wednesdays)
-        if (weekday == 2) and (hour == 18 or (hour == 19 and minute <= 30)):
-            return True, "Fed FOMC Rate Decision Window (18:00-19:30 UTC)"
-            
-        return False, ""
 
     async def _on_candle_close_impl(self, symbol):
         if time.time() < self.global_pause_until:
@@ -871,10 +940,13 @@ class PrimeSignalBot:
             self.relaxed_trades_today = 0
             self.last_trade_day = current_date
             
+        # C-01 FIX: only ask the strategy for setups this venue can actually hold.
+        allow_short = Config.venue_supports_short()
         signal, metadata = self.strategy.generate_signal(
             htf_df,
             ltf_df,
-            relaxed=False
+            relaxed=False,
+            allow_short=allow_short,
         )
         relaxed_used = False
         
@@ -887,7 +959,8 @@ class PrimeSignalBot:
                     signal, metadata = self.strategy.generate_signal(
                         htf_df,
                         ltf_df,
-                        relaxed=True
+                        relaxed=True,
+                        allow_short=allow_short,
                     )
                     if signal != "HOLD":
                         relaxed_used = True
@@ -1037,13 +1110,25 @@ class PrimeSignalBot:
         # ML Confidence Scaler & Soft Session Filter (Direction-Aware)
         raw_prob = 0.5
         prob = 0.5
-        ml_confidence_weight = 0
         if self.ml_models[symbol].is_trained:
             raw_prob = self.ml_models[symbol].predict_bias(ltf_df)
             prob = raw_prob if signal == "BUY" else (1.0 - raw_prob)
             if symbol == Config.SYMBOL:
                 DashboardState.ml_confidence = prob
             add_log_message(f"[{symbol}] ML confidence score: {prob:.2f} (raw bullish: {raw_prob:.2f})")
+
+            # H-03 FIX: the documented "ML Confirmation Filter" never actually ran —
+            # confirm_signal() was dead code and the model only nudged TP levels.
+            # Entries are now genuinely gated when the model is allowed to gate
+            # (ML_GATE_MODE='auto' arms it only after CV proves out-of-sample edge).
+            # No risk reservation exists yet at this point, so returning is safe.
+            ml_model = self.ml_models[symbol]
+            if ml_model.should_gate_entries():
+                allowed, gate_prob, gate_reason = ml_model.gate_decision(ltf_df, signal)
+                if not allowed:
+                    add_log_message(f"[{symbol}] ⛔ Entry blocked by ML gate: {gate_reason}")
+                    return
+                add_log_message(f"[{symbol}] ✅ ML gate: {gate_reason}")
 
             # Task 7: ML TP Logic - Strictly ordered 3-Stage Targets
             # E-01 Fix: Provide safe fallback SL if None
@@ -1053,10 +1138,8 @@ class PrimeSignalBot:
             fee_adj = entry_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
             if prob > 0.65:
                 tp2_mult = 2.5
-                ml_confidence_weight = 1
             elif prob < 0.55:
                 tp2_mult = 1.8
-                ml_confidence_weight = -1
             else:
                 tp2_mult = getattr(Config, 'RISK_REWARD_RATIO', 2.2)
 
@@ -1112,11 +1195,13 @@ class PrimeSignalBot:
                 elif signal == "SELL":
                     metadata['tp2'] = entry_price - (1.5 * risk_usdt) - fee_adj
             
-        # Task 5: Smart Risk Allocation (Final Edge)
+        # Task 5: Smart Risk Allocation.
+        # H-07 FIX: risk now comes from the Config ladder, so RISK_PCT and
+        # RISK_TIER_*_MULT genuinely control live risk. These three numbers used to
+        # be hardcoded here while Config.RISK_PCT was silently ignored, so the env
+        # var and the dashboard risk setting had no effect on real sizing.
         score = float(metadata.get('score') or 3.0)
-        if score >= 4.5: trade_risk_pct = 0.0125
-        elif score >= 3.5: trade_risk_pct = 0.01
-        else: trade_risk_pct = 0.0075
+        trade_risk_pct = Config.risk_pct_for_score(score)
         
         # Dynamic Kelly Criterion Sizing (when enabled)
         if getattr(Config, 'ENABLE_KELLY_SIZING', False):
@@ -1128,11 +1213,18 @@ class PrimeSignalBot:
             trade_risk_pct *= 0.5
             add_log_message(f"[{symbol}] Cluster Loss Penalty: Risk slashed by 50%.")
             
-        # Runner Logic Metadata
-        tp1_scale = getattr(Config, 'TP1_SCALE_OUT_PCT', 0.65)
+        # Runner Logic Metadata — single source of truth for the ACTUAL scale-out
+        # sizes and for the percentages quoted in logs / Telegram (H-07 FIX).
+        # Previously the log messages hardcoded 50%/30%/20% while the bot really
+        # booked 65% / 22.75% / 12.25%.
+        tp1_scale = float(getattr(Config, 'TP1_SCALE_OUT_PCT', 0.65))
+        tp2_scale = float(getattr(Config, 'TP2_REMAINING_SCALE_PCT', 0.65))
         metadata['tp1_size'] = tp1_scale
-        metadata['tp2_size'] = round((1.0 - tp1_scale) * 0.65, 2)
-        metadata['runner_size'] = round(1.0 - metadata['tp1_size'] - metadata['tp2_size'], 2)
+        metadata['tp2_size'] = round((1.0 - tp1_scale) * tp2_scale, 4)
+        metadata['runner_size'] = round(max(0.0, 1.0 - metadata['tp1_size'] - metadata['tp2_size']), 4)
+        tp1_pct_label = f"{tp1_scale * 100:.0f}%"
+        tp2_pct_label = f"{metadata['tp2_size'] * 100:.0f}%"
+        runner_pct_label = f"{metadata['runner_size'] * 100:.0f}%"
         
         # Task 10: Equity Protection
         if not hasattr(self, 'hourly_peak_equity'):
@@ -1163,7 +1255,11 @@ class PrimeSignalBot:
         async with self.risk.portfolio_lock:
             open_count, total_risk, longs_count, shorts_count = await self.get_open_positions_info()
             max_open_trades = int(getattr(Config, 'MAX_OPEN_TRADES', 2))
-            max_risk_cap = getattr(Config, 'MAX_PORTFOLIO_RISK_PCT', 0.06)
+            # C-02 FIX: compare in ONE unit. This previously read the percent value
+            # (6.0) and compared it against fractions (~0.01), so the absolute
+            # exposure cap AND the entire priority-ranking / cap-reservation block
+            # below could never fire. get_max_portfolio_risk_fraction() returns 0.06.
+            max_risk_cap = Config.get_max_portfolio_risk_fraction()
             
             # Account for in-flight reservations
             effective_open_count = open_count + self.risk.reserved_open_count
@@ -1221,7 +1317,9 @@ class PrimeSignalBot:
             
             if bid and ask and bid > 0 and ask > 0:
                 spread = (ask - bid) / ((ask + bid) / 2)
-                max_spread = 0.0015
+                # H-07 FIX: honour Config.MAX_SPREAD_PCT. This was hardcoded to
+                # 0.0015 while the config knob advertised 0.002 and did nothing.
+                max_spread = float(getattr(Config, 'MAX_SPREAD_PCT', 0.002))
                 if spread > max_spread:
                     add_log_message(f"[{symbol}] Rejected: High spread ({spread*100:.3f}%)")
                     return
@@ -1528,9 +1626,9 @@ class PrimeSignalBot:
                         f"Setup Type: {metadata.get('setup_type', 'NONE')}\n"
                         f"Entry: {fill_price:.4f}\n"
                         f"Stop Loss: {sl:.4f} (NATIVE PROTECTED)\n"
-                        f"TP1 ({tp1_mult:.1f}R - 50%): {self.take_profit_1r[symbol]:.4f}\n"
-                        f"TP2 ({tp2_mult:.1f}R - 30%): {self.take_profit_2r[symbol]:.4f}\n"
-                        f"Runner (4.0R - 20%): {self.take_profit[symbol]:.4f}\n"
+                        f"TP1 ({tp1_mult:.1f}R - {tp1_pct_label}): {self.take_profit_1r[symbol]:.4f}\n"
+                        f"TP2 ({tp2_mult:.1f}R - {tp2_pct_label}): {self.take_profit_2r[symbol]:.4f}\n"
+                        f"Runner (4.0R - {runner_pct_label}): {self.take_profit[symbol]:.4f}\n"
                         f"Position Size: {filled_amount:.6f}\n"
                         f"Confidence: {prob:.2f}\n"
                         f"Reason: {metadata.get('reason', 'N/A')}"
@@ -1734,9 +1832,9 @@ class PrimeSignalBot:
                         f"Setup Type: {metadata.get('setup_type', 'NONE')}\n"
                         f"Entry: {fill_price:.4f}\n"
                         f"Stop Loss: {sl:.4f} (NATIVE PROTECTED)\n"
-                        f"TP1 ({tp1_mult:.1f}R - 50%): {self.take_profit_1r[symbol]:.4f}\n"
-                        f"TP2 ({tp2_mult:.1f}R - 30%): {self.take_profit_2r[symbol]:.4f}\n"
-                        f"Runner (4.0R - 20%): {self.take_profit[symbol]:.4f}\n"
+                        f"TP1 ({tp1_mult:.1f}R - {tp1_pct_label}): {self.take_profit_1r[symbol]:.4f}\n"
+                        f"TP2 ({tp2_mult:.1f}R - {tp2_pct_label}): {self.take_profit_2r[symbol]:.4f}\n"
+                        f"Runner (4.0R - {runner_pct_label}): {self.take_profit[symbol]:.4f}\n"
                         f"Position Size: {filled_amount:.6f}\n"
                         f"Confidence: {prob:.2f}\n"
                         f"Reason: {metadata.get('reason', 'N/A')}"
@@ -1785,7 +1883,33 @@ class PrimeSignalBot:
 
                 # --- 🚀 INSTITUTIONAL MULTI-SYMBOL REAL-TIME SCANNER ---
                 self._fast_scan_counter = getattr(self, '_fast_scan_counter', 0) + 1
-                if self._fast_scan_counter % 10 == 0: # Disciplined 10s evaluation cycle
+
+                # M-04 FIX: evaluate the drawdown circuit breaker / daily profit lock on
+                # a 5-second cadence. It used to be checked ONLY inside a 15m candle
+                # close, so up to 15 minutes could pass after the daily limit was hit.
+                if self._fast_scan_counter % 5 == 0:
+                    monitor_equity = DashboardState.balance_usdt if (self.has_keys and not Config.PAPER_TRADING) else self.calculate_total_equity()
+                    halted = not self.risk.check_circuit_breaker(monitor_equity)
+                    self._risk_halt_active = halted
+                    DashboardState.daily_drawdown_pct = self.risk.current_drawdown_pct
+                    if halted:
+                        _target = getattr(self.risk, 'max_daily_profit_pct', getattr(Config, 'MAX_DAILY_PROFIT_PCT', 10.0))
+                        if getattr(self.risk, 'daily_profit_locked', False):
+                            DashboardState.daily_profit_locked = True
+                            DashboardState.signal_light = "GREEN"
+                            DashboardState.signal_light_reason = f"🎯 PROFIT LOCK ACTIVE: Daily profit target hit (+{self.risk.current_drawdown_pct:.2f}% >= +{_target:.1f}%). No new entries until unlocked or 00:00 IST."
+                        else:
+                            DashboardState.daily_profit_locked = False
+                            DashboardState.signal_light = "RED"
+                            DashboardState.signal_light_reason = f"🚨 SLEEP MODE: Daily loss limit hit ({self.risk.current_drawdown_pct:.2f}% <= -{Config.MAX_DAILY_LOSS_PCT}%). No new entries until 00:00 IST."
+                    else:
+                        DashboardState.daily_profit_locked = False
+
+                # H-06 FIX: keep the economic calendar feed warm in the background.
+                if self._fast_scan_counter % 900 == 0:  # roughly every 15 minutes
+                    asyncio.create_task(self.macro_calendar.refresh())
+
+                if self._fast_scan_counter % 10 == 0 and not getattr(self, '_risk_halt_active', False): # Disciplined 10s evaluation cycle
                     open_count, _, _, _ = await self.get_open_positions_info()
                     max_open = getattr(Config, 'MAX_OPEN_TRADES', 3)
                     time_since_last_trade = time.time() - getattr(self, 'global_last_trade_time', 0)
@@ -1809,8 +1933,19 @@ class PrimeSignalBot:
                     if self.in_position[symbol] and self.pipeline.latest_prices.get(symbol, 0.0) > 0:
                         curr_price = self.pipeline.latest_prices[symbol]
                         
-                        ltf_df = prepare_dataframe(self.pipeline.ltf_candles[symbol])
-                        curr_atr = calculate_atr(ltf_df, Config.ATR_PERIOD).iloc[-1] if not ltf_df.empty else 0.001
+                        # M-05 FIX: memoise the per-symbol frame + ATR. This block ran on
+                        # every 1-second tick and rebuilt a DataFrame and a 14-period ATR
+                        # for each open position. The cache key changes only when a new
+                        # candle arrives, so 99% of ticks now reuse the same objects.
+                        _candles = self.pipeline.ltf_candles[symbol]
+                        _ck = (symbol, len(_candles), _candles[-1][0] if _candles else 0)
+                        _cache = getattr(self, '_monitor_frame_cache', None)
+                        if _cache is None or _ck not in _cache:
+                            ltf_df = prepare_dataframe(_candles)
+                            curr_atr = calculate_atr(ltf_df, Config.ATR_PERIOD).iloc[-1] if not ltf_df.empty else 0.001
+                            self._monitor_frame_cache = {_ck: (ltf_df, curr_atr)}
+                        else:
+                            ltf_df, curr_atr = _cache[_ck]
                         
                         if self.position_side[symbol] == "LONG":
                             self.highest_price_reached[symbol] = max(self.highest_price_reached[symbol], curr_price)
@@ -1966,7 +2101,7 @@ class PrimeSignalBot:
                                     add_log_message(f"[{symbol}] 🔒 PROFIT LOCKED at Stop Loss: {self.stop_loss[symbol]:.4f} (+{guar_pnl_usdt:.2f} USDT total locked). New Target: TP2 @ {self.take_profit_2r[symbol]:.4f}")
                                     await self.notifier.send_message(
                                         f"🔒 *PROFIT LOCKED ({symbol})*\n"
-                                        f"🎯 TP1 Hit! 50% profit booked (+{tp1_pnl_usdt:.2f} USDT).\n"
+                                        f"🎯 TP1 Hit! {int(tp1_pct*100)}% profit booked (+{tp1_pnl_usdt:.2f} USDT).\n"
                                         f"🔒 Total Guaranteed Locked Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
                                         f"🎯 New Active Target: TP2 ({tp2_rr:.1f}R) @ {self.take_profit_2r[symbol]:.4f}"
                                     )
@@ -1978,7 +2113,8 @@ class PrimeSignalBot:
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price >= self.take_profit_2r[symbol]:
                                 tp2_rr = getattr(Config, 'RISK_REWARD_RATIO', 3.0)
                                 add_log_message(f"[{symbol}] 🎯 Target 2 ({tp2_rr:.1f}R) hit! Booking remaining runner.")
-                                tp2_size = self.position_size[symbol] * getattr(Config, 'TP2_REMAINING_SCALE_PCT', 0.65)
+                                tp2_frac = float(getattr(Config, 'TP2_REMAINING_SCALE_PCT', 0.65))
+                                tp2_size = self.position_size[symbol] * tp2_frac
                                 tp2_success = False
                                 tp2_order = None
                                 is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
@@ -2056,7 +2192,10 @@ class PrimeSignalBot:
                                     if self.has_keys and not Config.PAPER_TRADING and ctx.native_sl_order_id:
                                         await self._resize_native_sl_safe(symbol, 'sell', self.position_size[symbol], self.stop_loss[symbol])
                                     
-                                    orig_sz = self.original_position_size.get(symbol, self.position_size[symbol] / 0.20) or (self.position_size[symbol] / 0.20)
+                                    # H-07 FIX: derive the runner share from config instead of
+                                    # assuming a hardcoded 0.20 remainder.
+                                    _runner_frac = max(1e-6, (1.0 - float(getattr(Config, 'TP1_SCALE_OUT_PCT', 0.65))) * (1.0 - float(getattr(Config, 'TP2_REMAINING_SCALE_PCT', 0.65))))
+                                    orig_sz = self.original_position_size.get(symbol, self.position_size[symbol] / _runner_frac) or (self.position_size[symbol] / _runner_frac)
                                     runner_guar = max(0.0, self.position_size[symbol] * (self.stop_loss[symbol] - self.entry_price[symbol]))
                                     guar_pnl_usdt = self.realized_pnl[symbol] + runner_guar
                                     orig_val = orig_sz * self.entry_price[symbol]
@@ -2065,7 +2204,7 @@ class PrimeSignalBot:
                                     add_log_message(f"[{symbol}] 🚀 TP2 Hit! SL locked at TP1 level ({self.stop_loss[symbol]:.4f}). Trailing Runner active.")
                                     await self.notifier.send_message(
                                         f"🚀 *DEEP PROFIT LOCKED ({symbol})*\n"
-                                        f"🎯 TP2 Hit! 30% profit booked (+{tp2_pnl_usdt:.2f} USDT).\n"
+                                        f"🎯 TP2 Hit! {int(tp2_frac*100)}% profit booked (+{tp2_pnl_usdt:.2f} USDT).\n"
                                         f"🔒 Total Guaranteed Deep Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
                                         f"🎯 New Active Target: Runner Target (3.5R) @ {self.take_profit[symbol]:.4f}"
                                     )
@@ -2245,7 +2384,7 @@ class PrimeSignalBot:
                                     add_log_message(f"[{symbol}] 🔒 PROFIT LOCKED at Stop Loss: {self.stop_loss[symbol]:.4f} (+{guar_pnl_usdt:.2f} USDT total locked). New Target: TP2 @ {self.take_profit_2r[symbol]:.4f}")
                                     await self.notifier.send_message(
                                         f"🔒 *PROFIT LOCKED ({symbol})*\n"
-                                        f"🎯 TP1 Hit! 50% profit booked (+{tp1_pnl_usdt:.2f} USDT).\n"
+                                        f"🎯 TP1 Hit! {int(tp1_pct*100)}% profit booked (+{tp1_pnl_usdt:.2f} USDT).\n"
                                         f"🔒 Total Guaranteed Locked Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
                                         f"🎯 New Active Target: TP2 ({tp2_rr:.1f}R) @ {self.take_profit_2r[symbol]:.4f}"
                                     )
@@ -2257,7 +2396,8 @@ class PrimeSignalBot:
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price <= self.take_profit_2r[symbol]:
                                 tp2_rr = getattr(Config, 'RISK_REWARD_RATIO', 3.0)
                                 add_log_message(f"[{symbol}] 🎯 Target 2 ({tp2_rr:.1f}R) hit! Booking remaining runner.")
-                                tp2_size = self.position_size[symbol] * getattr(Config, 'TP2_REMAINING_SCALE_PCT', 0.65)
+                                tp2_frac = float(getattr(Config, 'TP2_REMAINING_SCALE_PCT', 0.65))
+                                tp2_size = self.position_size[symbol] * tp2_frac
                                 tp2_success = False
                                 tp2_order = None
                                 is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
@@ -2340,7 +2480,10 @@ class PrimeSignalBot:
                                     if self.has_keys and not Config.PAPER_TRADING and ctx.native_sl_order_id:
                                         await self._resize_native_sl_safe(symbol, 'buy', self.position_size[symbol], self.stop_loss[symbol])
                                     
-                                    orig_sz = self.original_position_size.get(symbol, self.position_size[symbol] / 0.20) or (self.position_size[symbol] / 0.20)
+                                    # H-07 FIX: derive the runner share from config instead of
+                                    # assuming a hardcoded 0.20 remainder.
+                                    _runner_frac = max(1e-6, (1.0 - float(getattr(Config, 'TP1_SCALE_OUT_PCT', 0.65))) * (1.0 - float(getattr(Config, 'TP2_REMAINING_SCALE_PCT', 0.65))))
+                                    orig_sz = self.original_position_size.get(symbol, self.position_size[symbol] / _runner_frac) or (self.position_size[symbol] / _runner_frac)
                                     runner_guar = max(0.0, self.position_size[symbol] * (self.entry_price[symbol] - self.stop_loss[symbol]))
                                     guar_pnl_usdt = self.realized_pnl[symbol] + runner_guar
                                     orig_val = orig_sz * self.entry_price[symbol]
@@ -2349,7 +2492,7 @@ class PrimeSignalBot:
                                     add_log_message(f"[{symbol}] 🚀 TP2 Hit! SL locked at TP1 level ({self.stop_loss[symbol]:.4f}). Trailing Runner active.")
                                     await self.notifier.send_message(
                                         f"🚀 *DEEP PROFIT LOCKED ({symbol})*\n"
-                                        f"🎯 TP2 Hit! 30% profit booked (+{tp2_pnl_usdt:.2f} USDT).\n"
+                                        f"🎯 TP2 Hit! {int(tp2_frac*100)}% profit booked (+{tp2_pnl_usdt:.2f} USDT).\n"
                                         f"🔒 Total Guaranteed Deep Profit: +{guar_pnl_usdt:.2f} USDT (+{guar_pnl_pct:.2f}%)\n"
                                         f"🎯 New Active Target: Runner Target (3.5R) @ {self.take_profit[symbol]:.4f}"
                                     )

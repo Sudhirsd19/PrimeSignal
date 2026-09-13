@@ -17,9 +17,18 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         self.liq_engine = LiquidationEngine()
         self.orderflow_engine = OrderFlowEngine()
 
-    def generate_signal(self, htf_df, ltf_df, relaxed=False):
+    def generate_signal(self, htf_df, ltf_df, relaxed=False, allow_short=True):
         """
         Executes Multi-Timeframe Smart Money Concepts strategy.
+
+        Args:
+            htf_df: Higher-timeframe OHLCV.
+            ltf_df: Lower-timeframe OHLCV (execution frame).
+            relaxed: Allow lower-confluence zone entries (see RELAXED MODE below).
+            allow_short: Set False on spot venues. Spot cannot hold a short, and
+                emitting SELL there produced bare market sells plus a native
+                BUY stop-loss that opened a new long instead of protecting the
+                position (C-01 FIX).
         """
         from strategies.indicators import prepare_dataframe
         if isinstance(htf_df, list):
@@ -108,6 +117,11 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             
         metadata['debug_checks']['trend'] = 'PASS'
 
+        # Venue capability guard (C-01 FIX): never emit a setup the venue cannot hold.
+        if htf_trend == 'BEARISH' and not allow_short:
+            metadata['reason'] = "SHORT setups disabled (venue is spot / shorting unsupported)"
+            return "HOLD", metadata
+
         ltf_closes = ltf_df['close']
         ltf_rsi    = calculate_rsi(ltf_df, Config.RSI_PERIOD)
         ltf_atr    = calculate_atr(ltf_df, Config.ATR_PERIOD)
@@ -177,7 +191,12 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             avg_body = abs(ltf_df['close'] - ltf_df['open']).rolling(14).mean().iloc[target_idx]
             directional_closes = 0
             for i in range(1, 4):
-                idx = -1 - i
+                # M-03 FIX: evaluate momentum on CLOSED candles only (target_idx is
+                # the last closed bar). Using iloc[-1] previously pulled the live,
+                # still-forming candle into the confluence decision.
+                idx = target_idx - i
+                if abs(idx) > len(ltf_df):
+                    break
                 c_close = ltf_df.iloc[idx]['close']
                 c_open = ltf_df.iloc[idx]['open']
                 if htf_trend == 'BULLISH':
@@ -511,15 +530,26 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             # 1. Zone Setups (OB, FVG, SWEEP) with rejection trigger OR micro_bos
             # 2. Dynamic Pullback Setups (EMA, VWAP) with trend alignment + trigger
             # All paths enforce regime-aware score_thresh (AUD-C1 fix)
+            #
+            # NOTE ON RELAXED MODE (M-01 FIX): the previous "relaxed" branch was
+            # unreachable — whenever in_zone is True, entry_type is always one of
+            # OB/FVG/SWEEP/VWAP/EMA, so it fell into one of the two branches above
+            # and the third branch never executed. Relaxed mode was therefore
+            # silently identical to strict mode apart from accepting
+            # partially-mitigated zones. It is now a real, reachable mode: it
+            # accepts a zone that produced a rejection trigger alone (no VWAP or
+            # micro-BOS confluence required) with one tier of score slack.
             valid_entry = False
             if in_zone and entry_type in ["OB", "FVG", "SWEEP"]:
                 if (micro_bos or trigger_pass or rsi_trigger) and (vwap_pass or strong_trend) and score >= score_thresh:
                     valid_entry = True
+                elif relaxed and trigger_pass and score >= (score_thresh - 1.0):
+                    valid_entry = True
             elif in_zone and entry_type in ["EMA", "VWAP"]:
                 if (micro_bos or trigger_pass) and (curr_rsi < 65 and vwap_pass) and score >= score_thresh:
                     valid_entry = True
-            elif relaxed and in_zone and (trigger_pass or vwap_pass) and score >= score_thresh:
-                valid_entry = True
+                elif relaxed and trigger_pass and curr_rsi < 68 and score >= (score_thresh - 1.0):
+                    valid_entry = True
 
             # Anti-Exhaustion Filter: Prevent buying the top of an exhausted impulse (RSI >= 60)
             if valid_entry and curr_rsi >= 60.0:
@@ -721,15 +751,18 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             # 1. Zone Setups (OB, FVG, SWEEP) with rejection trigger OR micro_bos
             # 2. Dynamic Pullback Setups (EMA, VWAP) with trend alignment + trigger
             # All paths enforce regime-aware score_thresh (AUD-C1 fix)
+            # See the RELAXED MODE note in the BULLISH branch (M-01 FIX).
             valid_entry = False
             if in_zone and entry_type in ["OB", "FVG", "SWEEP"]:
                 if (micro_bos or trigger_pass or rsi_trigger) and (vwap_pass or strong_trend) and score >= score_thresh:
                     valid_entry = True
+                elif relaxed and trigger_pass and score >= (score_thresh - 1.0):
+                    valid_entry = True
             elif in_zone and entry_type in ["EMA", "VWAP"]:
                 if (micro_bos or trigger_pass) and (curr_rsi > 35 and vwap_pass) and score >= score_thresh:
                     valid_entry = True
-            elif relaxed and in_zone and (trigger_pass or vwap_pass) and score >= score_thresh:
-                valid_entry = True
+                elif relaxed and trigger_pass and curr_rsi > 32 and score >= (score_thresh - 1.0):
+                    valid_entry = True
 
             # Anti-Exhaustion Filter: Prevent shorting the bottom of an oversold dump (RSI <= 40)
             if valid_entry and curr_rsi <= 40.0:

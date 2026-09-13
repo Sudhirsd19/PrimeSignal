@@ -22,6 +22,11 @@ class MLSignalConfirmator:
             random_state=42
         )
         self.is_trained = False
+        # Out-of-sample quality from TimeSeriesSplit CV. None until train() runs.
+        # Used by should_gate_entries() so an unproven model cannot silently
+        # block (or wave through) live trades (H-03 FIX).
+        self.cv_score: float | None = None
+        self.cv_folds: int = 0
 
     @staticmethod
     def _compute_features(data):
@@ -88,8 +93,16 @@ class MLSignalConfirmator:
         # New label: "did price hit TP1 (+0.6%) before SL (-0.5%) within 20 bars?"
         #   → Teaches the model to predict TRADE SUCCESS, not raw price direction.
         #   → 0.6% = TP1 at 1.2R of 0.5% SL (matching Config.MIN_SL_PCT / MIN_RISK_REWARD_RATIO)
-        tp_barrier  = float(getattr(Config, 'ML_LABEL_TP_PCT',  0.006))  # +0.6%
+        # H-03 FIX: labels must describe the trade the bot actually takes.
+        # The strategy floors every stop at 0.5%, and TP1 sits at
+        # MIN_RISK_REWARD_RATIO x that stop distance. Deriving the TP barrier from
+        # live geometry means the training target can never drift away from the
+        # execution target again (previously: fixed +0.6% label vs 1.0R TP).
         sl_barrier  = abs(float(getattr(Config, 'ML_LABEL_SL_PCT', -0.005)))  # 0.5%
+        if getattr(Config, 'ML_LABEL_TP_AUTO', True):
+            tp_barrier = sl_barrier * float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0))
+        else:
+            tp_barrier = abs(float(getattr(Config, 'ML_LABEL_TP_PCT', 0.006)))
         lookahead   = int(getattr(Config,   'ML_LABEL_LOOKAHEAD', 20))   # max 20 bars
 
         close_vals = data['close'].values
@@ -202,16 +215,23 @@ class MLSignalConfirmator:
                     )
                     mean_auc = cv_scores.mean()
                     std_auc  = cv_scores.std()
-                    print(f"[ML] Cross-Val AUC (OVR macro): {mean_auc:.3f} +/- {std_auc:.3f}  (folds: {tscv.n_splits})")
-                    if mean_auc < 0.55:
-                        print(f"[ML] [!] WEAK MODEL: AUC {mean_auc:.3f} is near-random (0.5 = coin flip).")
+                    # H-07 FIX: report the metric that is actually computed.
+                    # This is TimeSeriesSplit BALANCED ACCURACY, not AUC.
+                    self.cv_score = float(mean_auc)
+                    self.cv_folds = int(tscv.n_splits)
+                    floor = float(getattr(Config, 'ML_MIN_CV_ACCURACY', 0.55))
+                    print(f"[ML] TimeSeriesSplit balanced accuracy: {mean_auc:.3f} +/- {std_auc:.3f}  (folds: {tscv.n_splits}, gate floor: {floor:.2f})")
+                    if mean_auc < floor:
+                        print(f"[ML] [!] WEAK MODEL: {mean_auc:.3f} is near-random (0.5 = coin flip).")
+                        print(f"[ML]     -> Entries will NOT be gated by ML; the model only scales risk.")
                         print(f"[ML]     -> Fetch 90+ days of data and retrain for a reliable signal filter.")
                     elif mean_auc >= 0.65:
-                        print(f"[ML] [OK] STRONG MODEL: AUC {mean_auc:.3f} -- model has meaningful edge.")
+                        print(f"[ML] [OK] STRONG MODEL: {mean_auc:.3f} -- model has meaningful edge; entry gating armed.")
                     else:
-                        print(f"[ML] [INFO] MODERATE MODEL: AUC {mean_auc:.3f} -- usable but more data will help.")
+                        print(f"[ML] [INFO] MODERATE MODEL: {mean_auc:.3f} -- usable; entry gating armed.")
             except Exception as cv_err:
-                print(f"[ML] Cross-validation skipped: {cv_err}")
+                self.cv_score = None
+                print(f"[ML] Cross-validation skipped ({cv_err}); entry gating disabled for safety.")
 
             # Print simple feature importances
             raw_importances = getattr(self.model, "feature_importances_", [])
@@ -240,6 +260,43 @@ class MLSignalConfirmator:
             row[col] = val if not (isinstance(val, float) and np.isnan(val)) else 0.0
 
         return pd.DataFrame([row])
+
+    def model_has_edge(self) -> bool:
+        """True only when the model beat the configured CV balanced-accuracy floor."""
+        if not self.is_trained or self.cv_score is None:
+            return False
+        return self.cv_score >= float(getattr(Config, 'ML_MIN_CV_ACCURACY', 0.55))
+
+    def should_gate_entries(self) -> bool:
+        """Whether the model is allowed to BLOCK entries outright.
+
+        H-03 FIX: main.py previously never called confirm_signal(), so the
+        documented "ML Confirmation Filter" did not exist — the model only nudged
+        TP multipliers. Gating is now explicit and mode-driven:
+          off / risk -> never block (risk + target shaping only)
+          gate       -> always require confirmation
+          auto       -> require confirmation only when CV proved out-of-sample edge
+        """
+        mode = str(getattr(Config, 'ML_GATE_MODE', 'auto')).strip().lower()
+        if mode in ('off', 'risk'):
+            return False
+        if mode == 'gate':
+            return True
+        return self.model_has_edge()
+
+    def gate_decision(self, df, signal_type) -> tuple[bool, float, str]:
+        """Returns (allowed, directional_probability, reason) for an entry.
+
+        Fails OPEN when the model is untrained: we must not silently halt trading
+        because a model could not be fitted.
+        """
+        if not self.is_trained:
+            return True, 0.5, "ML model untrained — not gating"
+        confirmed, prob = self.confirm_signal(df, signal_type)
+        threshold = float(getattr(Config, 'ML_CONFIRMATION_THRESHOLD', 0.60))
+        if confirmed:
+            return True, prob, f"ML confirms {signal_type} at {prob:.2f} >= {threshold:.2f}"
+        return False, prob, f"ML blocks {signal_type}: {prob:.2f} < {threshold:.2f}"
 
     def confirm_signal(self, df, signal_type):
         """

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import websockets
 import pandas as pd
 from config import Config
@@ -73,19 +74,75 @@ class RealTimeDataPipeline:
             else:
                 print(f"ERROR: Failed to fetch historical data (4H) for {symbol}")
                 
-            # Fetch LTF history — 500 bars needed:
-            # • ML training needs 200+ clean samples after NaN warmup rows (~40 rows) are dropped
-            # • SMC OB lookback scans last 50 bars; more history = more structure context
-            ltf_ohlcv = await self.execution.fetch_ohlcv(
+            # Fetch LTF history.
+            # H-03 FIX: 500 bars (~5 days on 15m) is far too little to fit a
+            # GradientBoosting model — ml/confirmation.py itself warns that it
+            # needs 2000+ bars. The pipeline now paginates past the exchange's
+            # 1000-bar per-request limit up to Config.LTF_HISTORY_BARS.
+            target_bars = int(getattr(Config, 'LTF_HISTORY_BARS', 2000))
+            ltf_ohlcv = await self._fetch_ohlcv_paged(
                 symbol=symbol,
                 timeframe=Config.LTF_TIMEFRAME,
-                limit=500
+                total_bars=target_bars,
             )
-            if ltf_ohlcv is not None:
+            if ltf_ohlcv:
                 self.ltf_candles[symbol] = ltf_ohlcv
+                print(f"[DATA] {symbol}: {len(ltf_ohlcv)} LTF bars warmed up ({Config.LTF_TIMEFRAME}).")
             else:
                 print(f"ERROR: Failed to fetch historical data (LTF) for {symbol}")
         print("[DATA] Historical caches warmed up.")
+
+    async def _fetch_ohlcv_paged(self, symbol: str, timeframe: str, total_bars: int) -> list:
+        """Fetches up to `total_bars` of recent history, paginating forward.
+
+        Exchanges cap a single OHLCV request (Binance: 1000). We walk forward
+        from `now - total_bars * tf` using `since`, de-duplicate by timestamp and
+        return the most recent `total_bars`, chronologically sorted.
+        """
+        if total_bars <= 0:
+            return []
+        try:
+            tf_mins = parse_timeframe_to_minutes(timeframe)
+        except Exception:
+            tf_mins = 15
+        tf_ms = tf_mins * 60 * 1000
+
+        page_limit = min(1000, total_bars)
+        since = int(time.time() * 1000) - (total_bars * tf_ms)
+        collected: dict[int, list] = {}
+        max_requests = (total_bars // page_limit) + 3
+
+        for _ in range(max_requests):
+            try:
+                batch = await self.execution.fetch_ohlcv(
+                    symbol=symbol, timeframe=timeframe, limit=page_limit, since=since
+                )
+            except TypeError:
+                # Older execution engines may not accept `since`.
+                batch = await self.execution.fetch_ohlcv(
+                    symbol=symbol, timeframe=timeframe, limit=page_limit
+                )
+            except Exception as exc:
+                print(f"[DATA] Paged fetch error for {symbol} {timeframe}: {exc}")
+                break
+
+            if not batch:
+                break
+
+            for candle in batch:
+                if candle and candle[0] is not None:
+                    collected[int(candle[0])] = candle
+
+            newest_ts = int(batch[-1][0])
+            next_since = newest_ts + tf_ms
+            if len(collected) >= total_bars or next_since >= int(time.time() * 1000):
+                break
+            if next_since <= since:
+                break
+            since = next_since
+
+        ordered = [collected[ts] for ts in sorted(collected.keys())]
+        return ordered[-total_bars:]
 
     async def start(self):
         """

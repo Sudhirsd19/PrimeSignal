@@ -17,9 +17,10 @@ class RiskManager:
         self.reserved_longs_count = 0
         self.reserved_shorts_count = 0
         self.active_reservations: dict[str, dict[str, Any]] = {}
-        # Canonical decimal representation: 6.0% portfolio cap = 0.06
-        raw_cap = float(getattr(Config, 'MAX_PORTFOLIO_RISK_PCT', getattr(Config, 'MAX_CORRELATED_RISK_PCT', 0.06)))
-        self.max_correlated_risk_pct = raw_cap / 100.0 if raw_cap > 0.2 else raw_cap
+        # C-02 FIX: Single canonical source of truth for the portfolio risk cap.
+        # Config.get_max_portfolio_risk_fraction() normalises percent -> fraction so
+        # the main loop and RiskManager can never disagree about units again.
+        self.max_correlated_risk_pct = Config.get_max_portfolio_risk_fraction()
         self._lock = asyncio.Lock()
         # Portfolio-level lock for atomic risk reservation across concurrent entry tasks
         self.portfolio_lock = self._lock
@@ -118,6 +119,48 @@ class RiskManager:
             for r_id, data in self.active_reservations.items()
             if data.get('state') == 'ACTIVE'
         }
+
+    def serialize_daily_state(self) -> dict[str, Any]:
+        """Serializes the daily risk envelope so it survives a restart.
+
+        C-04 FIX: the daily loss circuit breaker and the daily profit lock were
+        re-baselined on every process start, so a restart silently re-enabled
+        trading after the daily limit had already been breached.
+        """
+        return {
+            'daily_starting_equity': self.daily_starting_equity,
+            'current_drawdown_pct': self.current_drawdown_pct,
+            'daily_profit_locked': self.daily_profit_locked,
+            'daily_profit_unlocked_manual': self.daily_profit_unlocked_manual,
+            'max_daily_profit_pct': self.max_daily_profit_pct,
+        }
+
+    def load_daily_state(self, data: dict[str, Any] | None, same_trading_day: bool = True):
+        """Restores the daily risk envelope after a restart.
+
+        When the saved state belongs to a previous trading day we deliberately
+        re-baseline instead of restoring, so yesterday's drawdown cannot lock the
+        bot out today.
+        """
+        if not isinstance(data, dict) or not same_trading_day:
+            return
+        start_eq = data.get('daily_starting_equity')
+        if start_eq is not None:
+            try:
+                start_eq = float(start_eq)
+                self.daily_starting_equity = start_eq if start_eq > 0 else None
+            except (TypeError, ValueError):
+                self.daily_starting_equity = None
+        try:
+            self.current_drawdown_pct = float(data.get('current_drawdown_pct', 0.0) or 0.0)
+        except (TypeError, ValueError):
+            self.current_drawdown_pct = 0.0
+        self.daily_profit_locked = bool(data.get('daily_profit_locked', False))
+        self.daily_profit_unlocked_manual = bool(data.get('daily_profit_unlocked_manual', False))
+        try:
+            self.max_daily_profit_pct = float(data.get('max_daily_profit_pct', self.max_daily_profit_pct))
+        except (TypeError, ValueError):
+            pass
 
     def load_reservations(self, reservations_data: dict[str, Any] | None):
         """Restores durable risk reservations after process restart."""

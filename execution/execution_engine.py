@@ -166,13 +166,17 @@ class ExecutionEngine:
                 self._tickers_cache_time = now
         return self._tickers_cache
 
-    async def fetch_ohlcv(self, symbol=None, timeframe=None, limit=100):
-        """Fetch historical candlestick data (OHLCV) from public client."""
+    async def fetch_ohlcv(self, symbol=None, timeframe=None, limit=100, since=None):
+        """Fetch historical candlestick data (OHLCV) from public client.
+
+        `since` (epoch ms) enables forward pagination past the exchange's
+        per-request bar limit — see RealTimeDataPipeline._fetch_ohlcv_paged.
+        """
         if symbol is None:
             symbol = Config.SYMBOL
         if timeframe is None:
             timeframe = Config.LTF_TIMEFRAME
-        return await self.execute_with_retry(self.public_client.fetch_ohlcv, symbol, timeframe, None, limit)
+        return await self.execute_with_retry(self.public_client.fetch_ohlcv, symbol, timeframe, since, limit)
 
     async def fetch_funding_rate(self, symbol=None):
         """
@@ -712,7 +716,10 @@ class ExecutionEngine:
         """Safely cancels an order without throwing unhandled exceptions."""
         if not order_id:
             return ExecutionResult(state=ExecutionState.ALREADY_CANCELLED, venue="BINANCE")
-        if self.coindcx_client:
+        # NOTE: getattr, not self.coindcx_client — a partially-initialised engine
+        # (crash recovery, __new__-based tests, journal replay) must never raise on
+        # the cancel path. Raising here would leave an unknown live order uncancelled.
+        if getattr(self, 'coindcx_client', None):
             try:
                 raw = await self.coindcx_client.cancel_order(order_id)
                 result = coerce_execution_result(raw, venue="COINDCX")

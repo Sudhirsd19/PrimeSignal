@@ -13,3 +13,12 @@ logs/
 KILL_SWITCH
 data/
 scratch/
+
+# Generated backtest artifacts (data/ above holds the raw candles).
+# backtest_manifest.json IS tracked on purpose: it pins the exact data window
+# and risk-config hash so any reported result can be reproduced.
+backtest_10d_results.json
+backtest_results.json
+walkforward_results.json
+edge_finder_results.json
+.size_probe.tmp

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 import os
 import time
 import datetime
@@ -91,6 +92,9 @@ class DashboardState:
     latest_price = 0.0
     balance_currency = getattr(Config, 'PAPER_CURRENCY', 'INR')
     balance_usdt = float(getattr(Config, 'PAPER_STARTING_BALANCE', 2000.0 if getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' else 10000.0))
+    # balance_usdt / total_equity = authoritative portfolio VALUE (cash + open position value).
+    # available_balance = FREE CASH only. These must never be conflated in reporting.
+    available_balance = float(getattr(Config, 'PAPER_STARTING_BALANCE', 2000.0 if getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' else 10000.0))
     total_equity = float(getattr(Config, 'PAPER_STARTING_BALANCE', 2000.0 if getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' else 10000.0))
     in_trade_margin = 0.0
     balance_base = 0.0
@@ -880,8 +884,8 @@ async def get_state():
     """Rest API endpoint for current state."""
     return {
         "latest_price": DashboardState.latest_price,
-        "balance_usdt": DashboardState.balance_usdt,
-        "available_balance": DashboardState.balance_usdt,
+        "balance_usdt": getattr(DashboardState, 'total_equity', DashboardState.balance_usdt),
+        "available_balance": getattr(DashboardState, 'available_balance', DashboardState.balance_usdt),
         "total_equity": getattr(DashboardState, 'total_equity', DashboardState.balance_usdt),
         "in_trade_margin": getattr(DashboardState, 'in_trade_margin', 0.0),
         "balance_base": DashboardState.balance_base,
@@ -944,6 +948,26 @@ async def websocket_endpoint(websocket: WebSocket):
         traceback.print_exc()
     finally:
         DashboardState.active_websockets.discard(websocket)
+
+def _num(value: Any, default: float = 0.0) -> float:
+    """Coerce a possibly missing / mocked / stale / NaN value to a finite float.
+
+    The dashboard state builder is the single source of truth for the WebSocket
+    stream. If one attribute is not a real number (uninitialised bot, partially
+    mocked bot in tests, corrupted state file), the old code raised inside
+    _build_state_payload and killed the whole stream — clients silently stopped
+    receiving updates. Reporting must degrade gracefully, never crash.
+    """
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return default
+    except Exception:
+        return default
+    if not math.isfinite(out):
+        return default
+    return out
+
 
 def _build_state_payload():
     """Build the state dict to broadcast to WebSocket clients."""
@@ -1157,15 +1181,18 @@ def _build_state_payload():
 
     if bot_instance:
         if not bot_instance.has_keys or Config.PAPER_TRADING:
-            available_bal = round(getattr(bot_instance, '_dry_run_balance_usdt', 0.0), 2)
-            total_eq = round(bot_instance.calculate_total_equity(), 2)
+            available_bal = round(_num(getattr(bot_instance, '_dry_run_balance_usdt', 0.0)), 2)
+            total_eq = round(_num(bot_instance.calculate_total_equity()), 2)
             in_trade_cost = max(0.0, round(total_eq - available_bal, 2))
-            DashboardState.balance_usdt = available_bal
+            DashboardState.balance_usdt = total_eq
+            DashboardState.available_balance = available_bal
             DashboardState.total_equity = total_eq
             DashboardState.in_trade_margin = in_trade_cost
         else:
-            available_bal = round(DashboardState.balance_usdt, 2)
+            available_bal = round(_num(DashboardState.balance_usdt), 2)
             total_eq = available_bal
+            DashboardState.balance_usdt = total_eq
+            DashboardState.available_balance = available_bal
             DashboardState.total_equity = total_eq
             DashboardState.in_trade_margin = 0.0
 
@@ -1181,7 +1208,7 @@ def _build_state_payload():
         "next_scan_timestamp": next_scan_timestamp,
         "latest_price": live_p,
         "latest_prices": live_prices,
-        "balance_usdt": available_bal,
+        "balance_usdt": total_eq,
         "available_balance": available_bal,
         "total_equity": total_eq,
         "in_trade_margin": in_trade_cost,

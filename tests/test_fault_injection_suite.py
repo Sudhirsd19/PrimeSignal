@@ -17,6 +17,26 @@ from config import Config
 
 class TestFaultInjectionSuite(unittest.IsolatedAsyncioTestCase):
 
+    # Hermeticity guard: several tests below flip global Config flags (EXCHANGE_TYPE,
+    # PAPER_TRADING). Without a snapshot/restore those mutations leak into every later
+    # test module in the same process, producing failures that have nothing to do with
+    # the test being run. Restore the exact class attributes after each test.
+    _config_snapshot: dict = {}
+
+    def setUp(self):
+        TestFaultInjectionSuite._config_snapshot = {
+            key: value for key, value in vars(Config).items() if not key.startswith('__')
+        }
+
+    def tearDown(self):
+        snapshot = TestFaultInjectionSuite._config_snapshot
+        for key in list(vars(Config)):
+            if not key.startswith('__') and key not in snapshot:
+                delattr(Config, key)
+        for key, value in snapshot.items():
+            setattr(Config, key, value)
+        TestFaultInjectionSuite._config_snapshot = {}
+
     # 1. State Machine & Crash Recovery Tests
     def test_order_state_machine_transitions_and_serialization(self):
         machine = OrderStateMachine(['BTC/USDT', 'ETH/USDT'])
@@ -119,7 +139,13 @@ class TestFaultInjectionSuite(unittest.IsolatedAsyncioTestCase):
         bot.has_keys = True
         Config.PAPER_TRADING = False
         Config.EXCHANGE_TYPE = 'futures'
-        
+
+        # Hermeticity: this unit test must never reach the live exchange. Without an
+        # explicit mock, fetch_open_orders hit Binance for real, returned None/raised
+        # offline, and the reconciler correctly aborted in SAFE MODE — which made the
+        # orphan-adoption assertion fail for reasons unrelated to the logic under test.
+        bot.execution.trade_client.fetch_open_orders = AsyncMock(return_value=[])
+
         bot.execution.place_native_stop_loss = AsyncMock(return_value={'id': 'SL_ORPHAN_123', 'status': 'open'})
         bot.execution.verify_order_active = AsyncMock(return_value="ACTIVE")
         bot.execution.emergency_flatten_position = AsyncMock()
