@@ -1,6 +1,6 @@
 """Deterministic paper-trading cash accounting helpers.
 
-All prices and PnL are expressed in USDT.  ``conversion_rate`` converts the
+All prices and PnL are expressed in USDT. ``conversion_rate`` converts the
 USDT cash flow into the configured paper wallet currency (for example INR).
 """
 
@@ -36,7 +36,12 @@ def simulate_paper_entry(
     conversion_rate: float = 1.0,
     min_paper_cash: float = 1.0,
 ) -> Optional[PaperEntryResult]:
-    """Return a fill and exact wallet debit, or ``None`` when no fill is affordable."""
+    """Return a fill and exact wallet debit, or ``None`` when not affordable.
+
+    The configured allocation cap is a hard ceiling. A minimum paper-ticket
+    threshold never overrides that cap; when the capped amount is below the
+    minimum ticket, the trade is rejected rather than deploying excess cash.
+    """
     side = str(side).upper()
     if side not in {"BUY", "SELL"}:
         raise ValueError("side must be BUY or SELL")
@@ -46,7 +51,7 @@ def simulate_paper_entry(
         return None
     if requested_qty <= 0 or signal_price <= 0 or balance_cash <= 0 or current_equity_cash <= 0:
         return None
-    if conversion_rate <= 0 or fee_rate < 0 or max_alloc_pct <= 0 or slippage_pct < 0:
+    if conversion_rate <= 0 or fee_rate < 0 or max_alloc_pct <= 0 or slippage_pct < 0 or min_paper_cash < 0:
         return None
 
     if side == "BUY":
@@ -57,11 +62,8 @@ def simulate_paper_entry(
         return None
 
     max_cash = current_equity_cash * max_alloc_pct
-    if max_cash < min_paper_cash and balance_cash >= min_paper_cash:
-        target_cash = balance_cash
-    else:
-        target_cash = min(balance_cash, max_cash)
-    if target_cash < min_paper_cash:
+    target_cash = min(balance_cash, max_cash)
+    if target_cash <= 0 or target_cash < min_paper_cash:
         return None
 
     cash_per_unit = fill_price * conversion_rate * (1.0 + fee_rate)
@@ -72,7 +74,7 @@ def simulate_paper_entry(
     notional_usdt = quantity * fill_price
     fee_usdt = notional_usdt * fee_rate
     cash_debit = (notional_usdt + fee_usdt) * conversion_rate
-    if cash_debit <= 0 or cash_debit > balance_cash + 1e-9:
+    if cash_debit <= 0 or cash_debit > balance_cash + 1e-9 or cash_debit > max_cash + 1e-9:
         return None
 
     return PaperEntryResult(
