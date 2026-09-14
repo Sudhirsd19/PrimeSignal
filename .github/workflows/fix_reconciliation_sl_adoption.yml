@@ -16,61 +16,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Patch and test
+      - name: Patch reconciliation engine
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
           p = Path('core/reconciliation_engine.py')
           text = p.read_text(encoding='utf-8')
 
-          old = '''    async def _sync_exchange_orders(self, symbol: str, ctx, exchange_qty: float, open_orders: list) -> Optional[str]:
-          exec_engine = self.bot.execution
-          protective_orders = []
-          for o in open_orders:
-              o_id = str(o.get('id', ''))
-              if not o_id:
-                  continue
-              typ = str(o.get('type', '')).lower()
-              if typ in ('stop_market', 'stop', 'stop_loss_limit', 'stop_limit'):
-                  protective_orders.append(o)
-
-          local_sl = ctx.native_sl_order_id
-          resolved_sl = None
-          if exchange_qty < 0.0001:
-              for o in protective_orders:
-                  o_id = str(o.get('id', ''))
-                  try:
-                      print(f'[RECONCILIATION] Flat position - cancelling orphaned SL: {o_id}')
-                  except Exception:
-                      pass
-                  await exec_engine.cancel_order_safe(symbol, o_id)
-              return None
-
-          if protective_orders:
-              matched = [o for o in protective_orders if str(o.get('id', '')) == str(local_sl)]
-              if matched:
-                  resolved_sl = str(matched[0].get('id'))
-              else:
-                  resolved_sl = str(protective_orders[-1].get('id'))
-                  try:
-                      print(f'[RECONCILIATION] Discovered existing exchange SL {resolved_sl} for {symbol}. Adopting.')
-                  except Exception:
-                      pass
-                  ctx.native_sl_order_id = resolved_sl
-              for o in protective_orders:
-                  o_id = str(o.get('id', ''))
-                  if o_id != resolved_sl:
-                      try:
-                          print(f'[RECONCILIATION] Cancelling duplicate protective order: {o_id}')
-                      except Exception:
-                          pass
-                      await exec_engine.cancel_order_safe(symbol, o_id)
-          return resolved_sl
-'''
-
-          new = '''    async def _sync_exchange_orders(self, symbol: str, ctx, exchange_qty: float, open_orders: list) -> Optional[str]:
+          new_fn = r'''    async def _sync_exchange_orders(self, symbol: str, ctx, exchange_qty: float, open_orders: list) -> Optional[str]:
           exec_engine = self.bot.execution
           self._protective_order_ambiguous = False
           protective_orders = []
@@ -144,17 +100,18 @@ jobs:
           return resolved_sl
 '''
 
-          if old not in text:
-              raise SystemExit('Expected _sync_exchange_orders block not found; aborting without changes.')
-          text = text.replace(old, new, 1)
+          pattern = r"    async def _sync_exchange_orders\(self, symbol: str, ctx, exchange_qty: float, open_orders: list\) -> Optional\[str\]:.*?(?=    async def _reconcile_live_broker_state\()"
+          text, count = re.subn(pattern, new_fn + '\n', text, count=1, flags=re.S)
+          if count != 1:
+              raise SystemExit(f'Expected _sync_exchange_orders function once, found {count}. Aborting.')
 
-          old_futures = '''                resolved_sl = await self._sync_exchange_orders(symbol, ctx, contracts, symbol_orders)
+          old_futures = """                resolved_sl = await self._sync_exchange_orders(symbol, ctx, contracts, symbol_orders)
                 if resolved_sl:
                     ctx.native_sl_order_id = resolved_sl
 
                 if contracts > 1e-05 and exchange_pos is not None:
-'''
-          new_futures = '''                resolved_sl = await self._sync_exchange_orders(symbol, ctx, contracts, symbol_orders)
+"""
+          new_futures = """                resolved_sl = await self._sync_exchange_orders(symbol, ctx, contracts, symbol_orders)
                 if getattr(self, '_protective_order_ambiguous', False):
                     self.bot.save_state()
                     continue
@@ -162,38 +119,35 @@ jobs:
                     ctx.native_sl_order_id = resolved_sl
 
                 if contracts > 1e-05 and exchange_pos is not None:
-'''
+"""
           if old_futures not in text:
-              raise SystemExit('Expected futures reconciliation call-site not found; aborting without changes.')
+              raise SystemExit('Expected futures reconciliation call-site not found. Aborting.')
           text = text.replace(old_futures, new_futures, 1)
 
-          old_spot = '''                resolved_sl = await self._sync_exchange_orders(symbol, ctx, base_qty, symbol_orders)
+          old_spot = """                resolved_sl = await self._sync_exchange_orders(symbol, ctx, base_qty, symbol_orders)
                 if resolved_sl:
                     ctx.native_sl_order_id = resolved_sl
                 if self.bot.in_position.get(symbol, False):
-'''
-          new_spot = '''                resolved_sl = await self._sync_exchange_orders(symbol, ctx, base_qty, symbol_orders)
+"""
+          new_spot = """                resolved_sl = await self._sync_exchange_orders(symbol, ctx, base_qty, symbol_orders)
                 if getattr(self, '_protective_order_ambiguous', False):
                     self.bot.save_state()
                     continue
                 if resolved_sl:
                     ctx.native_sl_order_id = resolved_sl
                 if self.bot.in_position.get(symbol, False):
-'''
+"""
           if old_spot not in text:
-              raise SystemExit('Expected spot reconciliation call-site not found; aborting without changes.')
+              raise SystemExit('Expected spot reconciliation call-site not found. Aborting.')
           text = text.replace(old_spot, new_spot, 1)
 
           p.write_text(text, encoding='utf-8')
           PY
 
           python -m py_compile core/reconciliation_engine.py
-
           python - <<'PY'
-          import asyncio
           import ast
           from pathlib import Path
-
           src = Path('core/reconciliation_engine.py').read_text(encoding='utf-8')
           tree = ast.parse(src)
           fn = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == '_sync_exchange_orders')
@@ -202,7 +156,8 @@ jobs:
           assert 'len(candidates) != 1' in segment
           assert '_protective_order_ambiguous' in segment
           assert 'protective_orders[-1]' not in segment
-          print('PASS: reconciliation protective SL matching is fail-closed and no longer adopts arbitrary last order.')
+          assert 'Discovered unique side-matched exchange SL' in segment
+          print('PASS: reconciliation SL adoption is fail-closed and side-matched.')
           PY
 
       - name: Commit fix
@@ -211,6 +166,6 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add core/reconciliation_engine.py
-          git diff --cached --quiet && echo 'No changes to commit.' && exit 0
+          git diff --cached --quiet && echo 'No source changes.' && exit 0
           git commit -m 'fix: fail closed on ambiguous reconciliation SL adoption'
           git push
