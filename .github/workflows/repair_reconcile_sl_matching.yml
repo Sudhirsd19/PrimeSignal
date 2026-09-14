@@ -1,0 +1,44 @@
+name: Repair protective SL reconciliation
+on:
+  push:
+    paths:
+      - RECON_SL_MATCH_TRIGGER.txt
+      - .github/workflows/repair_reconcile_sl_matching.yml
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch and verify
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast
+          p = Path('core/reconciliation_engine.py')
+          s = p.read_text(encoding='utf-8')
+          old = '''            if protective_orders:\n                matched = [o for o in protective_orders if str(o.get('id', '')) == str(local_sl)]\n                if matched:\n                    resolved_sl = str(matched[0].get('id'))\n                else:\n                    resolved_sl = str(protective_orders[-1].get('id'))\n                    try:\n                        print(f'[RECONCILIATION] Discovered existing exchange SL {resolved_sl} for {symbol}. Adopting.')\n                    except Exception:\n                        pass\n                    ctx.native_sl_order_id = resolved_sl\n'''
+          new = '''            if protective_orders:\n                matched = [o for o in protective_orders if str(o.get('id', '')) == str(local_sl)]\n                if matched:\n                    resolved_sl = str(matched[0].get('id'))\n                else:\n                    # Never adopt an arbitrary protective order. It may belong to\n                    # another position/order. Match the protective side to the\n                    # current position direction before adopting anything.\n                    expected_side = 'sell' if str(getattr(ctx, 'side', '')).upper() == 'LONG' else 'buy'\n                    side_matches = [\n                        o for o in protective_orders\n                        if str(o.get('side', '')).lower() == expected_side\n                    ]\n                    if len(side_matches) == 1:\n                        resolved_sl = str(side_matches[0].get('id'))\n                        try:\n                            print(f'[RECONCILIATION] Discovered matching exchange SL {resolved_sl} for {symbol}. Adopting.')\n                        except Exception:\n                            pass\n                        ctx.native_sl_order_id = resolved_sl\n                    elif len(side_matches) > 1:\n                        # Multiple plausible stops are ambiguous; do not guess.\n                        # Safe mode will prevent new entries until state is resolved.\n                        self.safe_mode_active = True\n                        try:\n                            print(f'[RECONCILIATION CRITICAL] {symbol}: multiple protective orders match position side; refusing arbitrary SL adoption.')\n                        except Exception:\n                            pass\n                        return None\n'''
+          if s.count(old) != 1:
+              raise SystemExit(f'expected exactly one SL adoption block, found {s.count(old)}')
+          s = s.replace(old, new)
+          ast.parse(s)
+          p.write_text(s, encoding='utf-8')
+          print('Protective SL matching patch + AST check PASSED')
+          PY
+      - name: Commit patch and cleanup
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add core/reconciliation_engine.py
+          git commit -m "fix: reconcile only position-matching protective SLs"
+          git push origin HEAD:main
+          rm -f RECON_SL_MATCH_TRIGGER.txt .github/workflows/repair_reconcile_sl_matching.yml
+          git add -u
+          git commit -m "chore: remove reconciliation repair trigger"
+          git push origin HEAD:main
