@@ -287,6 +287,15 @@ def _patch_source(text):
     if "if sl_val is None: sl_val = entry_price * 0.98" in text or "if sl_val is None: sl_val = entry_price * 1.02" in text:
         raise RuntimeError("PrimeSignal hardening failed: synthetic 2% SL fallback still present")
 
+    # Live ENTRY durable protection: the legacy source must pass the exact
+    # strategy stop and position side into ExecutionEngine before journaling.
+    buy_call = "order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol)"
+    buy_call_new = "order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol, order_role='ENTRY', protection={\"stop_loss\": sl, \"position_side\": \"LONG\", \"signal_entry_price\": entry_price})"
+    sell_call = "order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol)"
+    sell_call_new = "order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol, order_role='ENTRY', protection={\"stop_loss\": sl, \"position_side\": \"SHORT\", \"signal_entry_price\": entry_price})"
+    text = _replace_once(text, buy_call, buy_call_new, "live BUY protection")
+    text = _replace_once(text, sell_call, sell_call_new, "live SELL protection")
+
     return text
 
 
