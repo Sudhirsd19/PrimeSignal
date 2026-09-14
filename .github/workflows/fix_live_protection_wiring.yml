@@ -22,70 +22,66 @@ jobs:
         run: |
           from pathlib import Path
 
+          # 1) ExecutionEngine accepts and durably journals protection metadata.
           engine = Path('execution/execution_engine.py')
           text = engine.read_text(encoding='utf-8')
 
-          old_sig = '''        is_exit_order: bool = False,\n    ) -> tuple[str, str]:'''
-          new_sig = '''        is_exit_order: bool = False,\n        protection: Optional[dict[str, Any]] = None,\n    ) -> tuple[str, str]:'''
-          if old_sig not in text:
-              raise SystemExit('prepare_order_intent signature anchor not found')
-          text = text.replace(old_sig, new_sig, 1)
+          old = '''        is_exit_order: bool = False,\n    ) -> tuple[str, str]:'''
+          new = '''        is_exit_order: bool = False,\n        protection: Optional[dict[str, Any]] = None,\n    ) -> tuple[str, str]:'''
+          if old not in text:
+              raise SystemExit('engine: prepare_order_intent signature anchor not found')
+          text = text.replace(old, new, 1)
 
-          old_create = '''            order_role=order_role,\n            price=price,\n        )'''
-          new_create = '''            order_role=order_role,\n            price=price,\n            protection=protection,\n        )'''
-          if old_create not in text:
-              raise SystemExit('intent journal protection anchor not found')
-          text = text.replace(old_create, new_create, 1)
+          old = '''            order_role=order_role,\n            price=price,\n        )'''
+          new = '''            order_role=order_role,\n            price=price,\n            protection=protection,\n        )'''
+          if old not in text:
+              raise SystemExit('engine: journal.create anchor not found')
+          text = text.replace(old, new, 1)
 
-          old_place_sig = '''                          order_role="ENTRY", candle_ts=None,\n                          intent_id=None, client_order_id=None):'''
-          new_place_sig = '''                          order_role="ENTRY", candle_ts=None,\n                          intent_id=None, client_order_id=None, protection=None):'''
-          if old_place_sig not in text:
-              raise SystemExit('place_order signature anchor not found')
-          text = text.replace(old_place_sig, new_place_sig, 1)
+          old = '''                          order_role="ENTRY", candle_ts=None,\n                          intent_id=None, client_order_id=None):'''
+          new = '''                          order_role="ENTRY", candle_ts=None,\n                          intent_id=None, client_order_id=None, protection=None):'''
+          if old not in text:
+              raise SystemExit('engine: place_order signature anchor not found')
+          text = text.replace(old, new, 1)
 
-          old_call = '''                is_exit_order=is_exit_order,\n            )'''
-          new_call = '''                is_exit_order=is_exit_order,\n                protection=protection,\n            )'''
-          if old_call not in text:
-              raise SystemExit('prepare_order_intent call anchor not found')
-          text = text.replace(old_call, new_call, 1)
+          old = '''                is_exit_order=is_exit_order,\n            )'''
+          new = '''                is_exit_order=is_exit_order,\n                protection=protection,\n            )'''
+          if old not in text:
+              raise SystemExit('engine: prepare_order_intent call anchor not found')
+          text = text.replace(old, new, 1)
           engine.write_text(text, encoding='utf-8')
 
-          legacy = Path('main_legacy.py')
-          text = legacy.read_text(encoding='utf-8')
+          # 2) The runtime wrapper transforms main_legacy.py before execution.
+          # Add protection to the transformed BUY/SELL ENTRY calls there.
+          wrapper = Path('main.py')
+          text = wrapper.read_text(encoding='utf-8')
 
-          marker = '''            raw_stop_loss = metadata.get('stop_loss')\n'''
-          injection = '''            # Durable live-entry protection context: the execution layer must\n            # receive the exact strategy stop and position side before it journals\n            # or submits the ENTRY mutation.\n            self.execution._pending_entry_protection = {\n                'stop_loss': metadata.get('stop_loss'),\n                'position_side': 'LONG' if signal == 'BUY' else 'SHORT',\n                'signal_entry_price': entry_price,\n            }\n'''
-          if marker not in text:
-              raise SystemExit('legacy stop-loss anchor not found')
-          text = text.replace(marker, injection + marker, 1)
+          buy = '''order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol)'''
+          buy_new = '''order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol, protection={\"stop_loss\": sl, \"position_side\": \"LONG\", \"signal_entry_price\": entry_price})'''
+          if buy not in text:
+              raise SystemExit('wrapper: BUY ENTRY source anchor not found')
+          text = text.replace(buy, buy_new, 1)
 
-          # Pass the pending durable protection only to ENTRY orders. The exact\n          # call sites are preserved by adding it to every explicit ENTRY role.\n          explicit = 'order_role="ENTRY",'
-          replacement = 'order_role="ENTRY", protection=getattr(self.execution, "_pending_entry_protection", None),'
-          count = text.count(explicit)
-          if count < 1:
-              raise SystemExit('No explicit ENTRY order-role call sites found')
-          text = text.replace(explicit, replacement)
-          legacy.write_text(text, encoding='utf-8')
+          sell = '''order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol)'''
+          sell_new = '''order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol, protection={\"stop_loss\": sl, \"position_side\": \"SHORT\", \"signal_entry_price\": entry_price})'''
+          if sell not in text:
+              raise SystemExit('wrapper: SELL ENTRY source anchor not found')
+          text = text.replace(sell, sell_new, 1)
 
-          # Clear stale protection after each mutation so an unrelated future\n          # order cannot inherit an old stop accidentally.
-          old_result = '''            self.intent_journal.result(result)\n            return result'''
-          new_result = '''            self.intent_journal.result(result)\n            if order_role.upper() == "ENTRY":\n                self._pending_entry_protection = None\n            return result'''
-          if old_result not in text:
-              # This fallback is intentionally not applied here; engine cleanup\n              # is handled by the wrapper below.\n              pass
+          wrapper.write_text(text, encoding='utf-8')
 
-          legacy.write_text(text, encoding='utf-8')
-
-      - name: Verify wiring
+      - name: Verify
         run: |
-          python -m py_compile execution/execution_engine.py main_legacy.py
+          python -m py_compile execution/execution_engine.py main.py main_legacy.py
+          grep -n "protection: Optional" execution/execution_engine.py
           grep -n "protection=protection" execution/execution_engine.py
-          grep -n "_pending_entry_protection" main_legacy.py
+          grep -n "protection={" main.py
 
       - name: Commit fix
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add execution/execution_engine.py main_legacy.py
+          git add execution/execution_engine.py main.py
           if git diff --cached --quiet; then
             echo "No changes to commit."
             exit 0
