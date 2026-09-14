@@ -21,88 +21,54 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
           def replace_first(path, old, new):
-              p = Path(path)
-              s = p.read_text(encoding='utf-8')
-              if new in s:
-                  return
-              if old not in s:
-                  raise SystemExit(f'{path}: pattern not found')
+              p = Path(path); s = p.read_text(encoding='utf-8')
+              if new in s: return
+              if old not in s: raise SystemExit(f'{path}: pattern not found')
               p.write_text(s.replace(old, new, 1), encoding='utf-8')
 
-          replace_first('execution/execution_engine.py',
-              '        is_exit_order: bool = False,\n    ) -> tuple[str, str]:',
-              '        is_exit_order: bool = False,\n        protection: dict[str, Any] | None = None,\n    ) -> tuple[str, str]:')
-          replace_first('execution/execution_engine.py',
-              '            price=price,\n        )\n        return intent_id, client_order_id',
-              '            price=price,\n            protection=protection,\n        )\n        return intent_id, client_order_id')
-          replace_first('execution/execution_engine.py',
-              '                          order_role="ENTRY", candle_ts=None,\n                          intent_id=None, client_order_id=None):',
-              '                          order_role="ENTRY", candle_ts=None,\n                          intent_id=None, client_order_id=None, protection=None):')
-          replace_first('execution/execution_engine.py',
-              '                client_order_id=client_order_id,\n                is_exit_order=is_exit_order,\n            )',
-              '                client_order_id=client_order_id,\n                is_exit_order=is_exit_order,\n                protection=protection,\n            )')
-          replace_first('execution/execution_engine.py',
-              "            price = intent.get('price')\n            \n            discovered = await self.reconcile_intent_on_exchange(intent)",
-              "            price = intent.get('price')\n            protection = intent.get('protection') or {}\n            \n            discovered = await self.reconcile_intent_on_exchange(intent)")
-          replace_first('execution/execution_engine.py',
-              "                discovered.raw['price'] = price\n                discovered.intent_id = intent_id",
-              "                discovered.raw['price'] = price\n                discovered.raw['protection'] = dict(protection)\n                discovered.intent_id = intent_id")
-          replace_first('execution/execution_engine.py',
-              "                    raw={'order_role': order_role, 'symbol': symbol, 'side': side, 'price': price}\n",
-              "                    raw={'order_role': order_role, 'symbol': symbol, 'side': side, 'price': price, 'protection': dict(protection)}\n")
+          replace_first('execution/execution_engine.py', '        is_exit_order: bool = False,\n    ) -> tuple[str, str]:', '        is_exit_order: bool = False,\n        protection: dict[str, Any] | None = None,\n    ) -> tuple[str, str]:')
+          replace_first('execution/execution_engine.py', '            price=price,\n        )\n        return intent_id, client_order_id', '            price=price,\n            protection=protection,\n        )\n        return intent_id, client_order_id')
+          replace_first('execution/execution_engine.py', '                          order_role="ENTRY", candle_ts=None,\n                          intent_id=None, client_order_id=None):', '                          order_role="ENTRY", candle_ts=None,\n                          intent_id=None, client_order_id=None, protection=None):')
+          replace_first('execution/execution_engine.py', '                client_order_id=client_order_id,\n                is_exit_order=is_exit_order,\n            )', '                client_order_id=client_order_id,\n                is_exit_order=is_exit_order,\n                protection=protection,\n            )')
+          replace_first('execution/execution_engine.py', "            price = intent.get('price')\n            \n            discovered = await self.reconcile_intent_on_exchange(intent)", "            price = intent.get('price')\n            protection = intent.get('protection') or {}\n            \n            discovered = await self.reconcile_intent_on_exchange(intent)")
+          replace_first('execution/execution_engine.py', "                discovered.raw['price'] = price\n                discovered.intent_id = intent_id", "                discovered.raw['price'] = price\n                discovered.raw['protection'] = dict(protection)\n                discovered.intent_id = intent_id")
+          replace_first('execution/execution_engine.py', "                    raw={'order_role': order_role, 'symbol': symbol, 'side': side, 'price': price}\n", "                    raw={'order_role': order_role, 'symbol': symbol, 'side': side, 'price': price, 'protection': dict(protection)}\n")
 
-          replace_first('main.py',
-              "order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol)",
-              "order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol, protection={'stop_loss': float(sl), 'signal_entry_price': float(entry_price), 'position_side': 'LONG'})")
-          replace_first('main.py',
-              "order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol)",
-              "order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol, protection={'stop_loss': float(sl), 'signal_entry_price': float(entry_price), 'position_side': 'SHORT'})")
+          replace_first('main.py', "order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol)", "order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol, protection={'stop_loss': float(sl), 'signal_entry_price': float(entry_price), 'position_side': 'LONG'})")
+          replace_first('main.py', "order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol)", "order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol, protection={'stop_loss': float(sl), 'signal_entry_price': float(entry_price), 'position_side': 'SHORT'})")
 
-          p = Path('core/reconciliation_engine.py')
-          s = p.read_text(encoding='utf-8')
-          old = """                                sl_dist = 0.02
-                                fee_adj = fill_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
-                                if pos_side == 'LONG':
-                                    sl_price = fill_p * (1.0 - sl_dist)
-                                    r_amt = abs(fill_p - sl_price)
-                                    tp1 = fill_p + 1.0 * r_amt + fee_adj
-                                    tp2 = fill_p + 2.2 * r_amt + fee_adj
-                                    tp3 = fill_p + 4.0 * r_amt + fee_adj
-                                else:
-                                    sl_price = fill_p * (1.0 + sl_dist)
-                                    r_amt = abs(fill_p - sl_price)
-                                    tp1 = fill_p - 1.0 * r_amt - fee_adj
-                                    tp2 = fill_p - 2.2 * r_amt - fee_adj
-                                    tp3 = fill_p - 4.0 * r_amt - fee_adj"""
-          new = """                                protection = raw_meta.get('protection') if isinstance(raw_meta.get('protection'), dict) else {}
-                                try:
-                                    sl_price = float(protection.get('stop_loss', 0.0))
-                                except (TypeError, ValueError):
-                                    sl_price = 0.0
-                                if sl_price <= 0.0:
-                                    self.safe_mode_active = True
-                                    ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Recovered ENTRY fill without durable strategy stop-loss')
-                                    print(f'[RECONCILIATION] [ALERT] Confirmed ENTRY fill {i_id} for {symbol} has NO durable strategy SL. SAFE MODE; no invented stop permitted.')
-                                    continue
-                                fee_adj = fill_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
-                                r_amt = abs(fill_p - sl_price)
-                                if pos_side == 'LONG':
-                                    tp1 = fill_p + 1.0 * r_amt + fee_adj
-                                    tp2 = fill_p + 2.2 * r_amt + fee_adj
-                                    tp3 = fill_p + 4.0 * r_amt + fee_adj
-                                else:
-                                    tp1 = fill_p - 1.0 * r_amt - fee_adj
-                                    tp2 = fill_p - 2.2 * r_amt - fee_adj
-                                    tp3 = fill_p - 4.0 * r_amt - fee_adj"""
+          p = Path('core/reconciliation_engine.py'); s = p.read_text(encoding='utf-8')
           if 'sl_dist = 0.02' in s:
-              if s.count(old) != 1:
-                  raise SystemExit(f'core/reconciliation_engine.py: expected recovery block once, found {s.count(old)}')
-              s = s.replace(old, new, 1)
+              pattern = re.compile(r"(?ms)^(?P<indent>\s*)sl_dist = 0\.02\n(?P=indent)fee_adj = fill_p \* getattr\(Config, 'FEE_RATE', 0\.00075\) \* 2\.0\n(?P=indent)if pos_side == 'LONG':.*?(?=\n\s*ctx\.filled_qty = filled_amount)")
+              m = pattern.search(s)
+              if not m: raise SystemExit('recovery ENTRY SL block not found by regex')
+              indent = m.group('indent')
+              new = f"""{indent}protection = raw_meta.get('protection') if isinstance(raw_meta.get('protection'), dict) else {{}}
+{indent}try:
+{indent}    sl_price = float(protection.get('stop_loss', 0.0))
+{indent}except (TypeError, ValueError):
+{indent}    sl_price = 0.0
+{indent}if sl_price <= 0.0:
+{indent}    self.safe_mode_active = True
+{indent}    ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Recovered ENTRY fill without durable strategy stop-loss')
+{indent}    print(f'[RECONCILIATION] [ALERT] Confirmed ENTRY fill {{i_id}} for {{symbol}} has NO durable strategy SL. SAFE MODE; no invented stop permitted.')
+{indent}    continue
+{indent}fee_adj = fill_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
+{indent}r_amt = abs(fill_p - sl_price)
+{indent}if pos_side == 'LONG':
+{indent}    tp1 = fill_p + 1.0 * r_amt + fee_adj
+{indent}    tp2 = fill_p + 2.2 * r_amt + fee_adj
+{indent}    tp3 = fill_p + 4.0 * r_amt + fee_adj
+{indent}else:
+{indent}    tp1 = fill_p - 1.0 * r_amt - fee_adj
+{indent}    tp2 = fill_p - 2.2 * r_amt - fee_adj
+{indent}    tp3 = fill_p - 4.0 * r_amt - fee_adj"""
+              s = s[:m.start()] + new + s[m.end():]
               p.write_text(s, encoding='utf-8')
-
-          print('Recovery protection fix applied.')
+          print('Recovery protection patch applied.')
           PY
 
       - name: Regression tests
