@@ -1,8 +1,10 @@
-name: PrimeSignal one-time recovery hardening
+name: PrimeSignal LOGIC-001 recovery hardening
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'LOGIC_001_TRIGGER.txt'
 
 permissions:
   contents: write
@@ -17,94 +19,91 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Apply recovery protection hardening
+      - name: Apply only the LOGIC-001 recovery safety fix
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          def replace_once(path, old, new):
-              p = Path(path)
-              s = p.read_text(encoding='utf-8')
-              n = s.count(old)
-              if n != 1:
-                  raise SystemExit(f'{path}: expected exactly 1 match, found {n}')
-              p.write_text(s.replace(old, new), encoding='utf-8')
+          p = Path('core/reconciliation_engine.py')
+          s = p.read_text(encoding='utf-8')
 
-          replace_once('execution/execution_engine.py',
-              '        is_exit_order: bool = False,\n    ) -> tuple[str, str]:',
-              '        is_exit_order: bool = False,\n        protection: dict[str, Any] | None = None,\n    ) -> tuple[str, str]:')
+          old = """                                sl_dist = 0.02
+                                fee_adj = fill_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
+                                if pos_side == 'LONG':
+                                    sl_price = fill_p * (1.0 - sl_dist)
+                                    r_amt = abs(fill_p - sl_price)
+                                    tp1 = fill_p + 1.0 * r_amt + fee_adj
+                                    tp2 = fill_p + 2.2 * r_amt + fee_adj
+                                    tp3 = fill_p + 4.0 * r_amt + fee_adj
+                                else:
+                                    sl_price = fill_p * (1.0 + sl_dist)
+                                    r_amt = abs(fill_p - sl_price)
+                                    tp1 = fill_p - 1.0 * r_amt - fee_adj
+                                    tp2 = fill_p - 2.2 * r_amt - fee_adj
+                                    tp3 = fill_p - 4.0 * r_amt - fee_adj
 
-          replace_once('execution/execution_engine.py',
-              '            price=price,\n        )\n        return intent_id, client_order_id',
-              '            price=price,\n            protection=protection,\n        )\n        return intent_id, client_order_id')
+"""
+          new = """                                # LOGIC-001: A crash-recovered fill must never receive an invented 2% SL.
+                                # Until the original strategy protection is durably available, quarantine the position.
+                                protection = raw_meta.get('protection') if isinstance(raw_meta.get('protection'), dict) else {}
+                                try:
+                                    sl_price = float(protection.get('stop_loss', 0.0))
+                                except (TypeError, ValueError):
+                                    sl_price = 0.0
+                                if sl_price <= 0.0:
+                                    self.safe_mode_active = True
+                                    ctx.transition_to(
+                                        OrderState.EXECUTION_UNKNOWN,
+                                        reason='Recovered ENTRY fill without durable strategy stop-loss',
+                                    )
+                                    print(
+                                        f'[RECONCILIATION CRITICAL] ENTRY {i_id} for {symbol} has no durable strategy SL; '
+                                        'recovery quarantined in SAFE MODE; no 2% fallback permitted.'
+                                    )
+                                    continue
 
-          replace_once('execution/execution_engine.py',
-              '                          order_role="ENTRY", candle_ts=None,\n                          intent_id=None, client_order_id=None):',
-              '                          order_role="ENTRY", candle_ts=None,\n                          intent_id=None, client_order_id=None, protection=None):')
+                                fee_adj = fill_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
+                                r_amt = abs(fill_p - sl_price)
+                                if r_amt <= 0.0:
+                                    self.safe_mode_active = True
+                                    ctx.transition_to(
+                                        OrderState.EXECUTION_UNKNOWN,
+                                        reason='Recovered ENTRY has invalid non-positive stop distance',
+                                    )
+                                    continue
+                                if pos_side == 'LONG':
+                                    tp1 = fill_p + 1.0 * r_amt + fee_adj
+                                    tp2 = fill_p + 2.2 * r_amt + fee_adj
+                                    tp3 = fill_p + 4.0 * r_amt + fee_adj
+                                else:
+                                    tp1 = fill_p - 1.0 * r_amt - fee_adj
+                                    tp2 = fill_p - 2.2 * r_amt - fee_adj
+                                    tp3 = fill_p - 4.0 * r_amt - fee_adj
 
-          replace_once('execution/execution_engine.py',
-              '                client_order_id=client_order_id,\n                is_exit_order=is_exit_order,\n            )',
-              '                client_order_id=client_order_id,\n                is_exit_order=is_exit_order,\n                protection=protection,\n            )')
-
-          replace_once('execution/execution_engine.py',
-              "            price = intent.get('price')\n            \n            discovered = await self.reconcile_intent_on_exchange(intent)",
-              "            price = intent.get('price')\n            protection = intent.get('protection') or {}\n            \n            discovered = await self.reconcile_intent_on_exchange(intent)")
-
-          replace_once('execution/execution_engine.py',
-              "                discovered.raw['price'] = price\n                discovered.intent_id = intent_id",
-              "                discovered.raw['price'] = price\n                discovered.raw['protection'] = dict(protection)\n                discovered.intent_id = intent_id")
-
-          replace_once('execution/execution_engine.py',
-              "                    raw={'order_role': order_role, 'symbol': symbol, 'side': side, 'price': price}\n",
-              "                    raw={'order_role': order_role, 'symbol': symbol, 'side': side, 'price': price, 'protection': dict(protection)}\n")
-
-          # Persist the actual strategy SL at ENTRY intent creation. The caller has
-          # already completed all strategy filters and computed `sl` before submit.
-          replace_once('main.py',
-              "order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol)",
-              "order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol, protection={'stop_loss': float(sl), 'signal_entry_price': float(entry_price), 'position_side': 'LONG'})")
-
-          replace_once('main.py',
-              "order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol)",
-              "order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol, protection={'stop_loss': float(sl), 'signal_entry_price': float(entry_price), 'position_side': 'SHORT'})")
-
-          # Remove invented 2% recovery SL. Confirmed exchange positions without a
-          # durable/local strategy SL must be quarantined, never assigned a guess.
-          replace_once('core/reconciliation_engine.py',
-              "                                sl_dist = 0.02\n                                fee_adj = fill_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0\n                                if pos_side == 'LONG':\n                                    sl_price = fill_p * (1.0 - sl_dist)\n                                    r_amt = abs(fill_p - sl_price)\n                                    tp1 = fill_p + 1.0 * r_amt + fee_adj\n                                    tp2 = fill_p + 2.2 * r_amt + fee_adj\n                                    tp3 = fill_p + 4.0 * r_amt + fee_adj\n                                else:\n                                    sl_price = fill_p * (1.0 + sl_dist)\n                                    r_amt = abs(fill_p - sl_price)\n                                    tp1 = fill_p - 1.0 * r_amt - fee_adj\n                                    tp2 = fill_p - 2.2 * r_amt - fee_adj\n                                    tp3 = fill_p - 4.0 * r_amt - fee_adj",
-              "                                protection = raw_meta.get('protection') if isinstance(raw_meta.get('protection'), dict) else {}\n                                try:\n                                    sl_price = float(protection.get('stop_loss', 0.0))\n                                except (TypeError, ValueError):\n                                    sl_price = 0.0\n                                if sl_price <= 0.0:\n                                    self.safe_mode_active = True\n                                    ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Recovered ENTRY fill without durable strategy stop-loss')\n                                    print(f'[RECONCILIATION] [ALERT] Confirmed ENTRY fill {i_id} for {symbol} has NO durable strategy SL. SAFE MODE; no invented stop permitted.')\n                                    continue\n                                fee_adj = fill_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0\n                                r_amt = abs(fill_p - sl_price)\n                                if pos_side == 'LONG':\n                                    tp1 = fill_p + 1.0 * r_amt + fee_adj\n                                    tp2 = fill_p + 2.2 * r_amt + fee_adj\n                                    tp3 = fill_p + 4.0 * r_amt + fee_adj\n                                else:\n                                    tp1 = fill_p - 1.0 * r_amt - fee_adj\n                                    tp2 = fill_p - 2.2 * r_amt - fee_adj\n                                    tp3 = fill_p - 4.0 * r_amt - fee_adj")
-
-          # Orphan futures positions: no strategy SL is known, so quarantine rather
-          # than inventing a 2% stop. The existing native-SL branch below will not
-          # fabricate a price because stop_loss remains zero.
-          replace_once('core/reconciliation_engine.py',
-              "                        sl_dist = 0.02\n                        sl_price = entry_p * (1.0 - sl_dist) if self.bot.position_side[symbol] == 'LONG' else entry_p * (1.0 + sl_dist)\n                        self.bot.stop_loss[symbol] = sl_price\n                        r_amt = abs(entry_p - sl_price)\n                        fee_adj = entry_p * Config.FEE_RATE * 2.0",
-              "                        sl_price = float(self.bot.stop_loss.get(symbol, 0.0))\n                        if sl_price <= 0.0:\n                            print(f'[RECONCILIATION] [ALERT] Orphan futures position {symbol} has no durable strategy SL. Quarantining; no invented stop.')\n                            ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Orphan position without durable strategy stop-loss')\n                            self.safe_mode_active = True\n                            self.bot.in_position[symbol] = True\n                            self.bot.position_side[symbol] = self.bot.position_side[symbol] if self.bot.position_side[symbol] in ('LONG', 'SHORT') else 'LONG'\n                            self.bot.position_size[symbol] = contracts\n                            self.bot.entry_price[symbol] = entry_p\n                            self.bot.save_state()\n                            continue\n                        self.bot.stop_loss[symbol] = sl_price\n                        r_amt = abs(entry_p - sl_price)\n                        fee_adj = entry_p * Config.FEE_RATE * 2.0")
-
-          replace_once('core/reconciliation_engine.py',
-              "                                if sl_price <= 0.0:\n                                    entry_p = self.bot.entry_price.get(symbol, float(self.bot.pipeline.latest_prices.get(symbol, 0.0)))\n                                    sl_dist = 0.02\n                                    sl_price = entry_p * (1.0 - sl_dist) if self.bot.position_side[symbol] == 'LONG' else entry_p * (1.0 + sl_dist)\n                                    self.bot.stop_loss[symbol] = sl_price",
-              "                                if sl_price <= 0.0:\n                                    print(f'[RECONCILIATION] [ALERT] Open futures position {symbol} has no known strategy SL. Refusing to invent a recovery stop; emergency flatten required.')\n                                    flatten_res = await exec_engine.emergency_flatten_position(symbol, self.bot.position_side[symbol], contracts, reason='NO_DURABLE_STRATEGY_SL')\n                                    if flatten_res and flatten_res.is_fill_confirmed:\n                                        ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason='Emergency flattened position with no durable strategy SL')\n                                        self.bot.in_position[symbol] = False\n                                        self.bot.position_size[symbol] = 0.0\n                                    else:\n                                        ctx.transition_to(OrderState.EXIT_UNKNOWN, reason='No durable strategy SL and emergency flatten unresolved')\n                                        self.safe_mode_active = True\n                                    self.bot.save_state()\n                                    continue")
-
-          print('Recovery hardening replacements applied successfully.')
+"""
+          if s.count(old) != 1:
+              raise SystemExit(f'LOGIC-001 target count must be 1, got {s.count(old)}')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          print('LOGIC-001 source patch applied')
           PY
 
-      - name: Syntax and targeted regression checks
+      - name: Compile and regression-test the repaired path
         run: |
-          python -m py_compile execution/execution_result.py execution/execution_engine.py core/reconciliation_engine.py main.py
+          python -m py_compile core/reconciliation_engine.py
           python - <<'PY'
           from pathlib import Path
-          files = ['execution/execution_engine.py','core/reconciliation_engine.py','main.py']
-          text = '\n'.join(Path(f).read_text(encoding='utf-8') for f in files)
-          assert 'sl_dist = 0.02' not in text, 'invented 2% reconciliation SL still present'
-          assert "protection={'stop_loss': float(sl)" in Path('main.py').read_text(encoding='utf-8')
-          assert "discovered.raw['protection']" in Path('execution/execution_engine.py').read_text(encoding='utf-8')
-          print('Targeted assertions passed.')
+          s = Path('core/reconciliation_engine.py').read_text(encoding='utf-8')
+          assert 'sl_dist = 0.02' not in s
+          assert "protection.get('stop_loss'" in s
+          assert 'Recovered ENTRY fill without durable strategy stop-loss' in s
+          assert 'no 2% fallback permitted' in s
+          print('LOGIC-001 regression: PASS')
           PY
 
-      - name: Commit hardened recovery path to main
+      - name: Commit only after tests pass
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add execution/execution_engine.py core/reconciliation_engine.py main.py
-          git commit -m 'fix: eliminate invented recovery stop-loss' || exit 0
+          git add core/reconciliation_engine.py
+          git commit -m 'fix: fail closed on crash recovery without durable stop loss'
           git push origin main
