@@ -1,6 +1,8 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from core.immutable_ledger import ImmutableLedger
 from execution.execution_result import ExecutionIntentJournal
 
 
@@ -58,3 +60,28 @@ def test_durable_entry_protection_is_written(tmp_path, monkeypatch):
     record = json.loads(path.read_text(encoding="utf-8").strip())
     assert record["protection"]["stop_loss"] == 99500.0
     assert record["protection"]["position_side"] == "LONG"
+
+
+def test_immutable_ledger_serializes_concurrent_hash_chain_writes(tmp_path):
+    ledger = ImmutableLedger(tmp_path / "ledger.jsonl")
+
+    def write_entry(i: int):
+        return ledger.record_entry(
+            symbol="BTC/USDT",
+            side="LONG",
+            requested_qty=0.001,
+            filled_qty=0.001,
+            fill_price=100000.0 + i,
+            stop_loss=99500.0,
+            tp1=100500.0,
+            tp2=101000.0,
+            runner_tp=102000.0,
+            client_order_id=f"PS_LEDGER_{i}",
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        ids = list(pool.map(write_entry, range(20)))
+
+    assert len(ids) == 20
+    assert len(set(ids)) == 20
+    assert ledger.verify_integrity() is True
