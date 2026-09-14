@@ -1,0 +1,61 @@
+name: Logic 001 indentation fix
+
+on:
+  push:
+    branches: [fix/logic-bugs-sequential]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/logic-bugs-sequential
+          fetch-depth: 0
+      - name: Repair recovery block
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('core/reconciliation_engine.py')
+          s=p.read_text(encoding='utf-8')
+          marker='sl_dist = 0.02'
+          if marker in s:
+              start=s.index(marker)
+              end=s.index('ctx.filled_qty = filled_amount', start)
+              line_start=s.rfind('\n',0,start)+1
+              indent=' ' * (len(s[line_start:start]))
+              new=(indent+"protection = raw_meta.get('protection') if isinstance(raw_meta.get('protection'), dict) else {}\n"
+                   +indent+"try:\n"+indent+"    sl_price = float(protection.get('stop_loss', 0.0))\n"
+                   +indent+"except (TypeError, ValueError):\n"+indent+"    sl_price = 0.0\n"
+                   +indent+"if sl_price <= 0.0:\n"+indent+"    self.safe_mode_active = True\n"
+                   +indent+"    ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Recovered ENTRY fill without durable strategy stop-loss')\n"
+                   +indent+"    print(f'[RECONCILIATION] [ALERT] Confirmed ENTRY fill {i_id} for {symbol} has NO durable strategy SL. SAFE MODE; no invented stop permitted.')\n"
+                   +indent+"    continue\n"+indent+"fee_adj = fill_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0\n"
+                   +indent+"r_amt = abs(fill_p - sl_price)\n"+indent+"if pos_side == 'LONG':\n"
+                   +indent+"    tp1 = fill_p + 1.0 * r_amt + fee_adj\n"+indent+"    tp2 = fill_p + 2.2 * r_amt + fee_adj\n"+indent+"    tp3 = fill_p + 4.0 * r_amt + fee_adj\n"+indent+"else:\n"
+                   +indent+"    tp1 = fill_p - 1.0 * r_amt - fee_adj\n"+indent+"    tp2 = fill_p - 2.2 * r_amt - fee_adj\n"+indent+"    tp3 = fill_p - 4.0 * r_amt - fee_adj\n")
+              s=s[:line_start]+new+s[end:]
+              p.write_text(s,encoding='utf-8')
+          print('indent repair applied')
+          PY
+      - name: Test
+        run: |
+          python -m py_compile core/reconciliation_engine.py
+          python - <<'PY'
+          from pathlib import Path
+          r=Path('core/reconciliation_engine.py').read_text(encoding='utf-8')
+          assert 'sl_dist = 0.02' not in r
+          assert "protection.get('stop_loss'" in r
+          print('LOGIC-001 recovery SL test PASS')
+          PY
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add core/reconciliation_engine.py
+          git commit -m 'fix: correct recovery stop-loss indentation' || exit 0
+          git push origin fix/logic-bugs-sequential
