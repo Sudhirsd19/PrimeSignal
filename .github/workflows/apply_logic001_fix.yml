@@ -5,9 +5,6 @@ on:
     branches: [fix/logic-bugs-sequential]
     paths:
       - '.github/workflows/apply_logic001_fix.yml'
-      - 'core/reconciliation_engine.py'
-      - 'execution/execution_engine.py'
-      - 'main.py'
   workflow_dispatch:
 
 jobs:
@@ -20,12 +17,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply LOGIC-001 patch
+      - name: Patch recovery safety invariant
         run: |
           python - <<'PY'
           from pathlib import Path
-          
-          # 1) Never invent a recovery SL after restart.
           p = Path('core/reconciliation_engine.py')
           t = p.read_text(encoding='utf-8')
           old = """                                sl_dist = 0.02
@@ -42,8 +37,11 @@ jobs:
                                     tp1 = fill_p - 1.0 * r_amt - fee_adj
                                     tp2 = fill_p - 2.2 * r_amt - fee_adj
                                     tp3 = fill_p - 4.0 * r_amt - fee_adj
+
 """
-          new = """                                protection = raw_meta.get('protection') if isinstance(raw_meta.get('protection'), dict) else {}
+          new = """                                # LOGIC-001: Never invent a synthetic recovery SL after restart.
+                                # A confirmed fill without the original strategy protection is unsafe to adopt.
+                                protection = raw_meta.get('protection') if isinstance(raw_meta.get('protection'), dict) else {}
                                 try:
                                     sl_price = float(protection.get('stop_loss', 0.0))
                                 except (TypeError, ValueError):
@@ -55,8 +53,8 @@ jobs:
                                         reason='Recovered ENTRY fill without durable strategy stop-loss',
                                     )
                                     print(
-                                        f'[RECONCILIATION CRITICAL] ENTRY {i_id} for {symbol} has no durable stop-loss; '
-                                        'position remains quarantined in SAFE MODE rather than inventing a recovery SL.'
+                                        f'[RECONCILIATION CRITICAL] ENTRY {i_id} for {symbol} has no durable strategy SL; '
+                                        'recovery quarantined in SAFE MODE; no 2% fallback permitted.'
                                     )
                                     continue
 
@@ -66,7 +64,7 @@ jobs:
                                     self.safe_mode_active = True
                                     ctx.transition_to(
                                         OrderState.EXECUTION_UNKNOWN,
-                                        reason='Recovered ENTRY has invalid non-positive strategy stop distance',
+                                        reason='Recovered ENTRY has invalid non-positive stop distance',
                                     )
                                     continue
                                 if pos_side == 'LONG':
@@ -77,102 +75,29 @@ jobs:
                                     tp1 = fill_p - 1.0 * r_amt - fee_adj
                                     tp2 = fill_p - 2.2 * r_amt - fee_adj
                                     tp3 = fill_p - 4.0 * r_amt - fee_adj
+
 """
-          if old in t:
-              t = t.replace(old, new, 1)
-          elif 'sl_dist = 0.02' in t:
-              raise SystemExit('Found LOGIC-001 code but exact recovery block changed; refusing unsafe edit')
-          else:
-              raise SystemExit('Recovery SL block not found')
-          p.write_text(t, encoding='utf-8')
-          
-          # 2) Persist protection metadata on the durable ENTRY intent.
-          p = Path('execution/execution_engine.py')
-          t = p.read_text(encoding='utf-8')
-          sig = '        is_exit_order: bool = False,\n    ) -> tuple[str, str]:'
-          if 'protection: dict[str, Any] | None = None,' not in t:
-              if sig not in t:
-                  raise SystemExit('prepare_order_intent signature not found')
-              t = t.replace(sig, '        is_exit_order: bool = False,\n        protection: dict[str, Any] | None = None,\n    ) -> tuple[str, str]:', 1)
-              journal = "            order_role=order_role,\n            price=price,\n        )"
-              if journal not in t:
-                  raise SystemExit('intent journal call not found')
-              t = t.replace(journal, "            order_role=order_role,\n            price=price,\n            protection=protection,\n        )", 1)
-          place_sig = '                          intent_id=None, client_order_id=None):'
-          if 'intent_id=None, client_order_id=None, protection=None):' not in t:
-              if place_sig not in t:
-                  raise SystemExit('place_order signature not found')
-              t = t.replace(place_sig, '                          intent_id=None, client_order_id=None, protection=None):', 1)
-              call = '                is_exit_order=is_exit_order,\n            )'
-              if call not in t:
-                  raise SystemExit('prepare_order_intent call not found')
-              t = t.replace(call, '                is_exit_order=is_exit_order,\n                protection=protection,\n            )', 1)
-          # Preserve protection during unresolved-intent replay.
-          marker = "                discovered.raw['price'] = price\n"
-          inject = "                discovered.raw['price'] = price\n                discovered.raw['protection'] = dict(intent.get('protection') or {})\n"
-          if "discovered.raw['protection'] = dict(intent.get('protection') or {})" not in t:
-              if marker not in t:
-                  raise SystemExit('replay raw metadata marker not found')
-              t = t.replace(marker, inject, 2)
-          # Rejected replay should retain metadata too.
-          rej = "                    raw={'order_role': order_role, 'symbol': symbol, 'side': side, 'price': price}\n"
-          if rej in t:
-              t = t.replace(rej, "                    raw={'order_role': order_role, 'symbol': symbol, 'side': side, 'price': price, 'protection': dict(intent.get('protection') or {})}\n", 1)
-          p.write_text(t, encoding='utf-8')
-          
-          # 3) Pass the strategy SL into the ENTRY durable intent from both directions.
-          p = Path('main.py')
-          t = p.read_text(encoding='utf-8')
-          buy_old = "order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol)"
-          buy_new = "order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol, order_role='ENTRY', protection={'stop_loss': float(sl), 'signal_entry_price': float(entry_price), 'position_side': 'LONG'})"
-          sell_old = "order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol)"
-          sell_new = "order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol, order_role='ENTRY', protection={'stop_loss': float(sl), 'signal_entry_price': float(entry_price), 'position_side': 'SHORT'})"
-          if buy_old in t:
-              t = t.replace(buy_old, buy_new, 1)
-          elif buy_new not in t:
-              raise SystemExit('BUY ENTRY call not found')
-          if sell_old in t:
-              t = t.replace(sell_old, sell_new, 1)
-          elif sell_new not in t:
-              raise SystemExit('SELL ENTRY call not found')
-          p.write_text(t, encoding='utf-8')
-          print('LOGIC-001 patch applied')
+          if old not in t:
+              raise SystemExit('Expected LOGIC-001 recovery block not found')
+          p.write_text(t.replace(old, new, 1), encoding='utf-8')
           PY
 
-      - name: Add regression tests
+      - name: Syntax and regression checks
         run: |
-          cat > tests/test_logic_001_recovery_protection.py <<'PY'
+          python -m py_compile core/reconciliation_engine.py
+          python - <<'PY'
           from pathlib import Path
-          import ast
-          
-          def test_no_hardcoded_two_percent_recovery_sl():
-              source = Path('core/reconciliation_engine.py').read_text(encoding='utf-8')
-              assert 'sl_dist = 0.02' not in source
-              assert "protection.get('stop_loss'" in source
-              assert 'Recovered ENTRY fill without durable strategy stop-loss' in source
-          
-          def test_protection_persisted_and_replayed():
-              source = Path('execution/execution_engine.py').read_text(encoding='utf-8')
-              assert 'protection: dict[str, Any] | None = None' in source
-              assert 'protection=protection' in source
-              assert "discovered.raw['protection'] = dict(intent.get('protection') or {})" in source
-          
-          def test_entry_calls_pass_strategy_stop():
-              source = Path('main.py').read_text(encoding='utf-8')
-              assert "order_role='ENTRY', protection={'stop_loss': float(sl)" in source
-              ast.parse(source)
+          s = Path('core/reconciliation_engine.py').read_text(encoding='utf-8')
+          assert 'sl_dist = 0.02' not in s
+          assert "protection.get('stop_loss'" in s
+          assert 'no 2% fallback permitted' in s
+          print('LOGIC-001 PASS: no hard-coded recovery SL; missing protection fails closed.')
           PY
-          python -m py_compile core/reconciliation_engine.py execution/execution_engine.py main.py
-          pytest -q tests/test_logic_001_recovery_protection.py
 
-      - name: Commit only after tests pass
+      - name: Commit verified fix
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add core/reconciliation_engine.py execution/execution_engine.py main.py tests/test_logic_001_recovery_protection.py
-          if git diff --cached --quiet; then
-            echo 'No production/test changes to commit.'
-          else
-            git commit -m 'fix: recover durable strategy stop loss after restart'
-            git push
-          fi
+          git add core/reconciliation_engine.py
+          git commit -m 'fix: fail closed on crash recovery without durable stop loss'
+          git push
