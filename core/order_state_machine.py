@@ -81,9 +81,39 @@ class PositionContext:
     def is_active(self):
         return self.state not in (OrderState.IDLE, OrderState.CLOSED, OrderState.REJECTED, OrderState.EMERGENCY_FLATTENED)
     def is_protected(self):
-        return self.state in (OrderState.PROTECTED, OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE)
+        return self.state in (OrderState.PROTECTED, OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE) and self._protection_error() is None
     def is_in_flight(self):
         return self.state in (OrderState.ORDER_INTENT_CREATED, OrderState.ORDER_SUBMITTED, OrderState.EXECUTION_UNKNOWN, OrderState.EXIT_UNKNOWN, OrderState.SL_PLACEMENT_PENDING)
+
+    def _protection_error(self):
+        if self.filled_qty <= 0.0:
+            return "filled_qty must be > 0"
+        if self.entry_price <= 0.0:
+            return "entry_price must be > 0"
+        if self.stop_loss <= 0.0:
+            return "stop_loss must be > 0"
+
+        side = self.side
+        if side == "HOLD":
+            if self.stop_loss < self.entry_price:
+                side = "LONG"
+            elif self.stop_loss > self.entry_price:
+                side = "SHORT"
+            else:
+                return "cannot infer position side from entry/stop"
+        if side not in ("LONG", "SHORT"):
+            return "side must be LONG or SHORT"
+        if side == "LONG" and self.stop_loss >= self.entry_price:
+            return "LONG stop_loss must be below entry_price"
+        if side == "SHORT" and self.stop_loss <= self.entry_price:
+            return "SHORT stop_loss must be above entry_price"
+        return None
+
+    def _validate_and_normalize_protection(self):
+        error = self._protection_error()
+        if error is None and self.side == "HOLD":
+            self.side = "LONG" if self.stop_loss < self.entry_price else "SHORT"
+        return error
 
     def transition_to(self, new_state: OrderState, reason: str = "", metadata: Optional[Dict[str, Any]] = None) -> bool:
         prev_state = self.state
@@ -92,33 +122,21 @@ class PositionContext:
         except (TypeError, ValueError):
             print(f"[STATE MACHINE] [{self.symbol}] INVALID target state: {new_state}")
             return False
-        if new_state == prev_state:
-            return True
-        allowed = self._LEGAL_TRANSITIONS.get(prev_state, set())
-        if new_state not in allowed:
-            print(f"[STATE MACHINE] [{self.symbol}] BLOCKED invalid transition {prev_state.value} -> {new_state.value} ({reason})")
-            self.history.append({'timestamp': time.time(), 'from_state': prev_state.value, 'to_state': new_state.value, 'reason': reason, 'blocked': True, 'filled_qty': self.filled_qty, 'entry_price': self.entry_price, 'stop_loss': self.stop_loss, 'metadata': metadata or {}})
-            if len(self.history) > 50:
-                self.history.pop(0)
-            return False
 
-        # P0 safety invariant: a context may enter PROTECTED only when it
-        # actually contains a usable position and a directional stop-loss.
+        is_same_state = new_state == prev_state
+        if not is_same_state:
+            allowed = self._LEGAL_TRANSITIONS.get(prev_state, set())
+            if new_state not in allowed:
+                print(f"[STATE MACHINE] [{self.symbol}] BLOCKED invalid transition {prev_state.value} -> {new_state.value} ({reason})")
+                self.history.append({'timestamp': time.time(), 'from_state': prev_state.value, 'to_state': new_state.value, 'reason': reason, 'blocked': True, 'filled_qty': self.filled_qty, 'entry_price': self.entry_price, 'stop_loss': self.stop_loss, 'metadata': metadata or {}})
+                if len(self.history) > 50:
+                    self.history.pop(0)
+                return False
+
+        # P0 safety invariant: a context may enter (or remain) PROTECTED only
+        # with a real position and a valid directional stop-loss.
         if new_state == OrderState.PROTECTED:
-            protection_error = None
-            if self.filled_qty <= 0.0:
-                protection_error = "filled_qty must be > 0"
-            elif self.entry_price <= 0.0:
-                protection_error = "entry_price must be > 0"
-            elif self.side not in ("LONG", "SHORT"):
-                protection_error = "side must be LONG or SHORT"
-            elif self.stop_loss <= 0.0:
-                protection_error = "stop_loss must be > 0"
-            elif self.side == "LONG" and self.stop_loss >= self.entry_price:
-                protection_error = "LONG stop_loss must be below entry_price"
-            elif self.side == "SHORT" and self.stop_loss <= self.entry_price:
-                protection_error = "SHORT stop_loss must be above entry_price"
-
+            protection_error = self._validate_and_normalize_protection()
             if protection_error:
                 fail_reason = "PROTECTED invariant failed: " + protection_error
                 now = time.time()
@@ -142,6 +160,8 @@ class PositionContext:
                 print(f"[STATE MACHINE] [{self.symbol}] FAIL-CLOSED PROTECTION BLOCK: {fail_reason}")
                 return False
 
+        if is_same_state:
+            return True
         self.state = new_state
         self.last_transition_time = time.time()
         self.history.append({'timestamp': self.last_transition_time, 'from_state': prev_state.value, 'to_state': new_state.value, 'reason': reason, 'blocked': False, 'filled_qty': self.filled_qty, 'entry_price': self.entry_price, 'stop_loss': self.stop_loss, 'metadata': metadata or {}})
@@ -181,6 +201,10 @@ class PositionContext:
         for attr in ('entry_order_id','client_order_id','intent_id','exit_order_id','exit_client_order_id','native_sl_order_id','native_tp1_order_id','native_tp2_order_id','zone_id','exit_reason','reservation_id'):
             setattr(ctx, attr, data.get(attr, getattr(ctx, attr, None)))
         ctx.history = data.get('history', []) if isinstance(data.get('history', []), list) else []
+        if ctx.state in (OrderState.PROTECTED, OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE):
+            if ctx._validate_and_normalize_protection() is not None:
+                ctx.state = OrderState.EXECUTION_UNKNOWN
+                ctx.execution_state = "EXECUTION_UNKNOWN"
         return ctx
 
 class OrderStateMachine:
