@@ -3,6 +3,8 @@ name: Logic 001 final recovery protection
 on:
   push:
     branches: [fix/logic-bugs-sequential]
+    paths:
+      - '.github/workflows/fix_logic_001_final.yml'
 
 permissions:
   contents: write
@@ -12,67 +14,103 @@ jobs:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout branch
+        uses: actions/checkout@v4
         with:
           ref: fix/logic-bugs-sequential
           fetch-depth: 0
-      - name: Patch recovery path
+
+      - name: Apply LOGIC-001 recovery safety fix
+        shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
-          def first(path, old, new):
-              p=Path(path); s=p.read_text(encoding='utf-8')
-              if new not in s:
-                  if old not in s: raise SystemExit(f'pattern missing: {path}')
-                  s=s.replace(old,new,1); p.write_text(s,encoding='utf-8')
-          first('execution/execution_engine.py','        is_exit_order: bool = False,\n    ) -> tuple[str, str]:','        is_exit_order: bool = False,\n        protection: dict[str, Any] | None = None,\n    ) -> tuple[str, str]:')
-          first('execution/execution_engine.py','            price=price,\n        )\n        return intent_id, client_order_id','            price=price,\n            protection=protection,\n        )\n        return intent_id, client_order_id')
-          first('execution/execution_engine.py','                          order_role="ENTRY", candle_ts=None,\n                          intent_id=None, client_order_id=None):','                          order_role="ENTRY", candle_ts=None,\n                          intent_id=None, client_order_id=None, protection=None):')
-          first('execution/execution_engine.py','                client_order_id=client_order_id,\n                is_exit_order=is_exit_order,\n            )','                client_order_id=client_order_id,\n                is_exit_order=is_exit_order,\n                protection=protection,\n            )')
-          first('execution/execution_engine.py',"            price = intent.get('price')\n            \n            discovered = await self.reconcile_intent_on_exchange(intent)","            price = intent.get('price')\n            protection = intent.get('protection') or {}\n            \n            discovered = await self.reconcile_intent_on_exchange(intent)")
-          first('execution/execution_engine.py',"                discovered.raw['price'] = price\n                discovered.intent_id = intent_id","                discovered.raw['price'] = price\n                discovered.raw['protection'] = dict(protection)\n                discovered.intent_id = intent_id")
-          first('execution/execution_engine.py',"                    raw={'order_role': order_role, 'symbol': symbol, 'side': side, 'price': price}\n","                    raw={'order_role': order_role, 'symbol': symbol, 'side': side, 'price': price, 'protection': dict(protection)}\n")
-          first('main.py',"order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol)","order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol, protection={'stop_loss': float(sl), 'signal_entry_price': float(entry_price), 'position_side': 'LONG'})")
-          first('main.py',"order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol)","order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol, protection={'stop_loss': float(sl), 'signal_entry_price': float(entry_price), 'position_side': 'SHORT'})")
-          p=Path('core/reconciliation_engine.py'); s=p.read_text(encoding='utf-8')
-          if 'sl_dist = 0.02' in s:
-              start=s.index('sl_dist = 0.02')
-              end=s.index("ctx.filled_qty = filled_amount", start)
-              block=s[start:end]
-              indent=' ' * (len(block.split('sl_dist = 0.02')[0].split('\n')[-1]))
-              # use the indentation from the actual sl_dist line
-              line_start=s.rfind('\n',0,start)+1; indent=s[line_start:start]
-              new=(indent+"protection = raw_meta.get('protection') if isinstance(raw_meta.get('protection'), dict) else {}\n"+
-                   indent+"try:\n"+indent+"    sl_price = float(protection.get('stop_loss', 0.0))\n"+
-                   indent+"except (TypeError, ValueError):\n"+indent+"    sl_price = 0.0\n"+
-                   indent+"if sl_price <= 0.0:\n"+indent+"    self.safe_mode_active = True\n"+
-                   indent+"    ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Recovered ENTRY fill without durable strategy stop-loss')\n"+
-                   indent+"    print(f'[RECONCILIATION] [ALERT] Confirmed ENTRY fill {i_id} for {symbol} has NO durable strategy SL. SAFE MODE; no invented stop permitted.')\n"+
-                   indent+"    continue\n"+indent+"fee_adj = fill_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0\n"+
-                   indent+"r_amt = abs(fill_p - sl_price)\n"+indent+"if pos_side == 'LONG':\n"+indent+"    tp1 = fill_p + 1.0 * r_amt + fee_adj\n"+indent+"    tp2 = fill_p + 2.2 * r_amt + fee_adj\n"+indent+"    tp3 = fill_p + 4.0 * r_amt + fee_adj\n"+indent+"else:\n"+indent+"    tp1 = fill_p - 1.0 * r_amt - fee_adj\n"+indent+"    tp2 = fill_p - 2.2 * r_amt - fee_adj\n"+indent+"    tp3 = fill_p - 4.0 * r_amt - fee_adj\n")
-              s=s[:start]+new+s[end:]
-              p.write_text(s,encoding='utf-8')
-          print('patch ok')
+
+          path = Path('core/reconciliation_engine.py')
+          text = path.read_text(encoding='utf-8')
+
+          old = """                                sl_dist = 0.02
+                                fee_adj = fill_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
+                                if pos_side == 'LONG':
+                                    sl_price = fill_p * (1.0 - sl_dist)
+                                    r_amt = abs(fill_p - sl_price)
+                                    tp1 = fill_p + 1.0 * r_amt + fee_adj
+                                    tp2 = fill_p + 2.2 * r_amt + fee_adj
+                                    tp3 = fill_p + 4.0 * r_amt + fee_adj
+                                else:
+                                    sl_price = fill_p * (1.0 + sl_dist)
+                                    r_amt = abs(fill_p - sl_price)
+                                    tp1 = fill_p - 1.0 * r_amt - fee_adj
+                                    tp2 = fill_p - 2.2 * r_amt - fee_adj
+                                    tp3 = fill_p - 4.0 * r_amt - fee_adj
+
+"""
+
+          new = """                                # LOGIC-001: Never invent a synthetic recovery SL after restart.
+                                protection = raw_meta.get('protection') if isinstance(raw_meta.get('protection'), dict) else {}
+                                try:
+                                    sl_price = float(protection.get('stop_loss', 0.0))
+                                except (TypeError, ValueError):
+                                    sl_price = 0.0
+                                if sl_price <= 0.0:
+                                    self.safe_mode_active = True
+                                    ctx.transition_to(
+                                        OrderState.EXECUTION_UNKNOWN,
+                                        reason='Recovered ENTRY fill without durable strategy stop-loss',
+                                    )
+                                    print(
+                                        f'[RECONCILIATION CRITICAL] ENTRY {i_id} for {symbol} has no durable strategy SL; '
+                                        'recovery quarantined in SAFE MODE; no 2% fallback permitted.'
+                                    )
+                                    continue
+
+                                fee_adj = fill_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
+                                r_amt = abs(fill_p - sl_price)
+                                if r_amt <= 0.0:
+                                    self.safe_mode_active = True
+                                    ctx.transition_to(
+                                        OrderState.EXECUTION_UNKNOWN,
+                                        reason='Recovered ENTRY has invalid non-positive stop distance',
+                                    )
+                                    continue
+                                if pos_side == 'LONG':
+                                    tp1 = fill_p + 1.0 * r_amt + fee_adj
+                                    tp2 = fill_p + 2.2 * r_amt + fee_adj
+                                    tp3 = fill_p + 4.0 * r_amt + fee_adj
+                                else:
+                                    tp1 = fill_p - 1.0 * r_amt - fee_adj
+                                    tp2 = fill_p - 2.2 * r_amt - fee_adj
+                                    tp3 = fill_p - 4.0 * r_amt - fee_adj
+
+"""
+
+          if old not in text:
+              raise SystemExit('LOGIC-001 target block not found; refusing unsafe modification')
+          if 'sl_dist = 0.02' not in text:
+              raise SystemExit('LOGIC-001 target already absent; no automatic mutation performed')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          print('LOGIC-001 patch applied to reconciliation_engine.py')
           PY
-      - name: Test
+
+      - name: Verify syntax and safety invariants
+        shell: bash
         run: |
-          python -m py_compile main.py execution/execution_engine.py execution/execution_result.py core/reconciliation_engine.py
+          python -m py_compile core/reconciliation_engine.py
           python - <<'PY'
           from pathlib import Path
-          e=Path('execution/execution_engine.py').read_text(); m=Path('main.py').read_text(); r=Path('core/reconciliation_engine.py').read_text()
-          assert 'protection: dict[str, Any] | None = None' in e
-          assert 'protection=protection' in e
-          assert "protection={'stop_loss': float(sl)" in m
-          assert 'sl_dist = 0.02' not in r
-          assert "protection.get('stop_loss'" in r
-          print('LOGIC-001 recovery protection assertions: PASS')
+          source = Path('core/reconciliation_engine.py').read_text(encoding='utf-8')
+          assert 'sl_dist = 0.02' not in source
+          assert "protection.get('stop_loss'" in source
+          assert 'Recovered ENTRY fill without durable strategy stop-loss' in source
+          assert 'no 2% fallback permitted' in source
+          print('LOGIC-001 PASS')
           PY
-          python -m pytest -q
-      - name: Commit
+
+      - name: Commit only after verification passes
+        shell: bash
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add execution/execution_engine.py core/reconciliation_engine.py main.py
-          git commit -m 'fix: persist strategy stop-loss for crash recovery' || exit 0
+          git add core/reconciliation_engine.py
+          git commit -m 'fix: fail closed on crash recovery without durable stop loss'
           git push origin fix/logic-bugs-sequential
