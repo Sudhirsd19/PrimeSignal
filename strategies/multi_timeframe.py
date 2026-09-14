@@ -95,6 +95,15 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             
         htf_eval_idx = -2 if current_time_ms < (htf_last_ts_ms + htf_ms) else -1
 
+        # HTF freshness is a hard safety gate. Never trade on stale HTF context.
+        max_htf_staleness_mult = float(getattr(Config, 'HTF_MAX_STALENESS_MULT', 2.0))
+        if not math.isfinite(max_htf_staleness_mult) or max_htf_staleness_mult <= 0:
+            max_htf_staleness_mult = 2.0
+        htf_age_ms = current_time_ms - float(htf_last_ts_ms)
+        if htf_age_ms < 0 or htf_age_ms > (htf_ms * max_htf_staleness_mult):
+            metadata['reason'] = f"Stale HTF data (age {max(0.0, htf_age_ms) / 60000.0:.1f}m > {htf_ms * max_htf_staleness_mult / 60000.0:.1f}m limit)"
+            return "HOLD", metadata
+
         htf_ema_50 = calculate_ema(htf_df, 50)
         htf_ema_200 = calculate_ema(htf_df, 200)
         
