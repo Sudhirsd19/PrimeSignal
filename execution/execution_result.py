@@ -173,7 +173,6 @@ class ExecutionResult:
         filled = _first_number(order, ("filled", "filled_quantity", "executedQty", "deal_quantity", "quantity"), 0.0)
         remaining = _first_number(order, ("remaining", "remaining_quantity"), max(0.0, requested - filled))
         if status in ("filled", "closed", "completed") and filled <= 0.0:
-            # Only a terminal filled status permits amount to represent filled quantity.
             filled = requested
             remaining = 0.0
         elif filled > 0.0 and remaining <= 0.0 and requested > filled:
@@ -252,9 +251,11 @@ class ExecutionIntentJournal:
         requested_qty: float,
         order_role: str,
         price: Optional[float],
+        protection: Optional[dict[str, Any]] = None,
     ) -> None:
         if intent_id in self.latest():
             return
+        normalized_protection = dict(protection or {})
         self.append({
             "event": "INTENT_CREATED",
             "intent_id": intent_id,
@@ -266,10 +267,9 @@ class ExecutionIntentJournal:
             "requested_qty": requested_qty,
             "order_role": order_role,
             "price": price,
+            "protection": normalized_protection,
             "created_at": time.time(),
             "state": "ORDER_INTENT_CREATED",
-            # The intent UUID also serves as the durable reservation identity
-            # unless a caller supplies a separate reservation record.
             "reservation_id": intent_id,
         })
 
@@ -299,9 +299,6 @@ class ExecutionIntentJournal:
                     record = json.loads(line)
                     key = record.get("intent_id")
                     if key:
-                        # Keep the original intent metadata (symbol, side,
-                        # account mode, role) when a later result event is
-                        # appended.  Restart recovery needs both.
                         merged = dict(latest.get(key, {}))
                         merged.update(record)
                         latest[key] = merged
