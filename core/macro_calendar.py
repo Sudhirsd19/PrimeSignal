@@ -1,8 +1,9 @@
 """PrimeSignal economic-calendar safety filter.
 
-When the macro filter is enabled, absence or failure of calendar data is a
-hard safety condition. The bot must not silently trade while its news blackout
-source is unavailable.
+Live trading fails closed when the enabled calendar source is unavailable.
+Paper mode intentionally stays runnable when no calendar data is available so
+simulation is not confused with a broken scanner; the live fail-closed rule is
+unchanged.
 """
 from __future__ import annotations
 
@@ -127,9 +128,13 @@ class MacroNewsCalendar:
         if not getattr(Config, "ENABLE_MACRO_NEWS_FILTER", True): return False, ""
         now = now_utc or datetime.now(timezone.utc)
         events = self.relevant_events()
-        # P0 safety invariant: enabled + unavailable calendar = halt new entries.
+        # Live safety invariant: enabled + unavailable calendar = halt new entries.
+        # Paper mode is explicitly a simulation and must remain usable when the
+        # optional external calendar source is unavailable.
         if not events:
             reason = f"Macro calendar unavailable — trading halted ({self.last_error or 'no relevant calendar events loaded'})"
+            if getattr(Config, "PAPER_TRADING", False):
+                return False, f"Paper mode: macro calendar unavailable; live fail-closed rule not applied"
             return True, reason
         before = timedelta(minutes=int(getattr(Config, "NEWS_BLACKOUT_BEFORE_MIN", 15)))
         after = timedelta(minutes=int(getattr(Config, "NEWS_BLACKOUT_AFTER_MIN", 20)))
@@ -158,4 +163,4 @@ class MacroNewsCalendar:
     def describe_mode(self):
         if not getattr(Config, "ENABLE_MACRO_NEWS_FILTER", True): return "DISABLED"
         if self.events: return f"CALENDAR ({self.source}, {len(self.relevant_events())} relevant events)"
-        return f"CALENDAR UNAVAILABLE — trading halted ({self.last_error or 'not yet fetched'})"
+        return "PAPER MODE — CALENDAR UNAVAILABLE (entries allowed)" if getattr(Config, "PAPER_TRADING", False) else f"CALENDAR UNAVAILABLE — trading halted ({self.last_error or 'not yet fetched'})"

@@ -256,6 +256,26 @@ class ExecutionIntentJournal:
         if intent_id in self.latest():
             return
         normalized_protection = dict(protection or {})
+
+        # Live ENTRY orders must carry an explicit strategy stop before the
+        # exchange mutation is even considered. This closes the dangerous gap
+        # where reconciliation had a fail-closed path but the live submit path
+        # could still create an unprotected durable intent.
+        if str(order_role).upper() == "ENTRY":
+            try:
+                from config import Config
+                is_paper = bool(getattr(Config, "PAPER_TRADING", True))
+            except Exception:
+                is_paper = True
+            if not is_paper:
+                try:
+                    stop_loss = float(normalized_protection.get("stop_loss", 0.0))
+                except (TypeError, ValueError):
+                    stop_loss = 0.0
+                position_side = str(normalized_protection.get("position_side", "")).upper()
+                if stop_loss <= 0.0 or position_side not in ("LONG", "SHORT"):
+                    raise ValueError("LIVE ENTRY requires durable protection.stop_loss and protection.position_side")
+
         self.append({
             "event": "INTENT_CREATED",
             "intent_id": intent_id,

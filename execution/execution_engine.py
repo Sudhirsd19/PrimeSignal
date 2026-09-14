@@ -74,6 +74,7 @@ class ExecutionEngine:
         intent_id: str | None = None,
         client_order_id: str | None = None,
         is_exit_order: bool = False,
+        protection: Optional[dict[str, Any]] = None,
     ) -> tuple[str, str]:
         """Create and durably record one economic intent before submission."""
         intent_id = intent_id or new_intent_id()
@@ -90,6 +91,7 @@ class ExecutionEngine:
             requested_qty=amount,
             order_role=order_role,
             price=price,
+            protection=protection,
         )
         return intent_id, client_order_id
 
@@ -266,7 +268,7 @@ class ExecutionEngine:
                           max_slippage_pct=0.005, symbol=None,
                           is_exit_order=False, confirm_fill=True,
                           order_role="ENTRY", candle_ts=None,
-                          intent_id=None, client_order_id=None):
+                          intent_id=None, client_order_id=None, protection=None):
         """
         Routes orders with slippage checks, retry logic, and fill confirmation.
 
@@ -290,6 +292,7 @@ class ExecutionEngine:
                 intent_id=intent_id,
                 client_order_id=client_order_id,
                 is_exit_order=is_exit_order,
+                protection=protection,
             )
         except Exception as e:
             return ExecutionResult(

@@ -47,7 +47,6 @@ class ReconciliationEngine:
         except Exception:
             pass
         try:
-            # Phase 5 & 7: Replay and resolve any unresolved execution intents before broker audit!
             if hasattr(self.bot, 'execution') and hasattr(self.bot.execution, 'replay_and_resolve_unresolved_intents'):
                 try:
                     print('[RECONCILIATION] Replaying unresolved execution intents from durable journal...')
@@ -65,8 +64,7 @@ class ReconciliationEngine:
                             print(f'[RECONCILIATION] [ALERT] Unresolved intent {i_id} remains UNKNOWN. SAFE MODE ACTIVATED.')
                         except Exception:
                             pass
-                    
-                    # Phase 8 Fix (AUD-P1-02): Spot & Crash Startup Intent Recovery for all roles (ENTRY, TP1, TP2, EXIT, SL, EMERGENCY)
+
                     raw_meta = getattr(res, 'raw', {}) or {}
                     order_role = str(raw_meta.get('order_role') or getattr(res, 'order_role', 'ENTRY')).upper()
                     symbol = raw_meta.get('symbol') or getattr(res, 'symbol', None) or Config.SYMBOL
@@ -82,17 +80,53 @@ class ReconciliationEngine:
                         if order_role == 'ENTRY':
                             if not self.bot.in_position.get(symbol, False) or ctx.state in (OrderState.IDLE, OrderState.ORDER_INTENT_CREATED, OrderState.ORDER_SUBMITTED):
                                 pos_side = 'LONG' if str(side).upper() in ('BUY', 'LONG') else 'SHORT'
-                                sl_dist = 0.02
+                                protection = raw_meta.get('protection') if isinstance(raw_meta.get('protection'), dict) else {}
+                                try:
+                                    sl_price = float(protection.get('stop_loss', 0.0))
+                                except (TypeError, ValueError):
+                                    sl_price = 0.0
+
+                                if sl_price <= 0.0:
+                                    print(f'[RECONCILIATION CRITICAL] ENTRY {i_id} for {symbol} has no durable strategy SL. No synthetic 2% stop will be created; attempting emergency flatten.')
+                                    self.safe_mode_active = True
+                                    ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Recovered ENTRY fill without durable strategy stop-loss')
+                                    try:
+                                        self.bot.in_position[symbol] = True
+                                        self.bot.position_side[symbol] = pos_side
+                                        self.bot.position_size[symbol] = filled_amount
+                                        self.bot.entry_price[symbol] = fill_p
+                                        flatten_res = await self.bot.execution.emergency_flatten_position(symbol, pos_side, filled_amount, reason='NO_DURABLE_STRATEGY_SL')
+                                        if flatten_res and flatten_res.is_fill_confirmed:
+                                            actual_flatten = float(flatten_res.filled_qty or filled_amount)
+                                            remaining_qty = max(0.0, filled_amount - actual_flatten)
+                                            self.bot.position_size[symbol] = remaining_qty
+                                            if remaining_qty <= 1e-5:
+                                                self.bot.in_position[symbol] = False
+                                                self.bot.position_side[symbol] = 'HOLD'
+                                                ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason='Recovered ENTRY lacked durable SL; emergency flattened')
+                                            else:
+                                                ctx.transition_to(OrderState.EXIT_UNKNOWN, reason='Recovered ENTRY lacked durable SL; emergency flatten partially filled')
+                                        else:
+                                            ctx.transition_to(OrderState.EXIT_UNKNOWN, reason='Recovered ENTRY lacked durable SL; emergency flatten failed or unknown')
+                                    except Exception as e:
+                                        ctx.transition_to(OrderState.EXIT_UNKNOWN, reason=f'Failed emergency flatten without durable SL: {e}')
+                                        print(f'[RECONCILIATION CRITICAL] Emergency flatten error for {symbol}: {e}')
+                                    self.bot.save_state()
+                                    continue
+
                                 fee_adj = fill_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
+                                r_amt = abs(fill_p - sl_price)
+                                if r_amt <= 0.0:
+                                    self.safe_mode_active = True
+                                    ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Recovered ENTRY has invalid non-positive stop distance')
+                                    print(f'[RECONCILIATION CRITICAL] ENTRY {i_id} for {symbol} has invalid durable stop distance. Recovery quarantined.')
+                                    continue
+
                                 if pos_side == 'LONG':
-                                    sl_price = fill_p * (1.0 - sl_dist)
-                                    r_amt = abs(fill_p - sl_price)
                                     tp1 = fill_p + 1.0 * r_amt + fee_adj
                                     tp2 = fill_p + 2.2 * r_amt + fee_adj
                                     tp3 = fill_p + 4.0 * r_amt + fee_adj
                                 else:
-                                    sl_price = fill_p * (1.0 + sl_dist)
-                                    r_amt = abs(fill_p - sl_price)
                                     tp1 = fill_p - 1.0 * r_amt - fee_adj
                                     tp2 = fill_p - 2.2 * r_amt - fee_adj
                                     tp3 = fill_p - 4.0 * r_amt - fee_adj
@@ -114,11 +148,6 @@ class ReconciliationEngine:
                                 self.bot.highest_price_reached[symbol] = fill_p
                                 self.bot.lowest_price_reached[symbol] = fill_p
                                 self.bot.entry_time[symbol] = time.time() * 1000.0
-
-                                try:
-                                    print(f"[RECONCILIATION] Deterministically recovered {filled_amount} {symbol} position from durable ENTRY intent {i_id}")
-                                except Exception:
-                                    pass
                                 self.bot.save_state()
                         elif order_role in ('TP1', 'TP2'):
                             current_size = float(self.bot.position_size.get(symbol, 0.0))
@@ -129,15 +158,11 @@ class ReconciliationEngine:
                                 if order_role == 'TP1':
                                     self.bot.partial_tp_taken[symbol] = True
                                     if ctx.state not in (OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.CLOSED):
-                                        ctx.transition_to(OrderState.TP1_LOCKED, reason="Durable intent replay: TP1 fill confirmed")
-                                elif order_role == 'TP2':
+                                        ctx.transition_to(OrderState.TP1_LOCKED, reason='Durable intent replay: TP1 fill confirmed')
+                                else:
                                     self.bot.tp2_taken[symbol] = True
                                     if ctx.state not in (OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.CLOSED):
-                                        ctx.transition_to(OrderState.TP2_LOCKED, reason="Durable intent replay: TP2 fill confirmed")
-                                try:
-                                    print(f"[RECONCILIATION] Replayed {order_role} fill ({filled_amount} {symbol}): Adjusted position size {current_size} -> {new_size}")
-                                except Exception:
-                                    pass
+                                        ctx.transition_to(OrderState.TP2_LOCKED, reason='Durable intent replay: TP2 fill confirmed')
                                 self.bot.save_state()
                         elif order_role in ('EXIT', 'SL', 'EMERGENCY', 'FLATTEN'):
                             current_size = float(self.bot.position_size.get(symbol, 0.0))
@@ -148,11 +173,7 @@ class ReconciliationEngine:
                                 self.bot.in_position[symbol] = False
                                 self.bot.position_side[symbol] = 'HOLD'
                                 self.bot.position_size[symbol] = 0.0
-                                ctx.transition_to(OrderState.CLOSED, reason=f"Durable intent replay: {order_role} fill confirmed")
-                                try:
-                                    print(f"[RECONCILIATION] Replayed full {order_role} fill: Marked position {symbol} CLOSED")
-                                except Exception:
-                                    pass
+                                ctx.transition_to(OrderState.CLOSED, reason=f'Durable intent replay: {order_role} fill confirmed')
                             self.bot.save_state()
 
             if not self.bot.has_keys or Config.PAPER_TRADING:
@@ -232,20 +253,63 @@ class ReconciliationEngine:
                     pass
         return False
 
+    def _paper_position_is_valid(self, symbol: str) -> bool:
+        """Validate persisted paper position before adopting it as protected."""
+        try:
+            active = bool(self.bot.in_position.get(symbol, False))
+            qty = float(self.bot.position_size.get(symbol, 0.0) or 0.0)
+            entry = float(self.bot.entry_price.get(symbol, 0.0) or 0.0)
+            sl = float(self.bot.stop_loss.get(symbol, 0.0) or 0.0)
+            side = str(self.bot.position_side.get(symbol, 'HOLD')).upper()
+            return (
+                active and qty > 0.0 and entry > 0.0 and sl > 0.0 and
+                side in ('LONG', 'SHORT') and
+                ((side == 'LONG' and sl < entry) or (side == 'SHORT' and sl > entry))
+            )
+        except (TypeError, ValueError, OverflowError):
+            return False
+
     async def _reconcile_paper_state(self):
-        """Audits paper positions consistency."""
+        """Audits paper positions consistency and fails closed on invalid persisted state."""
         self.last_reconcile_time = time.time()
         for symbol in Config.SUPPORTED_SYMBOLS:
             ctx = self.bot.order_state_machine.get_context(symbol)
             is_in_pos = self.bot.in_position.get(symbol, False)
-            if is_in_pos and ctx.state in (OrderState.IDLE, OrderState.CLOSED):
-                ctx.transition_to(OrderState.PROTECTED, reason='Paper Reconciliation: Adopted active position')
-                ctx.filled_qty = self.bot.position_size.get(symbol, 0.0)
-                ctx.entry_price = self.bot.entry_price.get(symbol, 0.0)
-                ctx.stop_loss = self.bot.stop_loss.get(symbol, 0.0)
-            elif not is_in_pos and ctx.is_active():
+            if is_in_pos:
+                if not self._paper_position_is_valid(symbol):
+                    self.safe_mode_active = True
+                    try:
+                        ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Paper Reconciliation: invalid persisted position invariants')
+                    except Exception:
+                        pass
+                    try:
+                        print(f'[RECONCILIATION CRITICAL] {symbol}: invalid persisted paper position; SAFE MODE ACTIVATED.')
+                    except Exception:
+                        pass
+                    continue
+                ctx.filled_qty = float(self.bot.position_size.get(symbol, 0.0))
+                ctx.entry_price = float(self.bot.entry_price.get(symbol, 0.0))
+                ctx.stop_loss = float(self.bot.stop_loss.get(symbol, 0.0))
+                ctx.side = str(self.bot.position_side.get(symbol, 'HOLD')).upper()
+                if ctx.state in (OrderState.IDLE, OrderState.CLOSED):
+                    try:
+                        ctx.transition_to(OrderState.PROTECTED, reason='Paper Reconciliation: Adopted validated active position')
+                    except Exception:
+                        self.safe_mode_active = True
+                        try:
+                            print(f'[RECONCILIATION CRITICAL] {symbol}: valid persisted position could not enter PROTECTED; SAFE MODE ACTIVATED.')
+                        except Exception:
+                            pass
+            elif ctx.is_active():
                 if not self._should_skip_reconcile_close(ctx, symbol):
-                    ctx.transition_to(OrderState.CLOSED, reason='Paper Reconciliation: Position marked closed')
+                    try:
+                        ctx.transition_to(OrderState.CLOSED, reason='Paper Reconciliation: Position marked closed')
+                    except Exception:
+                        self.safe_mode_active = True
+                        try:
+                            print(f'[RECONCILIATION CRITICAL] {symbol}: could not transition to CLOSED; SAFE MODE ACTIVATED.')
+                        except Exception:
+                            pass
 
     async def _sync_exchange_orders(self, symbol: str, ctx, exchange_qty: float, open_orders: list) -> Optional[str]:
         exec_engine = self.bot.execution
@@ -257,10 +321,9 @@ class ReconciliationEngine:
             typ = str(o.get('type', '')).lower()
             if typ in ('stop_market', 'stop', 'stop_loss_limit', 'stop_limit'):
                 protective_orders.append(o)
-                
+
         local_sl = ctx.native_sl_order_id
         resolved_sl = None
-
         if exchange_qty < 0.0001:
             for o in protective_orders:
                 o_id = str(o.get('id', ''))
@@ -282,7 +345,6 @@ class ReconciliationEngine:
                 except Exception:
                     pass
                 ctx.native_sl_order_id = resolved_sl
-                
             for o in protective_orders:
                 o_id = str(o.get('id', ''))
                 if o_id != resolved_sl:
@@ -291,7 +353,6 @@ class ReconciliationEngine:
                     except Exception:
                         pass
                     await exec_engine.cancel_order_safe(symbol, o_id)
-                    
         return resolved_sl
 
     async def _reconcile_live_broker_state(self):
@@ -313,10 +374,7 @@ class ReconciliationEngine:
                 await self._reconcile_binance()
             self.reconcile_errors = 0
             if self.safe_mode_active:
-                has_unknown = any(
-                    ctx.state in (OrderState.EXECUTION_UNKNOWN, OrderState.EXIT_UNKNOWN)
-                    for ctx in self.bot.order_state_machine.contexts.values()
-                )
+                has_unknown = any(ctx.state in (OrderState.EXECUTION_UNKNOWN, OrderState.EXIT_UNKNOWN) for ctx in self.bot.order_state_machine.contexts.values())
                 has_unresolved = bool(hasattr(self.bot.execution, 'intent_journal') and self.bot.execution.intent_journal.unresolved())
                 if not has_unknown and not has_unresolved:
                     print('[RECONCILIATION] ✅ State divergence resolved. SAFE MODE DEACTIVATED.')
@@ -335,9 +393,6 @@ class ReconciliationEngine:
         except Exception as e:
             print(f"[RECONCILIATION ERROR] Binance fetch_open_orders failed with exception: {e}")
             self._global_binance_orders = None
-
-        # F-07 FIX: Never treat fetch_open_orders failure or None as an empty order set.
-        # An API error/timeout must trigger SAFE MODE and abort without inferring orders are missing.
         if self._global_binance_orders is None:
             self.safe_mode_active = True
             print("[RECONCILIATION] [ALERT] SAFE MODE ACTIVATED: Binance fetch_open_orders failed/unreachable. Aborting pass.")
@@ -351,8 +406,6 @@ class ReconciliationEngine:
                 self.safe_mode_active = True
                 print('[RECONCILIATION] [ALERT] SAFE MODE ACTIVATED: Binance fetch_positions failed/unreachable. Aborting pass.')
                 return
-
-            # P0-2 FIX: Fail-closed if positions endpoint returns None or unreachable
             if positions is None:
                 self.safe_mode_active = True
                 print('[RECONCILIATION] [ALERT] SAFE MODE ACTIVATED: Binance fetch_positions returned None. Aborting pass.')
@@ -371,19 +424,52 @@ class ReconciliationEngine:
                 if contracts > 1e-05 and exchange_pos is not None:
                     should_adopt = not self.bot.in_position.get(symbol, False)
                     if should_adopt:
-                        print(f'[RECONCILIATION] 🚨 Orphan position detected on exchange for {symbol} ({contracts} contracts). Adopting into bot management.')
                         side = str(exchange_pos.get('side', '')).upper()
                         entry_p = float(exchange_pos.get('entryPrice', 0.0))
                         if entry_p <= 0.0:
                             entry_p = float(self.bot.pipeline.latest_prices.get(symbol, 0.0))
+                        pos_side = side if side in ('LONG', 'SHORT') else 'LONG'
+                        local_sl = float(self.bot.stop_loss.get(symbol, 0.0))
+                        if local_sl <= 0.0:
+                            print(f'[RECONCILIATION CRITICAL] Orphan futures position {symbol} has no durable strategy SL. No synthetic 2% stop; attempting emergency flatten.')
+                            self.safe_mode_active = True
+                            ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Orphan position without durable strategy stop-loss')
+                            try:
+                                self.bot.in_position[symbol] = True
+                                self.bot.position_side[symbol] = pos_side
+                                self.bot.position_size[symbol] = contracts
+                                self.bot.entry_price[symbol] = entry_p
+                                flatten_res = await exec_engine.emergency_flatten_position(symbol, pos_side, contracts, reason='ORPHAN_NO_DURABLE_STRATEGY_SL')
+                                if flatten_res and flatten_res.is_fill_confirmed:
+                                    actual_flatten = float(flatten_res.filled_qty or contracts)
+                                    remaining_qty = max(0.0, contracts - actual_flatten)
+                                    self.bot.position_size[symbol] = remaining_qty
+                                    if remaining_qty <= 1e-5:
+                                        self.bot.in_position[symbol] = False
+                                        self.bot.position_side[symbol] = 'HOLD'
+                                        ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason='Orphan position lacked durable strategy SL; emergency flattened')
+                                    else:
+                                        ctx.transition_to(OrderState.EXIT_UNKNOWN, reason='Orphan position lacked durable strategy SL; emergency flatten partially filled')
+                                else:
+                                    ctx.transition_to(OrderState.EXIT_UNKNOWN, reason='Orphan position lacked durable strategy SL; emergency flatten failed or unknown')
+                            except Exception as e:
+                                ctx.transition_to(OrderState.EXIT_UNKNOWN, reason=f'Orphan emergency flatten error: {e}')
+                                print(f'[RECONCILIATION CRITICAL] Emergency flatten error for orphan {symbol}: {e}')
+                            self.bot.save_state()
+                            continue
+
                         self.bot.in_position[symbol] = True
-                        self.bot.position_side[symbol] = side if side in ('LONG', 'SHORT') else 'LONG'
+                        self.bot.position_side[symbol] = pos_side
                         self.bot.position_size[symbol] = contracts
                         self.bot.entry_price[symbol] = entry_p
-                        sl_dist = 0.02
-                        sl_price = entry_p * (1.0 - sl_dist) if self.bot.position_side[symbol] == 'LONG' else entry_p * (1.0 + sl_dist)
+                        sl_price = local_sl
                         self.bot.stop_loss[symbol] = sl_price
                         r_amt = abs(entry_p - sl_price)
+                        if r_amt <= 0.0:
+                            self.safe_mode_active = True
+                            ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Orphan position has invalid stop distance')
+                            self.bot.save_state()
+                            continue
                         fee_adj = entry_p * Config.FEE_RATE * 2.0
                         if self.bot.position_side[symbol] == 'LONG':
                             self.bot.take_profit_1r[symbol] = entry_p + 1.0 * r_amt + fee_adj
@@ -409,11 +495,11 @@ class ReconciliationEngine:
                                     ctx.transition_to(OrderState.PROTECTED, reason='Adopted position with confirmed Native SL')
                                     print(f'[RECONCILIATION] ✅ Native SL placed for adopted position {symbol} @ {sl_price}')
                                 else:
-                                    print(f'[RECONCILIATION FAIL] Could not place native SL for adopted position {symbol}. Quarantining.')
                                     ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Failed native SL on adopted position')
+                                    self.safe_mode_active = True
                             except Exception as e:
-                                print(f'[RECONCILIATION ERROR] Error placing native SL for adopted position {symbol}: {e}')
                                 ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason=f'Recon Native SL Error: {e}')
+                                self.safe_mode_active = True
                         else:
                             ctx.transition_to(OrderState.PROTECTED, reason='Virtual SL active for adopted position')
                         self.bot.save_state()
@@ -421,34 +507,45 @@ class ReconciliationEngine:
                         local_qty = self.bot.position_size.get(symbol, 0.0)
                         if abs(contracts - local_qty) > 1e-05:
                             if contracts > local_qty:
-                                print(f'[RECONCILIATION] Size mismatch for {symbol}: exchange={contracts}, local={local_qty}. Syncing up.')
                                 self.bot.position_size[symbol] = contracts
                                 self.bot.save_state()
                             elif contracts < local_qty:
-                                print(f'[RECONCILIATION] Partial Exit detected externally for {symbol}: exchange={contracts} < local={local_qty}. Syncing down.')
                                 self.bot.position_size[symbol] = contracts
                                 self.bot.save_state()
 
-                        # Invariant (AUD-P1-01): OPEN FUTURES POSITION + NO VERIFIED ACTIVE NATIVE SL = NOT PROTECTED
                         if getattr(Config, 'USE_NATIVE_EXCHANGE_SL', True) and self.bot.has_keys and (not Config.PAPER_TRADING):
                             if not resolved_sl:
-                                print(f'[RECONCILIATION] [ALERT] Open futures position {symbol} ({contracts} contracts) HAS NO ACTIVE NATIVE SL! Attempting re-protection...')
                                 sl_side = 'sell' if self.bot.position_side[symbol] == 'LONG' else 'buy'
-                                sl_price = self.bot.stop_loss.get(symbol, 0.0)
+                                sl_price = float(self.bot.stop_loss.get(symbol, 0.0))
                                 if sl_price <= 0.0:
-                                    entry_p = self.bot.entry_price.get(symbol, float(self.bot.pipeline.latest_prices.get(symbol, 0.0)))
-                                    sl_dist = 0.02
-                                    sl_price = entry_p * (1.0 - sl_dist) if self.bot.position_side[symbol] == 'LONG' else entry_p * (1.0 + sl_dist)
-                                    self.bot.stop_loss[symbol] = sl_price
+                                    print(f'[RECONCILIATION CRITICAL] Open futures position {symbol} has no durable strategy SL. No synthetic 2% stop; attempting emergency flatten.')
+                                    self.safe_mode_active = True
+                                    ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Open futures position without durable strategy stop-loss')
+                                    try:
+                                        flatten_res = await exec_engine.emergency_flatten_position(symbol, self.bot.position_side[symbol], contracts, reason='UNPROTECTED_NO_DURABLE_STRATEGY_SL')
+                                        if flatten_res and flatten_res.is_fill_confirmed:
+                                            actual_flatten = float(flatten_res.filled_qty or contracts)
+                                            remaining_qty = max(0.0, contracts - actual_flatten)
+                                            self.bot.position_size[symbol] = remaining_qty
+                                            if remaining_qty <= 1e-5:
+                                                self.bot.in_position[symbol] = False
+                                                self.bot.position_side[symbol] = 'HOLD'
+                                                ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason='Unprotected futures position lacked durable SL; emergency flattened')
+                                            else:
+                                                ctx.transition_to(OrderState.EXIT_UNKNOWN, reason='Unprotected futures position emergency flatten partially filled')
+                                        else:
+                                            ctx.transition_to(OrderState.EXIT_UNKNOWN, reason='Unprotected futures position emergency flatten failed or unknown')
+                                    except Exception as e:
+                                        ctx.transition_to(OrderState.EXIT_UNKNOWN, reason=f'Unprotected futures emergency flatten error: {e}')
+                                    self.bot.save_state()
+                                    continue
                                 try:
                                     sl_order = await exec_engine.place_native_stop_loss(symbol, sl_side, contracts, sl_price)
                                     if self._is_active_sl_order(sl_order):
                                         ctx.native_sl_order_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
                                         if ctx.state not in (OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING):
                                             ctx.transition_to(OrderState.PROTECTED, reason='Reconciled and placed replacement Native SL')
-                                        print(f'[RECONCILIATION] [OK] Native SL successfully placed for {symbol} @ {sl_price}')
                                     else:
-                                        print(f'[RECONCILIATION FAIL] Native SL re-protection failed for {symbol}. Attempting emergency flatten...')
                                         flatten_res = await exec_engine.emergency_flatten_position(symbol, self.bot.position_side[symbol], contracts, reason='UNPROTECTED_FUTURES_POSITION')
                                         if flatten_res and flatten_res.is_fill_confirmed:
                                             ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason='Emergency flattened unprotected futures position')
@@ -458,7 +555,6 @@ class ReconciliationEngine:
                                             ctx.transition_to(OrderState.EXIT_UNKNOWN, reason='Open futures position lacking SL could not be flattened')
                                             self.safe_mode_active = True
                                 except Exception as e:
-                                    print(f'[RECONCILIATION ERROR] Error re-protecting futures position {symbol}: {e}')
                                     ctx.transition_to(OrderState.EXIT_UNKNOWN, reason=f'Re-protection error: {e}')
                                     self.safe_mode_active = True
                                 self.bot.save_state()
@@ -496,20 +592,16 @@ class ReconciliationEngine:
                 resolved_sl = await self._sync_exchange_orders(symbol, ctx, base_qty, symbol_orders)
                 if resolved_sl:
                     ctx.native_sl_order_id = resolved_sl
-
                 if self.bot.in_position.get(symbol, False):
                     expected_size = float(self.bot.position_size.get(symbol, 0.0))
-                    # Verify spot ownership: wallet must contain at least the bot's expected size
                     if base_qty < (expected_size - 1e-5):
                         print(f'[RECONCILIATION] [WARNING] Spot balance for {symbol} ({base_qty}) is less than expected bot size ({expected_size}). External transfer or manual sell? Quarantining.')
                         ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Spot balance deficit detected')
                         self.bot.save_state()
                         continue
-
                     if ctx.native_sl_order_id and self.bot.has_keys and not Config.PAPER_TRADING:
                         sl_filled = await exec_engine.check_order_filled(symbol, ctx.native_sl_order_id)
                         if sl_filled:
-                            print(f'[RECONCILIATION] Authoritative confirm: SL {ctx.native_sl_order_id} was FILLED. Closing position locally.')
                             ctx.transition_to(OrderState.CLOSED, reason=f'Spot SL filled on exchange')
                             self.bot.in_position[symbol] = False
                             self.bot.position_side[symbol] = 'HOLD'
@@ -529,7 +621,6 @@ class ReconciliationEngine:
                                 self.bot.save_state()
                             elif sl_status == 'INACTIVE':
                                 ctx.native_sl_order_id = None
-                                print(f'[RECONCILIATION] SL missing but not filled. Manual cancel or rejected? Re-protecting.')
                                 sl_order = await exec_engine.place_native_stop_loss(symbol, 'sell', self.bot.position_size[symbol], self.bot.stop_loss[symbol])
                                 if self._is_active_sl_order(sl_order):
                                     ctx.native_sl_order_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
@@ -546,8 +637,6 @@ class ReconciliationEngine:
         balance_data = await exec_engine.coindcx_client.fetch_balance()
         if not balance_data:
             return
-        
-        # Defensive parsing for CCXT-style dict: {'total': {...}, 'free': {...}, 'used': {...}} (AUD-P0-02)
         bal_map: dict[str, float] = {}
         if isinstance(balance_data, dict):
             total_dict = balance_data.get('total')
@@ -567,7 +656,6 @@ class ReconciliationEngine:
                 if isinstance(b, dict) and 'currency' in b:
                     curr = str(b['currency']).upper()
                     bal_map[curr] = float(b.get('balance', 0) or 0) + float(b.get('locked_balance', 0) or 0)
-        
         for symbol in Config.SUPPORTED_SYMBOLS:
             base_coin = symbol.split('/')[0].upper()
             qty = bal_map.get(base_coin, 0.0)
