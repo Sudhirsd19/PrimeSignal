@@ -23,19 +23,21 @@ class OrderState(str, Enum):
 
 class PositionContext:
     _LEGAL_TRANSITIONS = {
-        OrderState.IDLE: {OrderState.ORDER_INTENT_CREATED},
-        OrderState.ORDER_INTENT_CREATED: {OrderState.ORDER_SUBMITTED, OrderState.EXECUTION_UNKNOWN, OrderState.REJECTED},
-        OrderState.ORDER_SUBMITTED: {OrderState.ORDER_ACK, OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.EXECUTION_UNKNOWN, OrderState.REJECTED},
-        OrderState.ORDER_ACK: {OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.EXECUTION_UNKNOWN, OrderState.REJECTED},
-        OrderState.PARTIALLY_FILLED: {OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.SL_PLACEMENT_PENDING, OrderState.PROTECTED, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN},
-        OrderState.FILLED: {OrderState.SL_PLACEMENT_PENDING, OrderState.PROTECTED, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN},
-        OrderState.SL_PLACEMENT_PENDING: {OrderState.PROTECTED, OrderState.EXECUTION_UNKNOWN, OrderState.EXIT_UNKNOWN, OrderState.CLOSING},
-        OrderState.PROTECTED: {OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN},
-        OrderState.TP1_LOCKED: {OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN},
-        OrderState.TP2_LOCKED: {OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN},
-        OrderState.RUNNER_ACTIVE: {OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN},
+        # Recovery paths from IDLE are explicit because reconciliation can adopt
+        # a broker-confirmed position or close/reset a stale local context.
+        OrderState.IDLE: {OrderState.ORDER_INTENT_CREATED, OrderState.PROTECTED, OrderState.CLOSED},
+        OrderState.ORDER_INTENT_CREATED: {OrderState.ORDER_SUBMITTED, OrderState.EXECUTION_UNKNOWN, OrderState.REJECTED, OrderState.CLOSED},
+        OrderState.ORDER_SUBMITTED: {OrderState.ORDER_ACK, OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.EXECUTION_UNKNOWN, OrderState.REJECTED, OrderState.CLOSED},
+        OrderState.ORDER_ACK: {OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.EXECUTION_UNKNOWN, OrderState.REJECTED, OrderState.CLOSED},
+        OrderState.PARTIALLY_FILLED: {OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.SL_PLACEMENT_PENDING, OrderState.PROTECTED, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN, OrderState.CLOSED},
+        OrderState.FILLED: {OrderState.SL_PLACEMENT_PENDING, OrderState.PROTECTED, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.CLOSED, OrderState.EXECUTION_UNKNOWN},
+        OrderState.SL_PLACEMENT_PENDING: {OrderState.PROTECTED, OrderState.EXECUTION_UNKNOWN, OrderState.EXIT_UNKNOWN, OrderState.CLOSING, OrderState.CLOSED},
+        OrderState.PROTECTED: {OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN, OrderState.CLOSED},
+        OrderState.TP1_LOCKED: {OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN, OrderState.CLOSED},
+        OrderState.TP2_LOCKED: {OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN, OrderState.CLOSED},
+        OrderState.RUNNER_ACTIVE: {OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN, OrderState.CLOSED},
         OrderState.CLOSING: {OrderState.CLOSED, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN, OrderState.EMERGENCY_FLATTENED},
-        OrderState.EXECUTION_UNKNOWN: {OrderState.ORDER_ACK, OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.SL_PLACEMENT_PENDING, OrderState.PROTECTED, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.REJECTED},
+        OrderState.EXECUTION_UNKNOWN: {OrderState.ORDER_ACK, OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.SL_PLACEMENT_PENDING, OrderState.PROTECTED, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.CLOSED, OrderState.REJECTED},
         OrderState.EXIT_UNKNOWN: {OrderState.CLOSING, OrderState.CLOSED, OrderState.EMERGENCY_FLATTENED, OrderState.EXECUTION_UNKNOWN},
         OrderState.REJECTED: {OrderState.IDLE, OrderState.ORDER_INTENT_CREATED},
         OrderState.CLOSED: {OrderState.IDLE, OrderState.ORDER_INTENT_CREATED},
@@ -80,10 +82,8 @@ class PositionContext:
 
     def is_active(self):
         return self.state not in (OrderState.IDLE, OrderState.CLOSED, OrderState.REJECTED, OrderState.EMERGENCY_FLATTENED)
-
     def is_protected(self):
         return self.state in (OrderState.PROTECTED, OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE)
-
     def is_in_flight(self):
         return self.state in (OrderState.ORDER_INTENT_CREATED, OrderState.ORDER_SUBMITTED, OrderState.EXECUTION_UNKNOWN, OrderState.EXIT_UNKNOWN, OrderState.SL_PLACEMENT_PENDING)
 
@@ -131,40 +131,29 @@ class PositionContext:
     @classmethod
     def from_dict(cls, data):
         ctx = cls(symbol=data.get('symbol', 'BTC/USDT'))
-        ctx.state = OrderState(data.get('state', OrderState.IDLE.value))
-        for attr, default in (
-            ('side','HOLD'), ('requested_qty',0.0), ('filled_qty',0.0), ('remaining_qty',0.0),
-            ('entry_price',0.0), ('fill_avg_price',0.0), ('stop_loss',0.0), ('take_profit_1r',0.0),
-            ('take_profit_2r',0.0), ('take_profit_runner',0.0), ('trailing_stop',0.0), ('entry_order_id',None),
-            ('client_order_id',None), ('intent_id',None), ('execution_state','NOT_SUBMITTED'), ('exit_order_id',None),
-            ('exit_client_order_id',None), ('native_sl_order_id',None), ('native_tp1_order_id',None),
-            ('native_tp2_order_id',None), ('created_at',0.0), ('filled_at',0.0), ('closed_at',0.0),
-            ('setup_mode','STRICT'), ('zone_id',None), ('exit_reason',None), ('realized_pnl',0.0),
-            ('last_transition_time',time.time()), ('reserved_risk_pct',0.0), ('reserved_risk_side','HOLD'),
-            ('reservation_id',None), ('history',[])):
-            value = data.get(attr, default)
-            if attr in {'requested_qty','filled_qty','remaining_qty','entry_price','fill_avg_price','stop_loss','take_profit_1r','take_profit_2r','take_profit_runner','trailing_stop','created_at','filled_at','closed_at','realized_pnl','last_transition_time','reserved_risk_pct'}:
-                try: value = float(value)
-                except (TypeError, ValueError): value = default
-            setattr(ctx, attr, value)
+        try: ctx.state = OrderState(data.get('state', OrderState.IDLE.value))
+        except (ValueError, TypeError): ctx.state = OrderState.IDLE
+        numeric = {'requested_qty','filled_qty','remaining_qty','entry_price','fill_avg_price','stop_loss','take_profit_1r','take_profit_2r','take_profit_runner','trailing_stop','created_at','filled_at','closed_at','realized_pnl','last_transition_time','reserved_risk_pct'}
+        defaults = {'side':'HOLD','execution_state':'NOT_SUBMITTED','setup_mode':'STRICT','reserved_risk_side':'HOLD'}
+        for attr, default in defaults.items(): setattr(ctx, attr, data.get(attr, default))
+        for attr in numeric: 
+            try: setattr(ctx, attr, float(data.get(attr, getattr(ctx, attr, 0.0))))
+            except (TypeError, ValueError): pass
+        for attr in ('entry_order_id','client_order_id','intent_id','exit_order_id','exit_client_order_id','native_sl_order_id','native_tp1_order_id','native_tp2_order_id','zone_id','exit_reason','reservation_id'):
+            setattr(ctx, attr, data.get(attr, getattr(ctx, attr, None)))
+        ctx.history = data.get('history', []) if isinstance(data.get('history', []), list) else []
         return ctx
 
 class OrderStateMachine:
     def __init__(self, supported_symbols: List[str]):
         self.contexts = {sym: PositionContext(sym) for sym in supported_symbols}
     def get_context(self, symbol: str):
-        if symbol not in self.contexts:
-            self.contexts[symbol] = PositionContext(symbol)
+        if symbol not in self.contexts: self.contexts[symbol] = PositionContext(symbol)
         return self.contexts[symbol]
-    def is_active(self, symbol: str):
-        return self.get_context(symbol).is_active()
-    def is_protected(self, symbol: str):
-        return self.get_context(symbol).is_protected()
-    def serialize_all(self):
-        return {sym: ctx.to_dict() for sym, ctx in self.contexts.items()}
+    def is_active(self, symbol: str): return self.get_context(symbol).is_active()
+    def is_protected(self, symbol: str): return self.get_context(symbol).is_protected()
+    def serialize_all(self): return {sym: ctx.to_dict() for sym, ctx in self.contexts.items()}
     def load_all(self, state_dict):
-        if not isinstance(state_dict, dict):
-            return
+        if not isinstance(state_dict, dict): return
         for sym, data in state_dict.items():
-            if isinstance(data, dict):
-                self.contexts[sym] = PositionContext.from_dict(data)
+            if isinstance(data, dict): self.contexts[sym] = PositionContext.from_dict(data)
