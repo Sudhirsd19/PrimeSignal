@@ -310,7 +310,7 @@ class ExecutionEngine:
                 await self._init_futures(symbol)
             except Exception as e:
                 print(f"[EXECUTION CRITICAL] Order rejected: Futures configuration failed: {e}")
-                return ExecutionResult(
+                result = ExecutionResult(
                     state=ExecutionState.REJECTED,
                     requested_qty=float(amount or 0.0),
                     client_order_id=client_order_id,
@@ -318,6 +318,8 @@ class ExecutionEngine:
                     venue="BINANCE",
                     error=f"Futures leverage/margin configuration failed: {e}"
                 )
+                self.intent_journal.result(result)
+                return result
 
         if self.coindcx_client:
             coindcx_symbol = symbol
@@ -362,7 +364,7 @@ class ExecutionEngine:
                 min_amount = markets[symbol].get('limits', {}).get('amount', {}).get('min', 0) or 0
                 if amount < min_amount:
                     print(f"[EXECUTION] Order rejected: Amount {amount:.8f} is below minimum {min_amount} for {symbol}")
-                    return ExecutionResult(
+                    result = ExecutionResult(
                         state=ExecutionState.REJECTED,
                         requested_qty=float(amount),
                         client_order_id=client_order_id,
@@ -370,6 +372,8 @@ class ExecutionEngine:
                         venue="BINANCE",
                         error="below exchange minimum",
                     )
+                    self.intent_journal.result(result)
+                    return result
         except Exception as e:
             print(f"[EXECUTION] WARNING: Could not check minimum order size ({e}). Proceeding anyway.")
 
@@ -378,7 +382,7 @@ class ExecutionEngine:
             ticker = await self.execute_with_retry(self.public_client.fetch_ticker, symbol)
             if not ticker:
                 print("[EXECUTION] Order aborted: Unable to fetch live price ticker for slippage check.")
-                return ExecutionResult(
+                result = ExecutionResult(
                     state=ExecutionState.NOT_SUBMITTED,
                     requested_qty=float(amount),
                     client_order_id=client_order_id,
@@ -386,6 +390,8 @@ class ExecutionEngine:
                     venue="BINANCE",
                     error="ticker unavailable",
                 )
+                self.intent_journal.result(result)
+                return result
 
             current_price = ticker['last']
             if price is not None:
@@ -393,7 +399,7 @@ class ExecutionEngine:
                     slippage = (current_price - price) / price
                     if slippage > max_slippage_pct:
                         print(f"[EXECUTION] Order aborted: Slippage ({slippage*100:.2f}%) exceeds max ({max_slippage_pct*100:.2f}%).")
-                        return ExecutionResult(
+                        result = ExecutionResult(
                             state=ExecutionState.NOT_SUBMITTED,
                             requested_qty=float(amount),
                             client_order_id=client_order_id,
@@ -401,11 +407,13 @@ class ExecutionEngine:
                             venue="BINANCE",
                             error="slippage limit exceeded",
                         )
+                        self.intent_journal.result(result)
+                        return result
                 elif side.upper() == "SELL":
                     slippage = (price - current_price) / price
                     if slippage > max_slippage_pct:
                         print(f"[EXECUTION] Order aborted: Slippage ({slippage*100:.2f}%) exceeds max ({max_slippage_pct*100:.2f}%).")
-                        return ExecutionResult(
+                        result = ExecutionResult(
                             state=ExecutionState.NOT_SUBMITTED,
                             requested_qty=float(amount),
                             client_order_id=client_order_id,
@@ -413,6 +421,8 @@ class ExecutionEngine:
                             venue="BINANCE",
                             error="slippage limit exceeded",
                         )
+                        self.intent_journal.result(result)
+                        return result
 
         params: dict[str, Any] = {'clientOrderId': client_order_id}
         if is_exit_order and Config.EXCHANGE_TYPE == 'futures':
@@ -429,7 +439,7 @@ class ExecutionEngine:
         elif order_type.upper() == "LIMIT":
             if price is None:
                 print("[EXECUTION] Order error: Limit orders require a price.")
-                return ExecutionResult(
+                result = ExecutionResult(
                     state=ExecutionState.NOT_SUBMITTED,
                     requested_qty=float(amount),
                     client_order_id=client_order_id,
@@ -437,6 +447,8 @@ class ExecutionEngine:
                     venue="BINANCE",
                     error="limit order requires price",
                 )
+                self.intent_journal.result(result)
+                return result
             fn = self.trade_client.create_order
             args = [symbol, 'limit', side.lower(), amount, price, params]
 
