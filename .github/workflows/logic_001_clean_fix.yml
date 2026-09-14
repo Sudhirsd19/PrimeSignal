@@ -1,0 +1,118 @@
+name: LOGIC-001 clean fix
+
+on:
+  push:
+    branches: [fix/logic-001-clean]
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: fix/logic-001-clean
+          fetch-depth: 0
+
+      - name: Patch recovery logic
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('core/reconciliation_engine.py')
+          t = p.read_text(encoding='utf-8')
+          old = """                                sl_dist = 0.02
+                                fee_adj = fill_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
+                                if pos_side == 'LONG':
+                                    sl_price = fill_p * (1.0 - sl_dist)
+                                    r_amt = abs(fill_p - sl_price)
+                                    tp1 = fill_p + 1.0 * r_amt + fee_adj
+                                    tp2 = fill_p + 2.2 * r_amt + fee_adj
+                                    tp3 = fill_p + 4.0 * r_amt + fee_adj
+                                else:
+                                    sl_price = fill_p * (1.0 + sl_dist)
+                                    r_amt = abs(fill_p - sl_price)
+                                    tp1 = fill_p - 1.0 * r_amt - fee_adj
+                                    tp2 = fill_p - 2.2 * r_amt - fee_adj
+                                    tp3 = fill_p - 4.0 * r_amt - fee_adj
+
+"""
+          new = """                                # LOGIC-001: Never invent a synthetic recovery SL after restart.
+                                protection = raw_meta.get('protection') if isinstance(raw_meta.get('protection'), dict) else {}
+                                try:
+                                    sl_price = float(protection.get('stop_loss', 0.0))
+                                except (TypeError, ValueError):
+                                    sl_price = 0.0
+                                if sl_price <= 0.0:
+                                    self.safe_mode_active = True
+                                    ctx.transition_to(
+                                        OrderState.EXECUTION_UNKNOWN,
+                                        reason='Recovered ENTRY fill without durable strategy stop-loss',
+                                    )
+                                    print(
+                                        f'[RECONCILIATION CRITICAL] ENTRY {i_id} for {symbol} has no durable strategy SL; '
+                                        'recovery quarantined in SAFE MODE; no 2% fallback permitted.'
+                                    )
+                                    continue
+
+                                fee_adj = fill_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
+                                r_amt = abs(fill_p - sl_price)
+                                if r_amt <= 0.0:
+                                    self.safe_mode_active = True
+                                    ctx.transition_to(
+                                        OrderState.EXECUTION_UNKNOWN,
+                                        reason='Recovered ENTRY has invalid non-positive stop distance',
+                                    )
+                                    continue
+                                if pos_side == 'LONG':
+                                    tp1 = fill_p + 1.0 * r_amt + fee_adj
+                                    tp2 = fill_p + 2.2 * r_amt + fee_adj
+                                    tp3 = fill_p + 4.0 * r_amt + fee_adj
+                                else:
+                                    tp1 = fill_p - 1.0 * r_amt - fee_adj
+                                    tp2 = fill_p - 2.2 * r_amt - fee_adj
+                                    tp3 = fill_p - 4.0 * r_amt - fee_adj
+
+"""
+          if old not in t:
+              raise SystemExit('LOGIC-001 target block not found; refusing unsafe modification')
+          p.write_text(t.replace(old, new, 1), encoding='utf-8')
+          PY
+
+      - name: Test
+        run: |
+          python -m py_compile core/reconciliation_engine.py
+          python - <<'PY'
+          from pathlib import Path
+          s = Path('core/reconciliation_engine.py').read_text(encoding='utf-8')
+          assert 'sl_dist = 0.02' not in s
+          assert "protection.get('stop_loss'" in s
+          assert 'Recovered ENTRY fill without durable strategy stop-loss' in s
+          assert 'no 2% fallback permitted' in s
+          print('LOGIC-001 TEST PASS')
+          PY
+
+      - name: Add regression test
+        run: |
+          cat > tests/test_logic_001_recovery_protection.py <<'PY'
+          from pathlib import Path
+
+          def test_recovery_fails_closed_without_durable_sl():
+              source = Path('core/reconciliation_engine.py').read_text(encoding='utf-8')
+              assert 'sl_dist = 0.02' not in source
+              assert "protection.get('stop_loss'" in source
+              assert 'Recovered ENTRY fill without durable strategy stop-loss' in source
+              assert 'no 2% fallback permitted' in source
+          PY
+          pytest -q tests/test_logic_001_recovery_protection.py
+
+      - name: Commit verified fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add core/reconciliation_engine.py tests/test_logic_001_recovery_protection.py
+          git commit -m 'fix: fail closed on crash recovery without durable stop loss'
+          git push origin fix/logic-001-clean
