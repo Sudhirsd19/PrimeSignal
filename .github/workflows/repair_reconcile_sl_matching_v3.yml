@@ -1,0 +1,44 @@
+name: Repair protective SL reconciliation v3
+on:
+  push:
+    paths:
+      - RECON_SL_MATCH_V3_TRIGGER.txt
+      - .github/workflows/repair_reconcile_sl_matching_v3.yml
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch and verify
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast, re
+          p=Path('core/reconciliation_engine.py')
+          s=p.read_text(encoding='utf-8')
+          pattern=r"(?m)^(\\s*)resolved_sl = str\\(protective_orders\\[-1\\]\\.get\\('id', ''\\)\\)$"
+          repl=r"""\\1# Never adopt an arbitrary protective order; match its side to the local position.\n\\1expected_side = 'sell' if str(getattr(ctx, 'side', '')).upper() == 'LONG' else 'buy'\n\\1side_matches = [o for o in protective_orders if str(o.get('side', '')).lower() == expected_side]\n\\1if len(side_matches) != 1:\n\\1    self.safe_mode_active = True\n\\1    try:\n\\1        print(f'[RECONCILIATION CRITICAL] {symbol}: protective SL side is ambiguous; refusing arbitrary adoption.')\n\\1    except Exception:\n\\1        pass\n\\1    return None\n\\1resolved_sl = str(side_matches[0].get('id'))"""
+          s2,n=re.subn(pattern,repl,s,count=1)
+          if n != 1:
+              raise SystemExit(f'expected one arbitrary protective SL line, matched {n}')
+          ast.parse(s2)
+          p.write_text(s2,encoding='utf-8')
+          print('Protective SL regex patch + AST check PASSED')
+          PY
+      - name: Commit and cleanup
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add core/reconciliation_engine.py
+          git commit -m "fix: reject ambiguous protective SL adoption"
+          git push origin HEAD:main
+          rm -f RECON_SL_MATCH_V3_TRIGGER.txt .github/workflows/repair_reconcile_sl_matching_v3.yml
+          git add -u
+          git commit -m "chore: remove protective SL repair trigger"
+          git push origin HEAD:main
