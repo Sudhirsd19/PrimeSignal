@@ -191,7 +191,9 @@ def _patch_source(text):
                                     self._dry_run_balance_usdt += paper_tp2.cash_credit
                                     tp2_success = True
 '''
-    text = _replace_exact_count(text, tp2_old, tp2_new, 2, "TP2 paper exits")
+    # TP2 uses the shared pattern only once in the current legacy implementation;
+    # the SHORT TP2 branch uses its own accounting block. Expect exactly one.
+    text = _replace_exact_count(text, tp2_old, tp2_new, 1, "TP2 paper exit")
 
     exit_long_old = '''                    if not self.has_keys or Config.PAPER_TRADING:
                         # Return cash proceeds from selling the asset at exit_price
