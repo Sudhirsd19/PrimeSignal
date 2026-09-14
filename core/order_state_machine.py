@@ -23,8 +23,6 @@ class OrderState(str, Enum):
 
 class PositionContext:
     _LEGAL_TRANSITIONS = {
-        # Recovery paths from IDLE are explicit because reconciliation can adopt
-        # a broker-confirmed position or close/reset a stale local context.
         OrderState.IDLE: {OrderState.ORDER_INTENT_CREATED, OrderState.PROTECTED, OrderState.CLOSED},
         OrderState.ORDER_INTENT_CREATED: {OrderState.ORDER_SUBMITTED, OrderState.EXECUTION_UNKNOWN, OrderState.REJECTED, OrderState.CLOSED},
         OrderState.ORDER_SUBMITTED: {OrderState.ORDER_ACK, OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.EXECUTION_UNKNOWN, OrderState.REJECTED, OrderState.CLOSED},
@@ -103,6 +101,47 @@ class PositionContext:
             if len(self.history) > 50:
                 self.history.pop(0)
             return False
+
+        # P0 safety invariant: a context may enter PROTECTED only when it
+        # actually contains a usable position and a directional stop-loss.
+        if new_state == OrderState.PROTECTED:
+            protection_error = None
+            if self.filled_qty <= 0.0:
+                protection_error = "filled_qty must be > 0"
+            elif self.entry_price <= 0.0:
+                protection_error = "entry_price must be > 0"
+            elif self.side not in ("LONG", "SHORT"):
+                protection_error = "side must be LONG or SHORT"
+            elif self.stop_loss <= 0.0:
+                protection_error = "stop_loss must be > 0"
+            elif self.side == "LONG" and self.stop_loss >= self.entry_price:
+                protection_error = "LONG stop_loss must be below entry_price"
+            elif self.side == "SHORT" and self.stop_loss <= self.entry_price:
+                protection_error = "SHORT stop_loss must be above entry_price"
+
+            if protection_error:
+                fail_reason = "PROTECTED invariant failed: " + protection_error
+                now = time.time()
+                self.history.append({
+                    'timestamp': now,
+                    'from_state': prev_state.value,
+                    'to_state': OrderState.PROTECTED.value,
+                    'reason': reason,
+                    'blocked': True,
+                    'invariant_failure': fail_reason,
+                    'filled_qty': self.filled_qty,
+                    'entry_price': self.entry_price,
+                    'stop_loss': self.stop_loss,
+                    'metadata': metadata or {},
+                })
+                if len(self.history) > 50:
+                    self.history.pop(0)
+                self.state = OrderState.EXECUTION_UNKNOWN
+                self.last_transition_time = now
+                self.execution_state = "EXECUTION_UNKNOWN"
+                print(f"[STATE MACHINE] [{self.symbol}] FAIL-CLOSED PROTECTION BLOCK: {fail_reason}")
+                return False
+
         self.state = new_state
         self.last_transition_time = time.time()
         self.history.append({'timestamp': self.last_transition_time, 'from_state': prev_state.value, 'to_state': new_state.value, 'reason': reason, 'blocked': False, 'filled_qty': self.filled_qty, 'entry_price': self.entry_price, 'stop_loss': self.stop_loss, 'metadata': metadata or {}})
@@ -136,7 +175,7 @@ class PositionContext:
         numeric = {'requested_qty','filled_qty','remaining_qty','entry_price','fill_avg_price','stop_loss','take_profit_1r','take_profit_2r','take_profit_runner','trailing_stop','created_at','filled_at','closed_at','realized_pnl','last_transition_time','reserved_risk_pct'}
         defaults = {'side':'HOLD','execution_state':'NOT_SUBMITTED','setup_mode':'STRICT','reserved_risk_side':'HOLD'}
         for attr, default in defaults.items(): setattr(ctx, attr, data.get(attr, default))
-        for attr in numeric: 
+        for attr in numeric:
             try: setattr(ctx, attr, float(data.get(attr, getattr(ctx, attr, 0.0))))
             except (TypeError, ValueError): pass
         for attr in ('entry_order_id','client_order_id','intent_id','exit_order_id','exit_client_order_id','native_sl_order_id','native_tp1_order_id','native_tp2_order_id','zone_id','exit_reason','reservation_id'):
