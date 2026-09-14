@@ -285,6 +285,12 @@ def _patch_source(text):
                 return'''
     text = _replace_once(text, sl_line, sl_block, "strategy stop-loss validation")
     text = text.replace("            # E-01 Fix: Provide safe fallback SL if None\n            sl_val = metadata.get('stop_loss')\n            if sl_val is None: sl_val = entry_price * 0.98 if signal == \"BUY\" else entry_price * 1.02", "            sl_val = sl")
+    # The legacy file has evolved so the same fallback may appear without the
+    # historical comment anchor. Remove every remaining executable copy.
+    fallback_line = "            sl_val = metadata.get('stop_loss')\n            if sl_val is None: sl_val = entry_price * 0.98 if signal == \"BUY\" else entry_price * 1.02"
+    text = text.replace(fallback_line, "            sl_val = sl")
+    fallback_line_compact = "            if sl_val is None: sl_val = entry_price * 0.98 if signal == \"BUY\" else entry_price * 1.02"
+    text = text.replace(fallback_line_compact, "            sl_val = sl")
 
     if "if sl_val is None: sl_val = entry_price * 0.98" in text or "if sl_val is None: sl_val = entry_price * 1.02" in text:
         raise RuntimeError("PrimeSignal hardening failed: synthetic 2% SL fallback still present")
