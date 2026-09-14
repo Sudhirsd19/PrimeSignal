@@ -6,6 +6,7 @@ USDT cash flow into the configured paper wallet currency (for example INR).
 
 from dataclasses import dataclass
 from math import isfinite
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -34,7 +35,7 @@ def simulate_paper_entry(
     fee_rate: float,
     conversion_rate: float = 1.0,
     min_paper_cash: float = 1.0,
-) -> PaperEntryResult | None:
+) -> Optional[PaperEntryResult]:
     """Return a fill and exact wallet debit, or ``None`` when no fill is affordable."""
     side = str(side).upper()
     if side not in {"BUY", "SELL"}:
