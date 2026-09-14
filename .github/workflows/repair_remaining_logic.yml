@@ -1,0 +1,136 @@
+name: Repair remaining logic fixes
+
+on:
+  push:
+    paths:
+      - 'REPAIR_REMAINING_TRIGGER.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/logic-001-complete
+          fetch-depth: 0
+      - name: Restore and patch sources
+        env:
+          BASE: cd622ff3c227d2988618bafc8b7a623ac8ca3aab
+        run: |
+          set -euo pipefail
+          git checkout "$BASE" -- core/reconciliation_engine.py
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('core/reconciliation_engine.py'); s=p.read_text(encoding='utf-8')
+          old="""    async def _reconcile_paper_state(self):
+          \"\"\"Audits paper positions consistency.\"\"\"
+          self.last_reconcile_time = time.time()
+          for symbol in Config.SUPPORTED_SYMBOLS:
+              ctx = self.bot.order_state_machine.get_context(symbol)
+              is_in_pos = self.bot.in_position.get(symbol, False)
+              if is_in_pos and ctx.state in (OrderState.IDLE, OrderState.CLOSED):
+                  ctx.transition_to(OrderState.PROTECTED, reason='Paper Reconciliation: Adopted active position')
+                  ctx.filled_qty = self.bot.position_size.get(symbol, 0.0)
+                  ctx.entry_price = self.bot.entry_price.get(symbol, 0.0)
+                  ctx.stop_loss = self.bot.stop_loss.get(symbol, 0.0)
+              elif not is_in_pos and ctx.is_active():
+                  if not self._should_skip_reconcile_close(ctx, symbol):
+                      ctx.transition_to(OrderState.CLOSED, reason='Paper Reconciliation: Position marked closed')
+"""
+          new="""    def _paper_position_is_valid(self, symbol: str) -> bool:
+          try:
+              active = bool(self.bot.in_position.get(symbol, False))
+              qty = float(self.bot.position_size.get(symbol, 0.0) or 0.0)
+              entry = float(self.bot.entry_price.get(symbol, 0.0) or 0.0)
+              sl = float(self.bot.stop_loss.get(symbol, 0.0) or 0.0)
+              side = str(self.bot.position_side.get(symbol, 'HOLD')).upper()
+              return active and qty > 0.0 and entry > 0.0 and sl > 0.0 and side in ('LONG','SHORT') and ((side == 'LONG' and sl < entry) or (side == 'SHORT' and sl > entry))
+          except (TypeError, ValueError, OverflowError):
+              return False
+
+    async def _reconcile_paper_state(self):
+          \"\"\"Audit paper positions and fail closed on invalid persisted state.\"\"\"
+          self.last_reconcile_time = time.time()
+          for symbol in Config.SUPPORTED_SYMBOLS:
+              ctx = self.bot.order_state_machine.get_context(symbol)
+              is_in_pos = self.bot.in_position.get(symbol, False)
+              if is_in_pos:
+                  if not self._paper_position_is_valid(symbol):
+                      self.safe_mode_active = True
+                      try:
+                          ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Paper Reconciliation: invalid persisted position invariants')
+                      except Exception:
+                          pass
+                      continue
+                  ctx.filled_qty = float(self.bot.position_size.get(symbol, 0.0))
+                  ctx.entry_price = float(self.bot.entry_price.get(symbol, 0.0))
+                  ctx.stop_loss = float(self.bot.stop_loss.get(symbol, 0.0))
+                  ctx.side = str(self.bot.position_side.get(symbol, 'HOLD')).upper()
+                  if ctx.state in (OrderState.IDLE, OrderState.CLOSED):
+                      try:
+                          ctx.transition_to(OrderState.PROTECTED, reason='Paper Reconciliation: Adopted validated active position')
+                      except Exception:
+                          self.safe_mode_active = True
+              elif ctx.is_active() and not self._should_skip_reconcile_close(ctx, symbol):
+                  try:
+                      ctx.transition_to(OrderState.CLOSED, reason='Paper Reconciliation: Position marked closed')
+                  except Exception:
+                      self.safe_mode_active = True
+"""
+          if old not in s: raise SystemExit('paper reconciliation anchor missing')
+          p.write_text(s.replace(old,new,1),encoding='utf-8')
+
+          p=Path('strategies/multi_timeframe.py'); s=p.read_text(encoding='utf-8')
+          old="""        htf_eval_idx = -2 if current_time_ms < (htf_last_ts_ms + htf_ms) else -1
+
+        htf_ema_50 = calculate_ema(htf_df, 50)
+"""
+          new="""        htf_eval_idx = -2 if current_time_ms < (htf_last_ts_ms + htf_ms) else -1
+
+        ltf_eval_ts_ms = float(ltf_df['timestamp'].iloc[target_idx]) if 'timestamp' in ltf_df.columns else float(ltf_df.index[target_idx].timestamp() * 1000)
+        htf_eval_ts_ms = float(htf_df['timestamp'].iloc[htf_eval_idx]) if 'timestamp' in htf_df.columns else float(htf_df.index[htf_eval_idx].timestamp() * 1000)
+        htf_age_ms = ltf_eval_ts_ms - htf_eval_ts_ms
+        max_htf_age_ms = htf_ms * float(getattr(Config, 'HTF_MAX_STALENESS_MULT', 2.0))
+        if not math.isfinite(htf_age_ms) or htf_age_ms < 0.0 or htf_age_ms > max_htf_age_ms:
+            metadata['reason'] = 'Stale or misaligned HTF data'
+            return 'HOLD', metadata
+
+        htf_ema_50 = calculate_ema(htf_df, 50)
+"""
+          if old not in s: raise SystemExit('HTF anchor missing')
+          s=s.replace(old,new,1)
+          old="""        vol_pass = (curr_atr / curr_price >= Config.MIN_ATR_PCT) if curr_price > 0 else False
+        metadata['debug_checks']['volatility'] = 'PASS' if vol_pass else 'FAIL'
+
+        # ATR-scaled dynamic zone band for VWAP/EMA pullback zones
+"""
+          new="""        vol_pass = (curr_atr / curr_price >= Config.MIN_ATR_PCT) if curr_price > 0 else False
+        metadata['debug_checks']['volatility'] = 'PASS' if vol_pass else 'FAIL'
+        if not vol_pass:
+            metadata['reason'] = f\"ATR Volatility Filter (ATR {curr_atr / curr_price:.4%} < {Config.MIN_ATR_PCT:.4%})\" if curr_price > 0 else 'Invalid price for ATR filter'
+            return 'HOLD', metadata
+
+        # ATR-scaled dynamic zone band for VWAP/EMA pullback zones
+"""
+          if old not in s: raise SystemExit('ATR anchor missing')
+          p.write_text(s.replace(old,new,1),encoding='utf-8')
+
+          p=Path('config.py'); s=p.read_text(encoding='utf-8')
+          if 'HTF_MAX_STALENESS_MULT' not in s:
+              anchor='    HTF_TIMEFRAME = os.getenv("HTF_TIMEFRAME", "1h")\n    LTF_TIMEFRAME = os.getenv("LTF_TIMEFRAME", "15m")\n'
+              s=s.replace(anchor,anchor+'    HTF_MAX_STALENESS_MULT = float(os.getenv("HTF_MAX_STALENESS_MULT", "2.0"))\n',1)
+          p.write_text(s,encoding='utf-8')
+          PY
+          python -m py_compile core/reconciliation_engine.py strategies/multi_timeframe.py config.py
+      - name: Commit and push
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add core/reconciliation_engine.py strategies/multi_timeframe.py config.py
+          git diff --cached --check
+          git commit -m 'fix: harden reconciliation and strategy data guards'
+          git push origin HEAD:fix/logic-001-complete
