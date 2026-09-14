@@ -1,0 +1,116 @@
+name: Apply LOGIC-001 Fix
+
+on:
+  push:
+    branches: [fix/logic-bugs-sequential]
+    paths:
+      - '.github/workflows/apply_logic001_fix.yml'
+      - 'core/reconciliation_engine.py'
+      - 'execution/execution_engine.py'
+      - 'main.py'
+  workflow_dispatch:
+
+jobs:
+  fix-and-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch durable recovery protection
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          
+          path = Path('core/reconciliation_engine.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''                                sl_dist = 0.02\n                                fee_adj = fill_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0\n                                if pos_side == 'LONG':\n                                    sl_price = fill_p * (1.0 - sl_dist)\n                                    r_amt = abs(fill_p - sl_price)\n                                    tp1 = fill_p + 1.0 * r_amt + fee_adj\n                                    tp2 = fill_p + 2.2 * r_amt + fee_adj\n                                    tp3 = fill_p + 4.0 * r_amt + fee_adj\n                                else:\n                                    sl_price = fill_p * (1.0 + sl_dist)\n                                    r_amt = abs(fill_p - sl_price)\n                                    tp1 = fill_p - 1.0 * r_amt - fee_adj\n                                    tp2 = fill_p - 2.2 * r_amt - fee_adj\n                                    tp3 = fill_p - 4.0 * r_amt - fee_adj\n'''
+          new = '''                                protection = raw_meta.get('protection') if isinstance(raw_meta.get('protection'), dict) else {}\n                                try:\n                                    sl_price = float(protection.get('stop_loss', 0.0))\n                                except (TypeError, ValueError):\n                                    sl_price = 0.0\n                                if sl_price <= 0.0:\n                                    self.safe_mode_active = True\n                                    ctx.transition_to(\n                                        OrderState.EXECUTION_UNKNOWN,\n                                        reason='Recovered ENTRY fill without durable strategy stop-loss',\n                                    )\n                                    print(\n                                        f'[RECONCILIATION CRITICAL] ENTRY {i_id} for {symbol} has no durable stop-loss; '\n                                        'position remains protected by SAFE MODE rather than inventing a recovery SL.'\n                                    )\n                                    continue\n\n                                fee_adj = fill_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0\n                                r_amt = abs(fill_p - sl_price)\n                                if pos_side == 'LONG':\n                                    tp1 = fill_p + 1.0 * r_amt + fee_adj\n                                    tp2 = fill_p + 2.2 * r_amt + fee_adj\n                                    tp3 = fill_p + 4.0 * r_amt + fee_adj\n                                else:\n                                    tp1 = fill_p - 1.0 * r_amt - fee_adj\n                                    tp2 = fill_p - 2.2 * r_amt - fee_adj\n                                    tp3 = fill_p - 4.0 * r_amt - fee_adj\n'''
+          if old not in text:
+              if 'sl_dist = 0.02' in text:
+                  raise SystemExit('LOGIC-001 marker exists but expected block does not match; refusing unsafe edit')
+              raise SystemExit('LOGIC-001 already patched or source differs; no edit made')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          
+          # Carry durable protection through journal replay.
+          path = Path('execution/execution_engine.py')
+          text = path.read_text(encoding='utf-8')
+          sig_old = '''        is_exit_order: bool = False,\n    ) -> tuple[str, str]:'''
+          sig_new = '''        is_exit_order: bool = False,\n        protection: dict[str, Any] | None = None,\n    ) -> tuple[str, str]:'''
+          if sig_old in text and 'protection: dict[str, Any] | None = None' not in text:
+              text = text.replace(sig_old, sig_new, 1)
+              journal_old = '''            order_role=order_role,\n            price=price,\n        )'''
+              journal_new = '''            order_role=order_role,\n            price=price,\n            protection=protection,\n        )'''
+              if journal_old not in text:
+                  raise SystemExit('Could not add protection to intent journal call')
+              text = text.replace(journal_old, journal_new, 1)
+              place_old = '''                          intent_id=None, client_order_id=None):'''
+              place_new = '''                          intent_id=None, client_order_id=None, protection=None):'''
+              if place_old not in text:
+                  raise SystemExit('Could not extend place_order signature with protection')
+              text = text.replace(place_old, place_new, 1)
+              call_old = '''                is_exit_order=is_exit_order,\n            )'''
+              call_new = '''                is_exit_order=is_exit_order,\n                protection=protection,\n            )'''
+              if call_old not in text:
+                  raise SystemExit('Could not pass protection into prepare_order_intent')
+              text = text.replace(call_old, call_new, 1)
+              path.write_text(text, encoding='utf-8')
+          
+          # Replay must expose durable protection metadata to reconciliation.
+          path = Path('execution/execution_engine.py')
+          text = path.read_text(encoding='utf-8')
+          marker = '''                    discovered.raw = {\n                        'symbol': intent.get('symbol'),\n                        'side': intent.get('side'),\n                        'price': intent.get('price'),\n                        'order_role': intent.get('order_role', 'ENTRY'),\n                    }'''
+          replacement = '''                    discovered.raw = {\n                        'symbol': intent.get('symbol'),\n                        'side': intent.get('side'),\n                        'price': intent.get('price'),\n                        'order_role': intent.get('order_role', 'ENTRY'),\n                        'protection': dict(intent.get('protection') or {}),\n                    }'''
+          if marker in text:
+              text = text.replace(marker, replacement, 1)
+              path.write_text(text, encoding='utf-8')
+          elif "'protection': dict(intent.get('protection') or {})" not in text:
+              raise SystemExit('Could not locate replay metadata block')
+          
+          print('LOGIC-001 source patch applied')
+          PY
+
+      - name: Add regression test
+        shell: bash
+        run: |
+          cat > tests/test_logic_001_recovery_protection.py <<'PY'
+          from pathlib import Path
+          
+          REC = Path('core/reconciliation_engine.py').read_text(encoding='utf-8')
+          EXEC = Path('execution/execution_engine.py').read_text(encoding='utf-8')
+          
+          def test_recovery_does_not_invent_fixed_two_percent_stop():
+              assert 'sl_dist = 0.02' not in REC
+              assert "protection.get('stop_loss'" in REC
+              assert 'Recovered ENTRY fill without durable strategy stop-loss' in REC
+          
+          def test_protection_is_persisted_and_replayed():
+              assert 'protection: dict[str, Any] | None = None' in EXEC
+              assert 'protection=protection' in EXEC
+              assert "'protection': dict(intent.get('protection') or {})" in EXEC
+          PY
+
+      - name: Compile changed Python files
+        run: |
+          python -m py_compile core/reconciliation_engine.py execution/execution_engine.py
+
+      - name: Run targeted regression
+        run: pytest -q tests/test_logic_001_recovery_protection.py
+
+      - name: Commit verified fix
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add core/reconciliation_engine.py execution/execution_engine.py tests/test_logic_001_recovery_protection.py
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+          else
+            git commit -m 'fix: recover durable strategy stop loss after restart'
+            git push
+          fi
