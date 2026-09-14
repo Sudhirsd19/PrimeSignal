@@ -22,43 +22,46 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          def replace_once(path, old, new):
+          def replace_first(path, old, new):
               p = Path(path)
               s = p.read_text(encoding='utf-8')
-              n = s.count(old)
-              if n != 1:
-                  raise SystemExit(f'{path}: expected exactly 1 match, found {n}')
-              p.write_text(s.replace(old, new), encoding='utf-8')
+              if new in s:
+                  return
+              if old not in s:
+                  raise SystemExit(f'{path}: pattern not found')
+              p.write_text(s.replace(old, new, 1), encoding='utf-8')
 
-          replace_once('execution/execution_engine.py',
+          replace_first('execution/execution_engine.py',
               '        is_exit_order: bool = False,\n    ) -> tuple[str, str]:',
               '        is_exit_order: bool = False,\n        protection: dict[str, Any] | None = None,\n    ) -> tuple[str, str]:')
-          replace_once('execution/execution_engine.py',
+          replace_first('execution/execution_engine.py',
               '            price=price,\n        )\n        return intent_id, client_order_id',
               '            price=price,\n            protection=protection,\n        )\n        return intent_id, client_order_id')
-          replace_once('execution/execution_engine.py',
+          replace_first('execution/execution_engine.py',
               '                          order_role="ENTRY", candle_ts=None,\n                          intent_id=None, client_order_id=None):',
               '                          order_role="ENTRY", candle_ts=None,\n                          intent_id=None, client_order_id=None, protection=None):')
-          replace_once('execution/execution_engine.py',
+          replace_first('execution/execution_engine.py',
               '                client_order_id=client_order_id,\n                is_exit_order=is_exit_order,\n            )',
               '                client_order_id=client_order_id,\n                is_exit_order=is_exit_order,\n                protection=protection,\n            )')
-          replace_once('execution/execution_engine.py',
+          replace_first('execution/execution_engine.py',
               "            price = intent.get('price')\n            \n            discovered = await self.reconcile_intent_on_exchange(intent)",
               "            price = intent.get('price')\n            protection = intent.get('protection') or {}\n            \n            discovered = await self.reconcile_intent_on_exchange(intent)")
-          replace_once('execution/execution_engine.py',
+          replace_first('execution/execution_engine.py',
               "                discovered.raw['price'] = price\n                discovered.intent_id = intent_id",
               "                discovered.raw['price'] = price\n                discovered.raw['protection'] = dict(protection)\n                discovered.intent_id = intent_id")
-          replace_once('execution/execution_engine.py',
+          replace_first('execution/execution_engine.py',
               "                    raw={'order_role': order_role, 'symbol': symbol, 'side': side, 'price': price}\n",
               "                    raw={'order_role': order_role, 'symbol': symbol, 'side': side, 'price': price, 'protection': dict(protection)}\n")
 
-          replace_once('main.py',
+          replace_first('main.py',
               "order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol)",
               "order = await self.execution.place_order('buy', 'market', pos_size, price=entry_price, symbol=symbol, protection={'stop_loss': float(sl), 'signal_entry_price': float(entry_price), 'position_side': 'LONG'})")
-          replace_once('main.py',
+          replace_first('main.py',
               "order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol)",
               "order = await self.execution.place_order('sell', 'market', pos_size, price=entry_price, symbol=symbol, protection={'stop_loss': float(sl), 'signal_entry_price': float(entry_price), 'position_side': 'SHORT'})")
 
+          p = Path('core/reconciliation_engine.py')
+          s = p.read_text(encoding='utf-8')
           old = """                                sl_dist = 0.02
                                 fee_adj = fill_p * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
                                 if pos_side == 'LONG':
@@ -93,41 +96,36 @@ jobs:
                                     tp1 = fill_p - 1.0 * r_amt - fee_adj
                                     tp2 = fill_p - 2.2 * r_amt - fee_adj
                                     tp3 = fill_p - 4.0 * r_amt - fee_adj"""
-          replace_once('core/reconciliation_engine.py', old, new)
+          if 'sl_dist = 0.02' in s:
+              if s.count(old) != 1:
+                  raise SystemExit(f'core/reconciliation_engine.py: expected recovery block once, found {s.count(old)}')
+              s = s.replace(old, new, 1)
+              p.write_text(s, encoding='utf-8')
 
           print('Recovery protection fix applied.')
           PY
 
-      - name: Add regression tests
+      - name: Regression tests
         run: |
-          mkdir -p tests
-          cat > tests/test_recovery_protection_regression.py <<'PY'
-          from pathlib import Path
-          import ast
-
-          def test_no_invented_recovery_stop():
-              text = Path('core/reconciliation_engine.py').read_text(encoding='utf-8')
-              assert 'sl_dist = 0.02' not in text
-              assert "protection.get('stop_loss'" in text
-
-          def test_entry_persists_protection():
-              engine = Path('execution/execution_engine.py').read_text(encoding='utf-8')
-              main = Path('main.py').read_text(encoding='utf-8')
-              assert 'protection: dict[str, Any] | None = None' in engine
-              assert 'protection=protection' in engine
-              assert "protection={'stop_loss': float(sl)" in main
-
-          def test_all_modified_python_files_compile():
-              for path in ('main.py', 'execution/execution_engine.py', 'execution/execution_result.py', 'core/reconciliation_engine.py'):
-                  ast.parse(Path(path).read_text(encoding='utf-8'), filename=path)
-          PY
-          python -m pytest -q tests/test_recovery_protection_regression.py
           python -m py_compile main.py execution/execution_engine.py execution/execution_result.py core/reconciliation_engine.py
+          python - <<'PY'
+          from pathlib import Path
+          e = Path('execution/execution_engine.py').read_text(encoding='utf-8')
+          m = Path('main.py').read_text(encoding='utf-8')
+          r = Path('core/reconciliation_engine.py').read_text(encoding='utf-8')
+          assert 'protection: dict[str, Any] | None = None' in e
+          assert 'protection=protection' in e
+          assert "protection={'stop_loss': float(sl)" in m
+          assert 'sl_dist = 0.02' not in r
+          assert "protection.get('stop_loss'" in r
+          print('Targeted recovery regression checks passed.')
+          PY
+          python -m pytest -q
 
-      - name: Commit fix and tests
+      - name: Commit fix
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add execution/execution_engine.py core/reconciliation_engine.py main.py tests/test_recovery_protection_regression.py
-          git commit -m 'fix: persist strategy stop-loss for crash recovery'
+          git add execution/execution_engine.py core/reconciliation_engine.py main.py
+          git commit -m 'fix: persist strategy stop-loss for crash recovery' || exit 0
           git push origin fix/logic-bugs-sequential
