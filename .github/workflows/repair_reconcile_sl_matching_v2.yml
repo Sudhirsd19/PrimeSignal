@@ -1,0 +1,46 @@
+name: Repair protective SL reconciliation v2
+on:
+  push:
+    paths:
+      - RECON_SL_MATCH_V2_TRIGGER.txt
+      - .github/workflows/repair_reconcile_sl_matching_v2.yml
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch and verify
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast, re
+          p=Path('core/reconciliation_engine.py')
+          s=p.read_text(encoding='utf-8')
+          marker="                    resolved_sl = str(protective_orders[-1].get('id'))"
+          inject="""                    # Never adopt an arbitrary protective order. Match the stop side to the local position.\n                    expected_side = 'sell' if str(getattr(ctx, 'side', '')).upper() == 'LONG' else 'buy'\n                    side_matches = [o for o in protective_orders if str(o.get('side', '')).lower() == expected_side]\n                    if len(side_matches) != 1:\n                        self.safe_mode_active = True\n                        try:\n                            print(f'[RECONCILIATION CRITICAL] {symbol}: protective SL side is ambiguous; refusing arbitrary adoption.')\n                        except Exception:\n                            pass\n                        return None\n                    resolved_sl = str(side_matches[0].get('id'))"""
+          if s.count(marker) != 1:
+              raise SystemExit(f'expected one arbitrary SL adoption line, found {s.count(marker)}')
+          s=s.replace(marker, inject, 1)
+          ast.parse(s)
+          if "side_matches = [o for o in protective_orders" not in s or "len(side_matches) != 1" not in s:
+              raise SystemExit('protective SL guard missing after patch')
+          p.write_text(s, encoding='utf-8')
+          print('Protective SL side-match patch + AST check PASSED')
+          PY
+      - name: Commit and cleanup
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add core/reconciliation_engine.py
+          git commit -m "fix: reject ambiguous protective SL adoption"
+          git push origin HEAD:main
+          rm -f RECON_SL_MATCH_V2_TRIGGER.txt .github/workflows/repair_reconcile_sl_matching_v2.yml
+          git add -u
+          git commit -m "chore: remove protective SL repair trigger"
+          git push origin HEAD:main
