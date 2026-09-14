@@ -23,26 +23,40 @@ class OrderState(str, Enum):
 
 
 class PositionContext:
+    _LEGAL_TRANSITIONS = {
+        OrderState.IDLE: {OrderState.ORDER_INTENT_CREATED, OrderState.PROTECTED, OrderState.CLOSED},
+        OrderState.ORDER_INTENT_CREATED: {OrderState.ORDER_SUBMITTED, OrderState.EXECUTION_UNKNOWN, OrderState.REJECTED, OrderState.CLOSED},
+        OrderState.ORDER_SUBMITTED: {OrderState.ORDER_ACK, OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.EXECUTION_UNKNOWN, OrderState.REJECTED, OrderState.CLOSED},
+        OrderState.ORDER_ACK: {OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.EXECUTION_UNKNOWN, OrderState.REJECTED, OrderState.CLOSED},
+        OrderState.PARTIALLY_FILLED: {OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.SL_PLACEMENT_PENDING, OrderState.PROTECTED, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN, OrderState.CLOSED},
+        OrderState.FILLED: {OrderState.SL_PLACEMENT_PENDING, OrderState.PROTECTED, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.CLOSED, OrderState.EXECUTION_UNKNOWN},
+        OrderState.SL_PLACEMENT_PENDING: {OrderState.PROTECTED, OrderState.EXECUTION_UNKNOWN, OrderState.EXIT_UNKNOWN, OrderState.CLOSING, OrderState.CLOSED},
+        OrderState.PROTECTED: {OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN, OrderState.CLOSED},
+        OrderState.TP1_LOCKED: {OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN, OrderState.CLOSED},
+        OrderState.TP2_LOCKED: {OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN, OrderState.CLOSED},
+        OrderState.RUNNER_ACTIVE: {OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN, OrderState.CLOSED},
+        OrderState.CLOSING: {OrderState.CLOSED, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN, OrderState.EMERGENCY_FLATTENED},
+        OrderState.EXECUTION_UNKNOWN: {OrderState.ORDER_ACK, OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.SL_PLACEMENT_PENDING, OrderState.PROTECTED, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.CLOSED, OrderState.REJECTED},
+        OrderState.EXIT_UNKNOWN: {OrderState.CLOSING, OrderState.CLOSED, OrderState.EMERGENCY_FLATTENED, OrderState.EXECUTION_UNKNOWN},
+        OrderState.REJECTED: {OrderState.IDLE, OrderState.ORDER_INTENT_CREATED},
+        OrderState.CLOSED: {OrderState.IDLE, OrderState.ORDER_INTENT_CREATED},
+        OrderState.EMERGENCY_FLATTENED: {OrderState.IDLE, OrderState.ORDER_INTENT_CREATED},
+    }
+
     def __init__(self, symbol: str):
         self.symbol: str = symbol
         self.state: OrderState = OrderState.IDLE
-        self.side: str = "HOLD"  # LONG / SHORT / HOLD
-        
-        # Order and execution quantities
+        self.side: str = "HOLD"
         self.requested_qty: float = 0.0
         self.filled_qty: float = 0.0
         self.remaining_qty: float = 0.0
         self.entry_price: float = 0.0
         self.fill_avg_price: float = 0.0
-        
-        # Protection and targets
         self.stop_loss: float = 0.0
         self.take_profit_1r: float = 0.0
         self.take_profit_2r: float = 0.0
         self.take_profit_runner: float = 0.0
         self.trailing_stop: float = 0.0
-        
-        # Native Exchange Order IDs
         self.entry_order_id: Optional[str] = None
         self.client_order_id: Optional[str] = None
         self.intent_id: Optional[str] = None
@@ -52,8 +66,6 @@ class PositionContext:
         self.native_sl_order_id: Optional[str] = None
         self.native_tp1_order_id: Optional[str] = None
         self.native_tp2_order_id: Optional[str] = None
-        
-        # Timestamps and diagnostics
         self.created_at: float = 0.0
         self.filled_at: float = 0.0
         self.closed_at: float = 0.0
@@ -63,37 +75,56 @@ class PositionContext:
         self.exit_reason: Optional[str] = None
         self.realized_pnl: float = 0.0
         self.history: List[Dict[str, Any]] = []
-        
-        # Risk tracking for EXECUTION_UNKNOWN exposure leak fix
         self.reserved_risk_pct: float = 0.0
         self.reserved_risk_side: str = "HOLD"
         self.reservation_id: Optional[str] = None
 
     def is_active(self) -> bool:
-        """Returns True if position is currently active and not closed/idle/rejected."""
         return self.state not in (OrderState.IDLE, OrderState.CLOSED, OrderState.REJECTED, OrderState.EMERGENCY_FLATTENED)
 
     def is_protected(self) -> bool:
-        """Returns True if position has an active verified stop loss."""
         return self.state in (OrderState.PROTECTED, OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE)
 
     def is_in_flight(self) -> bool:
-        """Returns True if an order is being submitted or its outcome is unknown. Reconciliation must not interfere."""
         return self.state in (OrderState.ORDER_INTENT_CREATED, OrderState.ORDER_SUBMITTED, OrderState.EXECUTION_UNKNOWN, OrderState.EXIT_UNKNOWN, OrderState.SL_PLACEMENT_PENDING)
 
     def transition_to(self, new_state: OrderState, reason: str = "", metadata: Optional[Dict[str, Any]] = None) -> bool:
-        """
-        Transitions position context to a new state and logs transition history.
-        """
         prev_state = self.state
+        try:
+            new_state = OrderState(new_state)
+        except (TypeError, ValueError):
+            print(f"[STATE MACHINE] [{self.symbol}] INVALID target state: {new_state}")
+            return False
+
+        if new_state == prev_state:
+            return True
+
+        allowed = self._LEGAL_TRANSITIONS.get(prev_state, set())
+        if new_state not in allowed:
+            print(f"[STATE MACHINE] [{self.symbol}] BLOCKED invalid transition {prev_state.value} -> {new_state.value} ({reason})")
+            self.history.append({
+                'timestamp': time.time(),
+                'from_state': prev_state.value,
+                'to_state': new_state.value,
+                'reason': reason,
+                'blocked': True,
+                'filled_qty': self.filled_qty,
+                'entry_price': self.entry_price,
+                'stop_loss': self.stop_loss,
+                'metadata': metadata or {}
+            })
+            if len(self.history) > 50:
+                self.history.pop(0)
+            return False
+
         self.state = new_state
         self.last_transition_time = time.time()
-        
         record = {
             'timestamp': self.last_transition_time,
-            'from_state': prev_state.value if isinstance(prev_state, OrderState) else str(prev_state),
-            'to_state': new_state.value if isinstance(new_state, OrderState) else str(new_state),
+            'from_state': prev_state.value,
+            'to_state': new_state.value,
             'reason': reason,
+            'blocked': False,
             'filled_qty': self.filled_qty,
             'entry_price': self.entry_price,
             'stop_loss': self.stop_loss,
@@ -102,7 +133,6 @@ class PositionContext:
         self.history.append(record)
         if len(self.history) > 50:
             self.history.pop(0)
-            
         print(f"[STATE MACHINE] [{self.symbol}] {prev_state.value} -> {new_state.value} ({reason})")
         return True
 
