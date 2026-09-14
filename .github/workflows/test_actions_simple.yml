@@ -1,0 +1,10 @@
+name: Test Actions Runner
+on:
+  push:
+    branches:
+      - fix/logic-001-durable-sl
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "runner-ok"
