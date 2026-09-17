@@ -1,5 +1,18 @@
 # PrimeSignal v2.6.0 - Institutional Strategy Engine (1.0R TP1 / 2.0R TP2, 25.0 ADX, EMA 21 Pullback, Max 6 Daily Trades)
 import os
+import sys
+
+# Reconfigure stdout/stderr to utf-8 on Windows to prevent UnicodeEncodeError
+if sys.platform == 'win32':
+    try:
+        getattr(sys.stdout, 'reconfigure', lambda **kw: None)(encoding='utf-8')
+        getattr(sys.stderr, 'reconfigure', lambda **kw: None)(encoding='utf-8')
+    except (AttributeError, Exception):
+        pass
+
+import aiohttp.connector
+import aiohttp.resolver
+aiohttp.connector.DefaultResolver = aiohttp.resolver.ThreadedResolver
 
 # C-06 FIX: dotenv is optional. A missing dev dependency must not make the whole
 # engine un-importable (it prevented the test-suite and CLI tools from running).
@@ -131,7 +144,7 @@ class Config:
     HTF_TIMEFRAME = os.getenv("HTF_TIMEFRAME", "1h")
     HTF_MAX_STALENESS_MULT = float(os.getenv("HTF_MAX_STALENESS_MULT", "2.0"))
     LTF_TIMEFRAME = os.getenv("LTF_TIMEFRAME", "15m")
-    ADX_MIN_THRESHOLD = float(os.getenv("ADX_MIN_THRESHOLD", "25.0"))
+    ADX_MIN_THRESHOLD = float(os.getenv("ADX_MIN_THRESHOLD", "20.0"))
     SHORT_EMA = int(os.getenv("SHORT_EMA", "9"))
     LONG_EMA = int(os.getenv("LONG_EMA", "21"))
     TREND_EMA = int(os.getenv("TREND_EMA", "200"))

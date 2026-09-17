@@ -33,7 +33,7 @@ from dashboard.app import DashboardState
 
 def make_synthetic_ohlcv(bars=200, trend="UP", base_price=80000.0, start_time=None):
     if start_time is None:
-        start_time = pd.Timestamp("2026-08-01 00:00:00")
+        start_time = pd.Timestamp.now(datetime.timezone.utc) - pd.Timedelta(minutes=15 * bars)
     timestamps = [start_time + pd.Timedelta(minutes=15 * i) for i in range(bars)]
     
     np.random.seed(42)

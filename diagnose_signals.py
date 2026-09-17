@@ -58,7 +58,13 @@ def main():
             continue
             
         # Strict
+        import time
+        now_ms = time.time() * 1000
         htf_df = prepare_dataframe(htf_ohlcv)
+        if 'timestamp' in window_ltf_df.columns:
+            window_ltf_df['timestamp'] += (now_ms - window_ltf_df['timestamp'].iloc[-1])
+        if 'timestamp' in htf_df.columns:
+            htf_df['timestamp'] += (now_ms - htf_df['timestamp'].iloc[-1])
         signal_s, meta_s = strategy.generate_signal(htf_df, window_ltf_df, relaxed=False)
         # Relaxed
         signal_r, meta_r = strategy.generate_signal(htf_df, window_ltf_df, relaxed=True)

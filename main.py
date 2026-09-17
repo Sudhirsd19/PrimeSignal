@@ -6,6 +6,10 @@ transformations before executing the application, which lets us harden the
 large legacy file without manually rewriting unrelated code.
 """
 
+import aiohttp.connector
+import aiohttp.resolver
+aiohttp.connector.DefaultResolver = aiohttp.resolver.ThreadedResolver
+
 import asyncio
 import math
 import sys

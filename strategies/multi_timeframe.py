@@ -50,6 +50,10 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             'active_ob_type': 'NONE',
             'zone_id': None,
             'setup_type': 'NONE',
+            'score': 0.0,
+            'market_regime': 'RANGE',
+            'liquidation': {},
+            'cvd': {},
             'debug_checks': {
                 'trend': 'FAIL',
                 'zone': 'FAIL',
@@ -116,6 +120,10 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             htf_trend = 'BULLISH'
         elif latest_htf_close < latest_htf_ema_50 < latest_htf_ema_200:
             htf_trend = 'BEARISH'
+        elif relaxed and latest_htf_close > latest_htf_ema_50:
+            htf_trend = 'BULLISH'
+        elif relaxed and latest_htf_close < latest_htf_ema_50:
+            htf_trend = 'BEARISH'
         else:
             htf_trend = 'NEUTRAL'
 
@@ -179,9 +187,11 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         avg_atr_14 = ltf_atr.rolling(14).mean().iloc[target_idx]
         curr_atr = ltf_atr.iloc[target_idx]
         
-        adx_threshold = getattr(Config, 'ADX_MIN_THRESHOLD', 25.0)  # FIX-1: default matches Config.ADX_MIN_THRESHOLD = 25.0
+        adx_threshold = getattr(Config, 'ADX_MIN_THRESHOLD', 20.0)
+        if relaxed:
+            adx_threshold = min(18.0, adx_threshold)
         if curr_adx >= adx_threshold: market_regime = 'TREND'
-        elif curr_adx >= 20.0: market_regime = 'MIXED'
+        elif curr_adx >= (18.0 if relaxed else 20.0): market_regime = 'MIXED'
         else: market_regime = 'RANGE'
         
         # AUD-H1: Apply HIGH_VOL override AFTER ADX assignment to prevent clobbering
@@ -190,7 +200,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             
         metadata['market_regime'] = market_regime
 
-        # Trend Regime Filter: Block trades in chop/consolidation (ADX < 25)
+        # Trend Regime Filter: Block trades in chop/consolidation (ADX < threshold)
         if curr_adx < adx_threshold:
             metadata['reason'] = f"Chop Market Filter (ADX {curr_adx:.1f} < {adx_threshold:.1f})"
             return "HOLD", metadata
@@ -560,10 +570,11 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 elif relaxed and trigger_pass and curr_rsi < 68 and score >= (score_thresh - 1.0):
                     valid_entry = True
 
-            # Anti-Exhaustion Filter: Prevent buying the top of an exhausted impulse (RSI >= 60)
-            if valid_entry and curr_rsi >= 60.0:
+            # Anti-Exhaustion Filter: Prevent buying the top of an exhausted impulse (RSI >= 65 strict / 68 relaxed)
+            max_rsi_long = 65.0 if not relaxed else 68.0
+            if valid_entry and curr_rsi >= max_rsi_long:
                 valid_entry = False
-                metadata['reason'] = f"Anti-Exhaustion Filter: RSI too high for LONG ({curr_rsi:.1f} >= 60.0)"
+                metadata['reason'] = f"Anti-Exhaustion Filter: RSI too high for LONG ({curr_rsi:.1f} >= {max_rsi_long:.1f})"
 
             # Sudden Wick Filter (1.8%) — applied after valid_entry evaluation
             if valid_entry and trigger_low > 0 and (candle_range / trigger_low > 0.018):
@@ -773,10 +784,11 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 elif relaxed and trigger_pass and curr_rsi > 32 and score >= (score_thresh - 1.0):
                     valid_entry = True
 
-            # Anti-Exhaustion Filter: Prevent shorting the bottom of an oversold dump (RSI <= 40)
-            if valid_entry and curr_rsi <= 40.0:
+            # Anti-Exhaustion Filter: Prevent shorting the bottom of an oversold dump (RSI <= 35 strict / 32 relaxed)
+            min_rsi_short = 35.0 if not relaxed else 32.0
+            if valid_entry and curr_rsi <= min_rsi_short:
                 valid_entry = False
-                metadata['reason'] = f"Anti-Exhaustion Filter: RSI too low for SHORT ({curr_rsi:.1f} <= 40.0)"
+                metadata['reason'] = f"Anti-Exhaustion Filter: RSI too low for SHORT ({curr_rsi:.1f} <= {min_rsi_short:.1f})"
 
             # Sudden Wick Filter (1.8%) — applied after valid_entry evaluation
             if valid_entry and trigger_low > 0 and ((trigger_high - trigger_low) / trigger_low > 0.018):

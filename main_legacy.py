@@ -23,6 +23,10 @@ if sys.platform == 'win32':
 # Indian Standard Time (IST / UTC+5:30)
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))  # Indian Standard Time
 
+import aiohttp.connector
+import aiohttp.resolver
+aiohttp.connector.DefaultResolver = aiohttp.resolver.ThreadedResolver
+
 from config import Config
 from execution.execution_engine import ExecutionEngine
 from execution.execution_result import ExecutionResult, ExecutionState
@@ -187,6 +191,7 @@ class PrimeSignalBot:
 
         self._active_scan_tasks: set[asyncio.Task] = set()
         self._last_reset_date = datetime.datetime.now(IST).date()
+        self._rollover_task: Optional[asyncio.Task] = None
         # M-04/M-05: populated by run_live_risk_monitor
         self._risk_halt_active: bool = False
         self._monitor_frame_cache: dict[Any, Any] = {}
@@ -676,7 +681,7 @@ class PrimeSignalBot:
         add_log_message(f"System ready. Multi-symbol watch active ({len(Config.SUPPORTED_SYMBOLS)} pairs). UI viewing {Config.SYMBOL}")
         
         # Launch daily rollover task
-        asyncio.create_task(self._daily_rollover_task())
+        self._rollover_task = asyncio.create_task(self._daily_rollover_task())
 
     async def sync_coindcx_data(self):
         """Fetches and updates CoinDCX profile and balances in DashboardState."""
@@ -3144,6 +3149,8 @@ class PrimeSignalBot:
 
     async def shutdown(self):
         add_log_message("Shutting down exchange sessions gracefully...")
+        if hasattr(self, '_rollover_task') and self._rollover_task and not self._rollover_task.done():
+            self._rollover_task.cancel()
         await self.reconciliation.stop()
         await self.execution.close()
         self.pipeline.stop()

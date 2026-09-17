@@ -30,7 +30,7 @@ from alerts.notifier import TelegramNotifier
 from dashboard.app import DashboardState
 
 def make_sample_df(bars=120, trend="UP"):
-    dates = pd.date_range('2026-01-01', periods=bars, freq='15min')
+    dates = pd.date_range(end=pd.Timestamp.now(tz='UTC'), periods=bars, freq='15min')
     base = 80000.0
     prices = []
     for i in range(bars):

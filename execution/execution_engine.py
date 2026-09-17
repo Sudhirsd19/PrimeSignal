@@ -1,3 +1,7 @@
+import aiohttp.connector
+import aiohttp.resolver
+aiohttp.connector.DefaultResolver = aiohttp.resolver.ThreadedResolver
+
 import ccxt.async_support as ccxt
 import asyncio
 import inspect
