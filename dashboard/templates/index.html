@@ -3330,7 +3330,7 @@
                 alert("Please enter a valid positive profit percentage.");
                 return;
             }
-            const btn = event ? event.target : null;
+            const btn = (typeof event !== 'undefined' && event) ? event.target : document.querySelector("button[onclick*='saveMainProfitTarget']");
             if (btn) {
                 btn.disabled = true;
                 btn.innerText = "Saving...";
@@ -3365,12 +3365,18 @@
                     }
                 } else {
                     alert(data.message || data.detail || "Failed to update target.");
-                    if (btn) { btn.disabled = false; btn.innerText = "Set Target"; }
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.innerText = "Set Target";
+                    }
                 }
             } catch (e) {
                 console.error("Error saving main profit target:", e);
-                alert("Failed to update target. Check server connection.");
-                if (btn) { btn.disabled = false; btn.innerText = "Set Target"; }
+                alert("Failed to update target: " + (e.message || "Check server connection."));
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerText = "Set Target";
+                }
             }
         }
 

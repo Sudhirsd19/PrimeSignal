@@ -268,26 +268,32 @@ def _patch_source(text):
     )
 
     # Eliminate synthetic 2% stop fallback. Strategy protection is mandatory.
+    # Validate and assign `sl` at the entry point so lines 1141+ can safely reference it.
+    entry_line = "        entry_price = ltf_df['close'].iloc[-1]\n        add_log_message(f\"[{symbol}] Entry price set: {entry_price:.4f}\")"
+    early_sl_block = '''        entry_price = ltf_df['close'].iloc[-1]
+        add_log_message(f"[{symbol}] Entry price set: {entry_price:.4f}")
+        raw_stop_loss = metadata.get('stop_loss')
+        if raw_stop_loss is None:
+            add_log_message(f"[{symbol}] Trade blocked: strategy did not provide a durable stop-loss.")
+            return
+        try:
+            sl = float(raw_stop_loss)
+        except (TypeError, ValueError):
+            add_log_message(f"[{symbol}] Trade blocked: strategy stop-loss is invalid ({raw_stop_loss!r}).")
+            return
+        if not math.isfinite(sl) or sl <= 0:
+            add_log_message(f"[{symbol}] Trade blocked: strategy stop-loss is non-finite/non-positive ({raw_stop_loss!r}).")
+            return
+        if signal == "BUY" and sl >= entry_price:
+            add_log_message(f"[{symbol}] Trade blocked: LONG stop-loss {sl:.8f} is not below entry {entry_price:.8f}.")
+            return
+        if signal == "SELL" and sl <= entry_price:
+            add_log_message(f"[{symbol}] Trade blocked: SHORT stop-loss {sl:.8f} is not above entry {entry_price:.8f}.")
+            return'''
+    text = _replace_once(text, entry_line, early_sl_block, "early strategy stop-loss validation")
+
     sl_line = "            sl = float(metadata['stop_loss']) if metadata.get('stop_loss') is not None else (entry_price * 0.98)"
-    sl_block = '''            raw_stop_loss = metadata.get('stop_loss')
-            if raw_stop_loss is None:
-                add_log_message(f"[{symbol}] Trade blocked: strategy did not provide a durable stop-loss.")
-                return
-            try:
-                sl = float(raw_stop_loss)
-            except (TypeError, ValueError):
-                add_log_message(f"[{symbol}] Trade blocked: strategy stop-loss is invalid ({raw_stop_loss!r}).")
-                return
-            if not math.isfinite(sl) or sl <= 0:
-                add_log_message(f"[{symbol}] Trade blocked: strategy stop-loss is non-finite/non-positive ({raw_stop_loss!r}).")
-                return
-            if signal == "BUY" and sl >= entry_price:
-                add_log_message(f"[{symbol}] Trade blocked: LONG stop-loss {sl:.8f} is not below entry {entry_price:.8f}.")
-                return
-            if signal == "SELL" and sl <= entry_price:
-                add_log_message(f"[{symbol}] Trade blocked: SHORT stop-loss {sl:.8f} is not above entry {entry_price:.8f}.")
-                return'''
-    text = _replace_once(text, sl_line, sl_block, "strategy stop-loss validation")
+    text = _replace_once(text, sl_line, "            # Durable strategy SL already validated at entry\n            pass", "strategy stop-loss validation")
     text = text.replace("            # E-01 Fix: Provide safe fallback SL if None\n            sl_val = metadata.get('stop_loss')\n            if sl_val is None: sl_val = entry_price * 0.98 if signal == \"BUY\" else entry_price * 1.02", "            sl_val = sl")
     # The legacy file has evolved so the same fallback may appear without the
     # historical comment anchor. Remove every remaining executable copy.
