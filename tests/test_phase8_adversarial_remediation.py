@@ -112,18 +112,39 @@ class TestPhase8AdversarialRemediation(unittest.IsolatedAsyncioTestCase):
         btc_price_usd = 85000.0
         btc_sl_usd = 83300.0 # $1700 stop distance
 
-        pos_size_btc = rm.calculate_position_size(
-            account_equity=account_equity_usdt,
-            entry_price=btc_price_usd,
-            stop_loss=btc_sl_usd,
-            quote_currency="USDT",
-            is_inr=False,
-        )
+        # 1. When MAX_SINGLE_TRADE_RISK_USDT is explicitly set (e.g. 25.0 cap)
+        old_cap = getattr(Config, "MAX_SINGLE_TRADE_RISK_USDT", None)
+        try:
+            Config.MAX_SINGLE_TRADE_RISK_USDT = 25.0
+            pos_size_capped = rm.calculate_position_size(
+                account_equity=account_equity_usdt,
+                entry_price=btc_price_usd,
+                stop_loss=btc_sl_usd,
+                quote_currency="USDT",
+                is_inr=False,
+            )
+            # Max risk = $25. $25 / $1700 = 0.014706 BTC ($1,250 USDT).
+            notional_usdt_capped = pos_size_capped * btc_price_usd
+            self.assertAlmostEqual(pos_size_capped, 0.014706, places=4)
+            self.assertLessEqual(notional_usdt_capped, 3500.0) # 35% of $10,000
 
-        # Max risk = $25. $25 / $1700 = 0.014706 BTC ($1,250 USDT).
-        notional_usdt = pos_size_btc * btc_price_usd
-        self.assertAlmostEqual(pos_size_btc, 0.014706, places=4)
-        self.assertLessEqual(notional_usdt, 3500.0) # 35% of $10,000
+            # 2. When unconstrained (P1-01 fix: 0.0 default, no hidden $25 cap)
+            Config.MAX_SINGLE_TRADE_RISK_USDT = 0.0
+            pos_size_uncapped = rm.calculate_position_size(
+                account_equity=account_equity_usdt,
+                entry_price=btc_price_usd,
+                stop_loss=btc_sl_usd,
+                quote_currency="USDT",
+                is_inr=False,
+            )
+            notional_usdt_uncapped = pos_size_uncapped * btc_price_usd
+            self.assertGreater(pos_size_uncapped, pos_size_capped)
+            self.assertLessEqual(notional_usdt_uncapped, 3500.0) # Capped at 35% max allocation
+        finally:
+            if old_cap is None:
+                delattr(Config, "MAX_SINGLE_TRADE_RISK_USDT")
+            else:
+                Config.MAX_SINGLE_TRADE_RISK_USDT = old_cap
 
     def test_aud_p0_01_exchange_validator_inr(self):
         """Verify ExchangeValidator correctly bounds INR notional and caps."""

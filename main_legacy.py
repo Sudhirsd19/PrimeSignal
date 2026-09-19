@@ -1055,15 +1055,17 @@ class PrimeSignalBot:
                 add_log_message(f"[{symbol}] Trade skipped: Outside 12-22 UTC and volume not > {vol_mult}x average.")
                 return
                 
-        # 4H Bias logic
+        # 4H Bias logic (evaluate on last closed 4H candle to avoid intra-bar oscillation)
         htf_4h_df = self.pipeline.htf_4h_candles.get(symbol)
         if htf_4h_df is not None and len(htf_4h_df) > 50:
             if isinstance(htf_4h_df, list): htf_4h_df = pd.DataFrame(htf_4h_df, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
-            ema_4h = htf_4h_df['close'].ewm(span=50, adjust=False).mean().iloc[-1]
+            eval_4h_idx = -2 if len(htf_4h_df) >= 2 else -1
+            ema_4h = htf_4h_df['close'].ewm(span=50, adjust=False).mean().iloc[eval_4h_idx]
+            close_4h = htf_4h_df['close'].iloc[eval_4h_idx]
             cur_score = float(metadata.get('score') or 3.0)
-            if signal == "BUY" and htf_4h_df['close'].iloc[-1] < ema_4h:
+            if signal == "BUY" and close_4h < ema_4h:
                 metadata['score'] = cur_score - 0.5
-            elif signal == "SELL" and htf_4h_df['close'].iloc[-1] > ema_4h:
+            elif signal == "SELL" and close_4h > ema_4h:
                 metadata['score'] = cur_score - 0.5
                 
         add_log_message(f"[{symbol}] Raw strategy signal: {signal} ({metadata.get('reason')})")
@@ -2099,12 +2101,19 @@ class PrimeSignalBot:
                                 is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
                                 rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
                                 
+                                cancelled_spot_sl = False
                                 if self.has_keys and not Config.PAPER_TRADING:
                                     ctx = self.order_state_machine.get_context(symbol)
                                     if getattr(Config, 'EXCHANGE_TYPE', 'spot') != 'futures' and ctx.native_sl_order_id:
                                         await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
-                                    tp1_order = await self.execution.place_order('sell', 'market', tp1_size, symbol=symbol, is_exit_order=True, price=curr_price, order_role="TP1")
-                                    tp1_success = self._is_truthy_fill(tp1_order)
+                                        cancelled_spot_sl = True
+                                    try:
+                                        tp1_order = await self.execution.place_order('sell', 'market', tp1_size, symbol=symbol, is_exit_order=True, price=curr_price, order_role="TP1")
+                                        tp1_success = self._is_truthy_fill(tp1_order)
+                                    except Exception as e:
+                                        add_log_message(f"[{symbol}] 🚨 Exception placing TP1 order: {e}")
+                                        tp1_success = False
+                                        tp1_order = None
                                 else:
                                     self._dry_run_balance_usdt += tp1_size * curr_price * (rate if is_inr else 1.0)
                                     tp1_success = True
@@ -2121,7 +2130,7 @@ class PrimeSignalBot:
                                     tp1_fee = tp1_size * self.entry_price[symbol] * Config.FEE_RATE + tp1_size * actual_tp1_price * Config.FEE_RATE
                                     tp1_pnl_usdt -= tp1_fee
                                     self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + (tp1_size * actual_tp1_price * Config.FEE_RATE)
-                                    tp1_pnl_pct = (curr_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
+                                    tp1_pnl_pct = (actual_tp1_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
                                     self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp1_pnl_usdt
                                     
                                     now_ts = int(time.time() * 1000)
@@ -2192,7 +2201,8 @@ class PrimeSignalBot:
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP1 order REJECTED by exchange. State NOT updated.")
-                                    await self._restore_spot_native_sl(symbol, 'LONG', self.position_size[symbol], self.stop_loss[symbol])
+                                    if cancelled_spot_sl:
+                                        await self._restore_spot_native_sl(symbol, 'LONG', self.position_size[symbol], self.stop_loss[symbol])
                                     
                             # TP2 (Remaining Runner Scale-Out at 3.0R)
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price >= self.take_profit_2r[symbol]:
@@ -2204,12 +2214,19 @@ class PrimeSignalBot:
                                 tp2_order = None
                                 is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
                                 rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
+                                cancelled_spot_sl = False
                                 if self.has_keys and not Config.PAPER_TRADING:
                                     ctx = self.order_state_machine.get_context(symbol)
                                     if getattr(Config, 'EXCHANGE_TYPE', 'spot') != 'futures' and ctx.native_sl_order_id:
                                         await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
-                                    tp2_order = await self.execution.place_order('sell', 'market', tp2_size, symbol=symbol, is_exit_order=True, price=curr_price, order_role="TP2")
-                                    tp2_success = self._is_truthy_fill(tp2_order)
+                                        cancelled_spot_sl = True
+                                    try:
+                                        tp2_order = await self.execution.place_order('sell', 'market', tp2_size, symbol=symbol, is_exit_order=True, price=curr_price, order_role="TP2")
+                                        tp2_success = self._is_truthy_fill(tp2_order)
+                                    except Exception as e:
+                                        add_log_message(f"[{symbol}] 🚨 Exception placing TP2 order: {e}")
+                                        tp2_success = False
+                                        tp2_order = None
                                 else:
                                     self._dry_run_balance_usdt += tp2_size * curr_price * (rate if is_inr else 1.0)
                                     tp2_success = True
@@ -2226,7 +2243,7 @@ class PrimeSignalBot:
                                     tp2_fee = tp2_size * self.entry_price[symbol] * Config.FEE_RATE + tp2_size * actual_tp2_price * Config.FEE_RATE
                                     tp2_pnl_usdt -= tp2_fee
                                     self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + (tp2_size * actual_tp2_price * Config.FEE_RATE)
-                                    tp2_pnl_pct = (curr_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
+                                    tp2_pnl_pct = (actual_tp2_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
                                     self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp2_pnl_usdt
                                     
                                     now_ts = int(time.time() * 1000)
@@ -2296,7 +2313,8 @@ class PrimeSignalBot:
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP2 order REJECTED by exchange. State NOT updated.")
-                                    await self._restore_spot_native_sl(symbol, 'LONG', self.position_size[symbol], self.stop_loss[symbol])
+                                    if cancelled_spot_sl:
+                                        await self._restore_spot_native_sl(symbol, 'LONG', self.position_size[symbol], self.stop_loss[symbol])
 
                             if self.partial_tp_taken[symbol]:
                                 new_sl = self.risk.update_trailing_stop(self.entry_price[symbol], self.highest_price_reached[symbol], self.stop_loss[symbol], curr_atr, "LONG")
@@ -2382,12 +2400,19 @@ class PrimeSignalBot:
                                 is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
                                 rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
 
+                                cancelled_spot_sl = False
                                 if self.has_keys and not Config.PAPER_TRADING:
                                     ctx = self.order_state_machine.get_context(symbol)
                                     if getattr(Config, 'EXCHANGE_TYPE', 'spot') != 'futures' and ctx.native_sl_order_id:
                                         await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
-                                    tp1_order = await self.execution.place_order('buy', 'market', tp1_size, symbol=symbol, is_exit_order=True, price=curr_price, order_role="TP1")
-                                    tp1_success = self._is_truthy_fill(tp1_order)
+                                        cancelled_spot_sl = True
+                                    try:
+                                        tp1_order = await self.execution.place_order('buy', 'market', tp1_size, symbol=symbol, is_exit_order=True, price=curr_price, order_role="TP1")
+                                        tp1_success = self._is_truthy_fill(tp1_order)
+                                    except Exception as e:
+                                        add_log_message(f"[{symbol}] 🚨 Exception placing TP1 order: {e}")
+                                        tp1_success = False
+                                        tp1_order = None
                                 else:
                                     # Short TP cash return = entry_notional + (entry_notional - exit_notional) = profit + collateral
                                     tp1_pnl_usdt = tp1_size * (self.entry_price[symbol] - curr_price)
@@ -2407,7 +2432,7 @@ class PrimeSignalBot:
                                     tp1_fee = tp1_size * self.entry_price[symbol] * Config.FEE_RATE + tp1_size * actual_tp1_price * Config.FEE_RATE
                                     tp1_pnl_usdt -= tp1_fee
                                     self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + (tp1_size * actual_tp1_price * Config.FEE_RATE)
-                                    tp1_pnl_pct = (self.entry_price[symbol] - curr_price) / self.entry_price[symbol] * 100.0
+                                    tp1_pnl_pct = (self.entry_price[symbol] - actual_tp1_price) / self.entry_price[symbol] * 100.0
                                     self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp1_pnl_usdt
                                     
                                     now_ts = int(time.time() * 1000)
@@ -2478,7 +2503,8 @@ class PrimeSignalBot:
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP1 order REJECTED by exchange. State NOT updated.")
-                                    await self._restore_spot_native_sl(symbol, 'SHORT', self.position_size[symbol], self.stop_loss[symbol])
+                                    if cancelled_spot_sl:
+                                        await self._restore_spot_native_sl(symbol, 'SHORT', self.position_size[symbol], self.stop_loss[symbol])
                                     
                             # TP2 (Remaining Runner Scale-Out at 3.0R)
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price <= self.take_profit_2r[symbol]:
@@ -2491,12 +2517,19 @@ class PrimeSignalBot:
                                 is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
                                 rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
 
+                                cancelled_spot_sl = False
                                 if self.has_keys and not Config.PAPER_TRADING:
                                     ctx = self.order_state_machine.get_context(symbol)
                                     if getattr(Config, 'EXCHANGE_TYPE', 'spot') != 'futures' and ctx.native_sl_order_id:
                                         await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
-                                    tp2_order = await self.execution.place_order('buy', 'market', tp2_size, symbol=symbol, is_exit_order=True, price=curr_price, order_role="TP2")
-                                    tp2_success = self._is_truthy_fill(tp2_order)
+                                        cancelled_spot_sl = True
+                                    try:
+                                        tp2_order = await self.execution.place_order('buy', 'market', tp2_size, symbol=symbol, is_exit_order=True, price=curr_price, order_role="TP2")
+                                        tp2_success = self._is_truthy_fill(tp2_order)
+                                    except Exception as e:
+                                        add_log_message(f"[{symbol}] 🚨 Exception placing TP2 order: {e}")
+                                        tp2_success = False
+                                        tp2_order = None
                                 else:
                                     # C-03 FIX: Return collateral (entry_notional) + pnl only
                                     # entry_notional was deducted at SELL entry; buying back at curr_price frees: entry_notional + (entry - curr) * size
@@ -2517,7 +2550,7 @@ class PrimeSignalBot:
                                     tp2_fee = tp2_size * self.entry_price[symbol] * Config.FEE_RATE + tp2_size * actual_tp2_price * Config.FEE_RATE
                                     tp2_pnl_usdt -= tp2_fee
                                     self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + (tp2_size * actual_tp2_price * Config.FEE_RATE)
-                                    tp2_pnl_pct = (self.entry_price[symbol] - curr_price) / self.entry_price[symbol] * 100.0
+                                    tp2_pnl_pct = (self.entry_price[symbol] - actual_tp2_price) / self.entry_price[symbol] * 100.0
                                     self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp2_pnl_usdt
                                     
                                     now_ts = int(time.time() * 1000)
@@ -2588,7 +2621,8 @@ class PrimeSignalBot:
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP2 order REJECTED by exchange. State NOT updated.")
-                                    await self._restore_spot_native_sl(symbol, 'SHORT', self.position_size[symbol], self.stop_loss[symbol])
+                                    if cancelled_spot_sl:
+                                        await self._restore_spot_native_sl(symbol, 'SHORT', self.position_size[symbol], self.stop_loss[symbol])
 
                             if self.partial_tp_taken[symbol]:
                                 new_sl = self.risk.update_trailing_stop(self.entry_price[symbol], self.lowest_price_reached[symbol], self.stop_loss[symbol], curr_atr, "SHORT")

@@ -735,8 +735,15 @@ class ExecutionEngine:
         except: pass
         return False
 
-    async def verify_order_active(self, symbol: str, order_id: str) -> str:
-        """Verifies if an order is actively resting on the exchange."""
+    async def verify_order_active(
+        self,
+        symbol: str,
+        order_id: str,
+        expected_side: Optional[str] = None,
+        expected_qty: Optional[float] = None,
+        expected_stop_price: Optional[float] = None,
+    ) -> str:
+        """Verifies if an order is actively resting on the exchange with semantic validation."""
         if not order_id:
             return 'INACTIVE'
         if self.coindcx_client:
@@ -744,9 +751,26 @@ class ExecutionEngine:
                 status_data = await self.coindcx_client.fetch_order_status(order_id)
                 if status_data is None:
                     return 'UNKNOWN'
-                if status_data.get('status') in ('open', 'active', 'untriggered', 'pending'):
+                status = (status_data.get('status') or '').lower()
+                if status in ('open', 'active', 'untriggered', 'pending'):
+                    # Semantic checks
+                    if expected_side:
+                        order_side = (status_data.get('side') or '').lower()
+                        if order_side and order_side != expected_side.lower():
+                            print(f"[ORDER VERIFY] CoinDCX Side mismatch: expected {expected_side}, got {order_side}")
+                            return 'INACTIVE'
+                    if expected_qty is not None and expected_qty > 0:
+                        order_qty = float(status_data.get('amount') or status_data.get('total_quantity') or 0.0)
+                        if order_qty > 0 and abs(order_qty - expected_qty) / max(expected_qty, 1e-9) > 0.05:
+                            print(f"[ORDER VERIFY] CoinDCX Qty mismatch: expected {expected_qty}, got {order_qty}")
+                            return 'INACTIVE'
+                    if expected_stop_price is not None and expected_stop_price > 0:
+                        order_price = float(status_data.get('stop_price') or status_data.get('price') or 0.0)
+                        if order_price > 0 and abs(order_price - expected_stop_price) / max(expected_stop_price, 1e-9) > 0.02:
+                            print(f"[ORDER VERIFY] CoinDCX Price mismatch: expected {expected_stop_price}, got {order_price}")
+                            return 'INACTIVE'
                     return 'ACTIVE'
-                if status_data.get('status') in ('cancelled', 'canceled', 'rejected', 'expired', 'closed', 'filled'):
+                if status in ('cancelled', 'canceled', 'rejected', 'expired', 'closed', 'filled'):
                     return 'INACTIVE'
                 return 'UNKNOWN'
             except Exception as e:
@@ -757,9 +781,26 @@ class ExecutionEngine:
             order = await self.execute_with_retry(self.trade_client.fetch_order, order_id, symbol)
             if order is None:
                 return 'UNKNOWN'
-            if order.get('status') in ('open', 'untriggered', 'pending', 'new', 'active'):
+            status = (order.get('status') or '').lower()
+            if status in ('open', 'untriggered', 'pending', 'new', 'active'):
+                # Semantic checks
+                if expected_side:
+                    order_side = (order.get('side') or '').lower()
+                    if order_side and order_side != expected_side.lower():
+                        print(f"[ORDER VERIFY] Side mismatch: expected {expected_side}, got {order_side}")
+                        return 'INACTIVE'
+                if expected_qty is not None and expected_qty > 0:
+                    order_qty = float(order.get('amount') or 0.0)
+                    if order_qty > 0 and abs(order_qty - expected_qty) / max(expected_qty, 1e-9) > 0.05:
+                        print(f"[ORDER VERIFY] Qty mismatch: expected {expected_qty}, got {order_qty}")
+                        return 'INACTIVE'
+                if expected_stop_price is not None and expected_stop_price > 0:
+                    order_price = float(order.get('stopPrice') or order.get('price') or 0.0)
+                    if order_price > 0 and abs(order_price - expected_stop_price) / max(expected_stop_price, 1e-9) > 0.02:
+                        print(f"[ORDER VERIFY] Price mismatch: expected {expected_stop_price}, got {order_price}")
+                        return 'INACTIVE'
                 return 'ACTIVE'
-            if order.get('status') in ('closed', 'filled', 'canceled', 'cancelled', 'rejected', 'expired'):
+            if status in ('closed', 'filled', 'canceled', 'cancelled', 'rejected', 'expired'):
                 return 'INACTIVE'
             return 'UNKNOWN'
         except ccxt.OrderNotFound:

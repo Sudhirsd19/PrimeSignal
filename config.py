@@ -46,6 +46,8 @@ class Config:
     RISK_TIER_LOW_MULT = float(os.getenv("RISK_TIER_LOW_MULT", "0.75"))
     RISK_TIER_MID_MULT = float(os.getenv("RISK_TIER_MID_MULT", "1.0"))
     RISK_TIER_HIGH_MULT = float(os.getenv("RISK_TIER_HIGH_MULT", "1.25"))
+    # Point 1 Fix: Explicit maximum dollar risk cap per single trade (0.0 = unconstrained, governed by RISK_PCT)
+    MAX_SINGLE_TRADE_RISK_USDT = float(os.getenv("MAX_SINGLE_TRADE_RISK_USDT", "0.0"))
     # Score thresholds that select each ladder tier
     RISK_TIER_MID_SCORE = float(os.getenv("RISK_TIER_MID_SCORE", "3.5"))
     RISK_TIER_HIGH_SCORE = float(os.getenv("RISK_TIER_HIGH_SCORE", "4.5"))
@@ -357,16 +359,21 @@ class Config:
         if cls.TRADING_VENUE == "COINDCX":
             if cls.EXCHANGE_TYPE == "futures":
                 raise ValueError("CRITICAL CONFIG ERROR: CoinDCX does not support futures trading via API. Set EXCHANGE_TYPE=spot or TRADING_VENUE=BINANCE.")
-            if not has_coindcx and not cls.PAPER_TRADING:
-                raise ValueError("CRITICAL CONFIG ERROR: TRADING_VENUE is set to COINDCX for live trading, but valid CoinDCX credentials were not found.")
-
-        if not has_binance and not has_coindcx:
-            print("WARNING: Neither Binance nor CoinDCX credentials found. Trading engine will run in DRY-RUN mode.")
+            has_keys = has_coindcx
+            if not has_keys:
+                if not cls.PAPER_TRADING:
+                    raise ValueError("CRITICAL CONFIG ERROR: TRADING_VENUE is set to COINDCX for live trading, but valid CoinDCX credentials were not found.")
+                print("WARNING: CoinDCX credentials not found for TRADING_VENUE='COINDCX'. Trading engine will run in DRY-RUN mode.")
+            else:
+                print(f"[INIT] CoinDCX integration active. Mode: {'PAPER TRADING (Demo)' if cls.PAPER_TRADING else 'LIVE TRADING'}")
+        elif cls.TRADING_VENUE == "BINANCE":
+            has_keys = has_binance
+            if not has_keys:
+                print("WARNING: Binance credentials not found for TRADING_VENUE='BINANCE'. Trading engine will run in DRY-RUN mode.")
+            else:
+                print(f"[INIT] Binance integration active. Mode: {'PAPER TRADING (Demo)' if cls.PAPER_TRADING else 'LIVE TRADING'}")
+        else:
             has_keys = False
-        elif cls.TRADING_VENUE == "COINDCX" and has_coindcx:
-            print(f"[INIT] CoinDCX integration active. Mode: {'PAPER TRADING (Demo)' if cls.PAPER_TRADING else 'LIVE TRADING'}")
-        elif cls.TRADING_VENUE == "BINANCE" and has_binance:
-            print(f"[INIT] Binance integration active. Mode: {'PAPER TRADING (Demo)' if cls.PAPER_TRADING else 'LIVE TRADING'}")
 
         # Validate critical numeric ranges to prevent account-wipe settings.
         # Cap the HIGHEST rung of the ladder (not just the baseline) so a large

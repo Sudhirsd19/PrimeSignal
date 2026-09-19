@@ -164,25 +164,28 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         ema_short = calculate_ema(ltf_df, Config.SHORT_EMA)
         ema_long  = calculate_ema(ltf_df, Config.LONG_EMA)
 
-        fvgs       = detect_fvgs(ltf_df)
-        obs        = detect_order_blocks(ltf_df)
-        htf_fvgs   = detect_fvgs(htf_df)
-        htf_obs    = detect_order_blocks(htf_df)
-        bos_series, choch_series = detect_structure(ltf_df)
+        htf_eval_df = htf_df.iloc[:htf_eval_idx + 1] if htf_eval_idx == -2 else htf_df
+        fvgs       = detect_fvgs(ltf_eval_df)
+        obs        = detect_order_blocks(ltf_eval_df)
+        htf_fvgs   = detect_fvgs(htf_eval_df)
+        htf_obs    = detect_order_blocks(htf_eval_df)
+        bos_series, choch_series = detect_structure(ltf_eval_df)
         
         # RSI Divergence detection on LTF
         rsi_div_lookback = getattr(Config, 'RSI_DIVERGENCE_LOOKBACK', 20)
-        ltf_rsi_div = detect_rsi_divergence(ltf_df, ltf_rsi, lookback=rsi_div_lookback)
+        ltf_rsi_div = detect_rsi_divergence(ltf_eval_df, ltf_rsi, lookback=rsi_div_lookback)
         metadata['ltf_rsi_divergence'] = ltf_rsi_div
         
         # HTF RSI divergence (additional confluence)
         htf_rsi = calculate_rsi(htf_df, Config.RSI_PERIOD)
-        htf_rsi_div = detect_rsi_divergence(htf_df, htf_rsi, lookback=rsi_div_lookback)
+        htf_rsi_div = detect_rsi_divergence(htf_eval_df, htf_rsi, lookback=rsi_div_lookback)
         metadata['htf_rsi_divergence'] = htf_rsi_div
         
         # Next-Gen Quant Engines: Liquidation Magnet & Order Flow CVD
-        liq_info = self.liq_engine.calculate_liquidation_pools(ltf_eval_df)
-        cvd_info = self.orderflow_engine.detect_absorption_divergence(ltf_eval_df)
+        enable_liq = getattr(Config, 'ENABLE_LIQUIDATION_HUNT', True) or getattr(Config, 'ENABLE_LIQUIDATION_MAGNET', True)
+        enable_cvd = getattr(Config, 'ENABLE_CVD_ABSORPTION', True)
+        liq_info = self.liq_engine.calculate_liquidation_pools(ltf_eval_df) if enable_liq else {}
+        cvd_info = self.orderflow_engine.detect_absorption_divergence(ltf_eval_df) if enable_cvd else {}
         metadata['liquidation'] = liq_info
         metadata['cvd'] = cvd_info
         
@@ -504,7 +507,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                         reason = f"Dynamic Setup: EMA 50 Pullback"
 
                 if not in_zone:
-                    sweep_setup = self.liquidity_sweep_engine.detect_sweep_setup(ltf_df)
+                    sweep_setup = self.liquidity_sweep_engine.detect_sweep_setup(ltf_eval_df)
                     if sweep_setup.get('is_setup') and sweep_setup.get('signal') == 'BUY':
                         in_zone = True
                         entry_type = f"SWEEP_{sweep_setup.get('sweep_level_type', 'LIQ')}"
@@ -560,7 +563,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             if getattr(Config, 'ENABLE_CVD_ABSORPTION', True) and cvd_info.get('absorption') == 'BULLISH_ABSORPTION':
                 score += 1.5
                 metadata['debug_checks']['cvd_absorption'] = 'BULLISH_ABSORPTION_PASS'
-            if getattr(Config, 'ENABLE_LIQUIDATION_HUNT', True) and liq_info.get('hunt_signal') == 'BULLISH_LIQUIDATION_HUNT':
+            if (getattr(Config, 'ENABLE_LIQUIDATION_HUNT', True) or getattr(Config, 'ENABLE_LIQUIDATION_MAGNET', True)) and liq_info.get('hunt_signal') == 'BULLISH_LIQUIDATION_HUNT':
                 score += 1.5
                 metadata['debug_checks']['liq_hunt'] = 'BULLISH_LIQ_HUNT_PASS'
             
@@ -730,7 +733,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                         reason = f"Dynamic Setup: EMA 50 Pullback"
 
                 if not in_zone and allow_short:
-                    sweep_setup = self.liquidity_sweep_engine.detect_sweep_setup(ltf_df)
+                    sweep_setup = self.liquidity_sweep_engine.detect_sweep_setup(ltf_eval_df)
                     if sweep_setup.get('is_setup') and sweep_setup.get('signal') == 'SELL':
                         in_zone = True
                         entry_type = f"SWEEP_{sweep_setup.get('sweep_level_type', 'LIQ')}"
@@ -786,7 +789,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             if getattr(Config, 'ENABLE_CVD_ABSORPTION', True) and cvd_info.get('absorption') == 'BEARISH_ABSORPTION':
                 score += 1.5
                 metadata['debug_checks']['cvd_absorption'] = 'BEARISH_ABSORPTION_PASS'
-            if getattr(Config, 'ENABLE_LIQUIDATION_HUNT', True) and liq_info.get('hunt_signal') == 'BEARISH_LIQUIDATION_HUNT':
+            if (getattr(Config, 'ENABLE_LIQUIDATION_HUNT', True) or getattr(Config, 'ENABLE_LIQUIDATION_MAGNET', True)) and liq_info.get('hunt_signal') == 'BEARISH_LIQUIDATION_HUNT':
                 score += 1.5
                 metadata['debug_checks']['liq_hunt'] = 'BEARISH_LIQ_HUNT_PASS'
             

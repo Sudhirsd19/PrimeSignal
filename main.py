@@ -240,28 +240,28 @@ def _patch_source(text):
 
     text = _replace_exact_count(
         text,
-        "                                    tp1_pnl_pct = (curr_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0",
+        "                                    tp1_pnl_pct = (actual_tp1_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0",
         "                                    tp1_pnl_pct = net_leg_pnl_pct(tp1_pnl_usdt, tp1_size, self.entry_price[symbol])",
         1,
         "LONG TP1 pnl percentage",
     )
     text = _replace_exact_count(
         text,
-        "                                    tp2_pnl_pct = (curr_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0",
+        "                                    tp2_pnl_pct = (actual_tp2_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0",
         "                                    tp2_pnl_pct = net_leg_pnl_pct(tp2_pnl_usdt, tp2_size, self.entry_price[symbol])",
         1,
         "LONG TP2 pnl percentage",
     )
     text = _replace_exact_count(
         text,
-        "                                    tp1_pnl_pct = (self.entry_price[symbol] - curr_price) / self.entry_price[symbol] * 100.0",
+        "                                    tp1_pnl_pct = (self.entry_price[symbol] - actual_tp1_price) / self.entry_price[symbol] * 100.0",
         "                                    tp1_pnl_pct = net_leg_pnl_pct(tp1_pnl_usdt, tp1_size, self.entry_price[symbol])",
         1,
         "SHORT TP1 pnl percentage",
     )
     text = _replace_exact_count(
         text,
-        "                                    tp2_pnl_pct = (self.entry_price[symbol] - curr_price) / self.entry_price[symbol] * 100.0",
+        "                                    tp2_pnl_pct = (self.entry_price[symbol] - actual_tp2_price) / self.entry_price[symbol] * 100.0",
         "                                    tp2_pnl_pct = net_leg_pnl_pct(tp2_pnl_usdt, tp2_size, self.entry_price[symbol])",
         1,
         "SHORT TP2 pnl percentage",

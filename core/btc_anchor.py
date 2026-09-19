@@ -101,22 +101,25 @@ class BTCAnchorEngine:
                     return False, f"BTC Sustained Rally (+{pump_pct:.2f}% over 45m): Altcoin shorts blocked", 0.0
 
         # ── 3. HTF Macro Confluence (1h frame) ──
+        # Evaluate on the last closed 1H candle to prevent intra-bar oscillation
         btc_htf_trend = "NEUTRAL"
         if btc_htf_data is not None:
             btc_htf_df = prepare_dataframe(btc_htf_data) if isinstance(btc_htf_data, list) else btc_htf_data
             if isinstance(btc_htf_df, pd.DataFrame) and len(btc_htf_df) >= 50:
-                htf_close = float(btc_htf_df['close'].iloc[-1])
-                htf_ema50 = float(calculate_ema(btc_htf_df, 50).iloc[-1])
-                htf_ema200 = float(calculate_ema(btc_htf_df, min(200, len(btc_htf_df))).iloc[-1]) if len(btc_htf_df) >= 100 else htf_ema50
+                htf_eval_idx = -2 if len(btc_htf_df) >= 2 else -1
+                htf_close = float(btc_htf_df['close'].iloc[htf_eval_idx])
+                htf_ema50 = float(calculate_ema(btc_htf_df, 50).iloc[htf_eval_idx])
+                htf_ema200 = float(calculate_ema(btc_htf_df, min(200, len(btc_htf_df))).iloc[htf_eval_idx]) if len(btc_htf_df) >= 100 else htf_ema50
 
                 if htf_close > htf_ema50 and htf_ema50 >= htf_ema200:
                     btc_htf_trend = "BULLISH"
                 elif htf_close < htf_ema50 and htf_ema50 <= htf_ema200:
                     btc_htf_trend = "BEARISH"
 
-        # LTF RSI
+        # LTF RSI on last closed candle
         ltf_rsi_series = calculate_rsi(btc_ltf_df, 14)
-        btc_ltf_rsi = float(ltf_rsi_series.iloc[-1]) if not ltf_rsi_series.empty and not math.isnan(ltf_rsi_series.iloc[-1]) else 50.0
+        ltf_rsi_idx = -2 if len(btc_ltf_df) >= 2 else -1
+        btc_ltf_rsi = float(ltf_rsi_series.iloc[ltf_rsi_idx]) if not ltf_rsi_series.empty and not math.isnan(ltf_rsi_series.iloc[ltf_rsi_idx]) else 50.0
 
         # Hard Divergence Filter
         if signal == "BUY" and btc_htf_trend == "BEARISH" and btc_ltf_rsi < 42.0:

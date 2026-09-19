@@ -104,6 +104,9 @@ class MLSignalConfirmator:
         else:
             tp_barrier = abs(float(getattr(Config, 'ML_LABEL_TP_PCT', 0.006)))
         lookahead   = int(getattr(Config,   'ML_LABEL_LOOKAHEAD', 20))   # max 20 bars
+        dynamic_atr = getattr(Config, 'ML_LABEL_DYNAMIC_ATR', False)
+        atr_mult    = float(getattr(Config, 'ML_LABEL_ATR_MULT', 1.5))
+        atr_vals    = data['atr_pct'].values if 'atr_pct' in data.columns else None
 
         close_vals = data['close'].values
         high_vals = data['high'].values
@@ -115,6 +118,15 @@ class MLSignalConfirmator:
             entry = close_vals[idx]
             if entry <= 0:
                 continue
+
+            # Dynamic ATR-scaled barriers if enabled, else fixed baseline
+            if dynamic_atr and atr_vals is not None and not np.isnan(atr_vals[idx]) and atr_vals[idx] > 0:
+                current_sl_barrier = max(sl_barrier, atr_vals[idx] * atr_mult)
+                current_tp_barrier = current_sl_barrier * float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0))
+            else:
+                current_sl_barrier = sl_barrier
+                current_tp_barrier = tp_barrier
+
             hit = 0  # default: neither barrier hit -> label 0 (sideways / whipsaw)
             long_alive = True
             short_alive = True
@@ -126,16 +138,16 @@ class MLSignalConfirmator:
                 low_ret = (fwd_low - entry) / entry
                 
                 # Check SL violations first
-                if long_alive and low_ret <= -sl_barrier:
+                if long_alive and low_ret <= -current_sl_barrier:
                     long_alive = False
-                if short_alive and high_ret >= sl_barrier:
+                if short_alive and high_ret >= current_sl_barrier:
                     short_alive = False
                     
                 # Check TP targets
-                if long_alive and high_ret >= tp_barrier:
+                if long_alive and high_ret >= current_tp_barrier:
                     hit = 1   # Long TP hit first -> favourable long
                     break
-                if short_alive and low_ret <= -tp_barrier:
+                if short_alive and low_ret <= -current_tp_barrier:
                     hit = 2   # Short TP hit first -> favourable short
                     break
                     

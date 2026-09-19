@@ -79,9 +79,14 @@ class MacroNewsCalendar:
                 payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
                 parsed = self._parse_feed(payload.get("events") if isinstance(payload, dict) else payload)
                 if parsed:
-                    self.events = parsed
-                    self.source = "DISK_CACHE"
-                    self.last_refresh = float(payload.get("fetched_at", 0.0)) if isinstance(payload, dict) else 0.0
+                    fetched_at = float(payload.get("fetched_at", 0.0)) if isinstance(payload, dict) else 0.0
+                    ttl = max(60, int(getattr(Config, "ECONOMIC_CALENDAR_CACHE_MINS", 30)) * 60)
+                    if fetched_at > 0 and (time.time() - fetched_at) < ttl:
+                        self.events = parsed
+                        self.source = "DISK_CACHE"
+                        self.last_refresh = fetched_at
+                    else:
+                        self.last_error = "disk cache expired"
         except (OSError, json.JSONDecodeError) as exc:
             self.last_error = f"cache load failed: {exc}"
 

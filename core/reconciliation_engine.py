@@ -1,5 +1,6 @@
 import asyncio
 import time
+import inspect
 from typing import Dict, Any, Optional, List
 from config import Config
 from core.order_state_machine import OrderStateMachine, OrderState
@@ -357,9 +358,19 @@ class ReconciliationEngine:
             if matched:
                 resolved_sl = str(matched[0].get('id'))
             else:
-                resolved_sl = str(valid_protective[-1].get('id'))
+                def _sl_distance(order):
+                    o_price = float(order.get('stopPrice') or order.get('stop_price') or order.get('price') or 0.0)
+                    o_qty = float(order.get('amount') or order.get('total_quantity') or 0.0)
+                    target_sl = float(self.bot.stop_loss.get(symbol, 0.0)) or float(getattr(ctx, 'stop_loss', 0.0) or 0.0)
+                    target_qty = exchange_qty or float(self.bot.position_size.get(symbol, 0.0) or 0.0)
+                    price_diff = abs(o_price - target_sl) if (o_price > 0 and target_sl > 0) else 1e9
+                    qty_diff = abs(o_qty - target_qty) if (o_qty > 0 and target_qty > 0) else 1e9
+                    return (price_diff, qty_diff)
+
+                best_order = min(valid_protective, key=_sl_distance)
+                resolved_sl = str(best_order.get('id'))
                 try:
-                    print(f'[RECONCILIATION] Discovered existing exchange SL {resolved_sl} for {symbol}. Adopting.')
+                    print(f'[RECONCILIATION] Discovered existing exchange SL {resolved_sl} for {symbol} (closest match). Adopting.')
                 except Exception:
                     pass
                 ctx.native_sl_order_id = resolved_sl
@@ -681,10 +692,49 @@ class ReconciliationEngine:
                 if isinstance(b, dict) and 'currency' in b:
                     curr = str(b['currency']).upper()
                     bal_map[curr] = float(b.get('balance', 0) or 0) + float(b.get('locked_balance', 0) or 0)
+        # Point 6 Fix: Fetch active exchange orders from CoinDCX for protective order sync
+        cdx_orders_raw = []
+        if hasattr(exec_engine, "coindcx_client") and exec_engine.coindcx_client is not None:
+            try:
+                fetch_fn = getattr(exec_engine.coindcx_client, "fetch_active_orders", None)
+                if callable(fetch_fn):
+                    call_res = fetch_fn()
+                    if inspect.isawaitable(call_res):
+                        cdx_orders_raw = await call_res
+                    elif isinstance(call_res, list):
+                        cdx_orders_raw = call_res
+            except Exception as e:
+                print(f"[RECONCILIATION] CoinDCX fetch_active_orders error: {e}")
+                cdx_orders_raw = []
+
+        cdx_orders = cdx_orders_raw or []
+
         for symbol in Config.SUPPORTED_SYMBOLS:
             base_coin = symbol.split('/')[0].upper()
+            market_name = symbol.replace('/', '').upper()
             qty = bal_map.get(base_coin, 0.0)
             ctx = self.bot.order_state_machine.get_context(symbol)
+
+            # Map CoinDCX active orders for this symbol to canonical protective order structure
+            symbol_orders = []
+            for o in cdx_orders:
+                o_mkt = str(o.get('market') or o.get('symbol') or '').upper()
+                if o_mkt == market_name or o_mkt == symbol.replace('/', ''):
+                    canon_order = {
+                        'id': str(o.get('id') or o.get('order_id') or ''),
+                        'symbol': symbol,
+                        'side': str(o.get('side', '')).lower(),
+                        'type': str(o.get('order_type', '')).lower(),
+                        'stop_price': float(o.get('stop_price') or o.get('price_per_unit') or 0.0),
+                        'price': float(o.get('price_per_unit') or 0.0),
+                        'amount': float(o.get('total_quantity') or o.get('amount') or 0.0),
+                    }
+                    symbol_orders.append(canon_order)
+
+            resolved_sl = await self._sync_exchange_orders(symbol, ctx, qty, symbol_orders)
+            if resolved_sl:
+                ctx.native_sl_order_id = resolved_sl
+
             if self.bot.in_position.get(symbol, False):
                 expected_size = float(self.bot.position_size.get(symbol, 0.0))
                 if qty < (expected_size - 1e-5):
@@ -692,5 +742,21 @@ class ReconciliationEngine:
                     ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='CoinDCX Spot balance deficit')
                     self.bot.save_state()
                     continue
-                if ctx.state not in (OrderState.PROTECTED, OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.PARTIALLY_FILLED):
-                    ctx.transition_to(OrderState.PROTECTED, reason='CoinDCX position active')
+
+                if ctx.native_sl_order_id and self.bot.has_keys and not Config.PAPER_TRADING:
+                    sl_status = await exec_engine.verify_order_active(symbol, ctx.native_sl_order_id)
+                    if sl_status == 'UNKNOWN':
+                        ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='CoinDCX SL state UNKNOWN')
+                        self.bot.save_state()
+                    elif sl_status == 'INACTIVE':
+                        ctx.native_sl_order_id = None
+                        sl_order = await exec_engine.place_native_stop_loss(symbol, 'sell', self.bot.position_size[symbol], self.bot.stop_loss[symbol])
+                        if self._is_active_sl_order(sl_order):
+                            ctx.native_sl_order_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
+                            ctx.transition_to(OrderState.PROTECTED, reason='CoinDCX SL re-protected')
+                    else:
+                        if ctx.state not in (OrderState.PROTECTED, OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.PARTIALLY_FILLED):
+                            ctx.transition_to(OrderState.PROTECTED, reason='CoinDCX SL verified active')
+                else:
+                    if ctx.state not in (OrderState.PROTECTED, OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.PARTIALLY_FILLED):
+                        ctx.transition_to(OrderState.PROTECTED, reason='CoinDCX position active')

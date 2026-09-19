@@ -169,9 +169,15 @@ class RiskManager:
         base_risk = account_equity * active_risk_pct
         curr_mult = rate if effective_equity_curr == "INR" else 1.0
         risk_scaler = active_risk_pct / max(Config.RISK_PCT / 100.0, 1e-9)
-        max_single_trade_risk = float(getattr(Config, "MAX_SINGLE_TRADE_RISK_USDT", 25.0)) * curr_mult * risk_scaler
-        threshold_equity = 1000.0 * curr_mult
-        trade_risk = min(base_risk, max_single_trade_risk) if account_equity >= threshold_equity else base_risk
+
+        # P1-01 Fix: Only apply single trade dollar risk cap if explicitly configured in Config / env
+        raw_max_risk = getattr(Config, "MAX_SINGLE_TRADE_RISK_USDT", None)
+        if raw_max_risk is not None and float(raw_max_risk) > 0:
+            max_single_trade_risk = float(raw_max_risk) * curr_mult * risk_scaler
+            threshold_equity = 1000.0 * curr_mult
+            trade_risk = min(base_risk, max_single_trade_risk) if account_equity >= threshold_equity else base_risk
+        else:
+            trade_risk = base_risk
 
         stop_distance = abs(entry_price_equity_curr - stop_loss_equity_curr)
         if stop_distance <= 0 or math.isnan(stop_distance) or math.isinf(stop_distance):

@@ -50,13 +50,17 @@ def calculate_advanced_metrics(trades: list[dict[str, Any]], initial_capital: fl
     # to ensure early/initial losses are accurately captured rather than zeroed out.
     current_equity = float(initial_capital)
     equity_curve: list[float] = [current_equity]
+    trade_returns: list[float] = []
     for p in pnl_values:
+        prior_equity = current_equity
         current_equity += p
         equity_curve.append(current_equity)
+        r = p / prior_equity if prior_equity > 0 else 0.0
+        trade_returns.append(r)
 
     max_drawdown, max_drawdown_pct = _calculate_max_drawdown(equity_curve)
-    sharpe_ratio = _calculate_sharpe_ratio(pnl_values, annualization_factor=math.sqrt(6 * 365))
-    sortino_ratio = _calculate_sortino_ratio(pnl_values, annualization_factor=math.sqrt(6 * 365))
+    sharpe_ratio = _calculate_sharpe_ratio(trade_returns, annualization_factor=math.sqrt(6 * 365))
+    sortino_ratio = _calculate_sortino_ratio(trade_returns, annualization_factor=math.sqrt(6 * 365))
     max_consec_wins, max_consec_losses, current_streak, current_streak_type = _calculate_streaks(pnl_values)
 
     best_trade = max(pnl_values) if pnl_values else 0.0
