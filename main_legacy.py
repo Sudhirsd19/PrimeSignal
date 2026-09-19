@@ -3272,19 +3272,20 @@ class PrimeSignalBot:
     SUPPORTED_TIMEFRAMES = ("1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d")
 
     async def _retrain_models_background(self, new_tf: str):
-        """Retrains ML models across all symbols in a separate worker thread to avoid blocking asyncio."""
-        def _sync_retrain():
-            for sym in Config.SUPPORTED_SYMBOLS:
-                candles = self.pipeline.ltf_candles.get(sym)
-                if candles:
-                    df = prepare_dataframe(candles)
-                    if sym in self.ml_models and df is not None and not df.empty:
-                        try:
-                            self.ml_models[sym].train(df)
-                        except Exception as mle:
-                            print(f"[ML] Retrain warning for {sym} on {new_tf}: {mle}")
+        """Retrains ML models across all symbols in a separate worker thread with event loop yielding."""
+        def _train_single(sym):
+            candles = self.pipeline.ltf_candles.get(sym)
+            if candles:
+                df = prepare_dataframe(candles)
+                if sym in self.ml_models and df is not None and not df.empty:
+                    try:
+                        self.ml_models[sym].train(df)
+                    except Exception as mle:
+                        print(f"[ML] Retrain warning for {sym} on {new_tf}: {mle}")
         try:
-            await asyncio.to_thread(_sync_retrain)
+            for sym in Config.SUPPORTED_SYMBOLS:
+                await asyncio.to_thread(_train_single, sym)
+                await asyncio.sleep(0.2)
             add_log_message(f"🧠 ML models successfully retrained on {new_tf.upper()} candles.")
         except Exception as e:
             print(f"[ML] Background retrain error: {e}")
