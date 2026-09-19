@@ -69,6 +69,18 @@ class PrimeSignalBot:
         except (ValueError, TypeError):
             return fallback_price
 
+    def _is_inr_account(self) -> bool:
+        """Venue-aware INR detection. Returns True ONLY when:
+        - Paper mode AND PAPER_CURRENCY == 'INR', OR
+        - Live mode AND TRADING_VENUE == 'COINDCX' AND COINDCX_TRADE_INR == True.
+        Prevents Binance live accounts from being treated as INR when COINDCX_TRADE_INR defaults True."""
+        if not self.has_keys or Config.PAPER_TRADING:
+            return getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR'
+        venue = str(getattr(Config, 'TRADING_VENUE', 'BINANCE')).upper()
+        if venue == 'COINDCX':
+            return bool(getattr(Config, 'COINDCX_TRADE_INR', False))
+        return False
+
     async def _restore_spot_native_sl(self, symbol: str, side: str, size: float, sl_price: float):
         if getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures' or not self.has_keys or Config.PAPER_TRADING:
             return
@@ -683,13 +695,23 @@ class PrimeSignalBot:
         # Initial Balance load
         if self.has_keys and not Config.PAPER_TRADING:
             balance = await self.execution.fetch_balance()
-            if balance:
-                usdt_balance = balance.get('total', {}).get('USDT', None)
-                if usdt_balance and usdt_balance > 0:
-                    DashboardState.balance_usdt = usdt_balance
-                else:
-                    add_log_message(f"[WARNING] Balance fetch returned {usdt_balance}. Check account type. Keeping last known value.")
-                DashboardState.balance_base = balance.get('total', {}).get(Config.SYMBOL.split('/')[0], 0.0)
+            if balance and isinstance(balance, dict):
+                total_dict = balance.get('total', {})
+                if isinstance(total_dict, dict):
+                    is_coindcx_venue = str(getattr(Config, 'TRADING_VENUE', 'COINDCX')).upper() == 'COINDCX'
+                    if is_coindcx_venue and getattr(Config, 'COINDCX_TRADE_INR', False):
+                        inr_balance = total_dict.get('INR', None)
+                        if inr_balance is not None and float(inr_balance) > 0:
+                            DashboardState.balance_usdt = float(inr_balance)
+                            DashboardState.balance_currency = "INR"
+                    else:
+                        usdt_balance = total_dict.get('USDT', None)
+                        if usdt_balance is not None and float(usdt_balance) > 0:
+                            DashboardState.balance_usdt = float(usdt_balance)
+                            DashboardState.balance_currency = "USDT"
+                        else:
+                            add_log_message(f"[WARNING] Balance fetch returned {usdt_balance}. Check account type. Keeping last known value.")
+                    DashboardState.balance_base = float(total_dict.get(Config.SYMBOL.split('/')[0], 0.0) or 0.0)
         else:
             DashboardState.balance_usdt = self.calculate_total_equity()
             DashboardState.balance_base = 0.0
@@ -798,7 +820,7 @@ class PrimeSignalBot:
         shorts_count = 0
         is_paper = (not self.has_keys or Config.PAPER_TRADING)
         current_eq = self.calculate_total_equity() if is_paper else DashboardState.balance_usdt
-        is_inr = (getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)) if is_paper else (DashboardState.balance_currency == "INR")
+        is_inr = self._is_inr_account()
         rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
         if rate <= 0:
             rate = 85.0
@@ -820,7 +842,7 @@ class PrimeSignalBot:
 
     def calculate_total_equity(self):
         current_equity = self._dry_run_balance_usdt
-        is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+        is_inr = self._is_inr_account()
         rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
         if rate <= 0:
             rate = 85.0
@@ -1410,10 +1432,11 @@ class PrimeSignalBot:
             sl = float(metadata['stop_loss']) if metadata.get('stop_loss') is not None else (entry_price * 0.98)
             tp = float(metadata['take_profit']) if metadata.get('take_profit') is not None else (entry_price * 1.04)
             
-            is_inr = getattr(Config, 'COINDCX_TRADE_INR', False) if not Config.PAPER_TRADING else (getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR')
+            is_inr = self._is_inr_account()
             quote_curr = symbol.split('/')[1] if '/' in symbol else "USDT"
             conversion_rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
-            if is_inr and not Config.PAPER_TRADING and hasattr(self.execution, 'fetch_usdt_inr_rate'):
+            is_coindcx_venue = str(getattr(Config, 'TRADING_VENUE', 'BINANCE')).upper() == 'COINDCX'
+            if is_inr and not Config.PAPER_TRADING and is_coindcx_venue and hasattr(self.execution, 'fetch_usdt_inr_rate'):
                 if inspect.iscoroutinefunction(self.execution.fetch_usdt_inr_rate):
                     dynamic_rate = await self.execution.fetch_usdt_inr_rate(side=signal)
                 else:
@@ -1561,8 +1584,14 @@ class PrimeSignalBot:
                         sl_is_verified = False
                         if self._is_active_sl_order(sl_order):
                             sl_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
-                            # F-03 FIX: Authoritative verification that order is truly ACTIVE on exchange
-                            sl_status = await self.execution.verify_order_active(symbol, sl_id)
+                            # F-03 FIX: Authoritative verification that order is truly ACTIVE on exchange with semantic parameters
+                            sl_status = await self.execution.verify_order_active(
+                                symbol,
+                                sl_id,
+                                expected_side='sell',
+                                expected_qty=filled_amount,
+                                expected_stop_price=sl
+                            )
                             if sl_status == 'ACTIVE':
                                 sl_is_verified = True
                                 ctx.native_sl_order_id = sl_id
@@ -1780,8 +1809,14 @@ class PrimeSignalBot:
                         sl_is_verified = False
                         if self._is_active_sl_order(sl_order):
                             sl_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
-                            # F-03 FIX: Authoritative verification that order is truly ACTIVE on exchange
-                            sl_status = await self.execution.verify_order_active(symbol, sl_id)
+                            # F-03 FIX: Authoritative verification that order is truly ACTIVE on exchange with semantic parameters
+                            sl_status = await self.execution.verify_order_active(
+                                symbol,
+                                sl_id,
+                                expected_side='buy',
+                                expected_qty=filled_amount,
+                                expected_stop_price=sl
+                            )
                             if sl_status == 'ACTIVE':
                                 sl_is_verified = True
                                 ctx.native_sl_order_id = sl_id
@@ -2098,14 +2133,17 @@ class PrimeSignalBot:
                                 tp1_size = self.position_size[symbol] * tp1_pct
                                 tp1_success = False
                                 tp1_order = None
-                                is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+                                is_inr = self._is_inr_account()
                                 rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
                                 
                                 cancelled_spot_sl = False
                                 if self.has_keys and not Config.PAPER_TRADING:
                                     ctx = self.order_state_machine.get_context(symbol)
                                     if getattr(Config, 'EXCHANGE_TYPE', 'spot') != 'futures' and ctx.native_sl_order_id:
-                                        await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
+                                        cancel_ok = await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
+                                        if not cancel_ok:
+                                            add_log_message(f"[{symbol}] ⚠️ Failed to safely cancel native SL before TP1. Aborting TP1 attempt to keep position protected.")
+                                            continue
                                         cancelled_spot_sl = True
                                     try:
                                         tp1_order = await self.execution.place_order('sell', 'market', tp1_size, symbol=symbol, is_exit_order=True, price=curr_price, order_role="TP1")
@@ -2114,6 +2152,9 @@ class PrimeSignalBot:
                                         add_log_message(f"[{symbol}] 🚨 Exception placing TP1 order: {e}")
                                         tp1_success = False
                                         tp1_order = None
+                                    finally:
+                                        if not tp1_success and cancelled_spot_sl:
+                                            await self._restore_spot_native_sl(symbol, 'LONG', self.position_size[symbol], self.stop_loss[symbol])
                                 else:
                                     self._dry_run_balance_usdt += tp1_size * curr_price * (rate if is_inr else 1.0)
                                     tp1_success = True
@@ -2212,13 +2253,16 @@ class PrimeSignalBot:
                                 tp2_size = self.position_size[symbol] * tp2_frac
                                 tp2_success = False
                                 tp2_order = None
-                                is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+                                is_inr = self._is_inr_account()
                                 rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
                                 cancelled_spot_sl = False
                                 if self.has_keys and not Config.PAPER_TRADING:
                                     ctx = self.order_state_machine.get_context(symbol)
                                     if getattr(Config, 'EXCHANGE_TYPE', 'spot') != 'futures' and ctx.native_sl_order_id:
-                                        await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
+                                        cancel_ok = await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
+                                        if not cancel_ok:
+                                            add_log_message(f"[{symbol}] ⚠️ Failed to safely cancel native SL before TP2. Aborting TP2 attempt to keep position protected.")
+                                            continue
                                         cancelled_spot_sl = True
                                     try:
                                         tp2_order = await self.execution.place_order('sell', 'market', tp2_size, symbol=symbol, is_exit_order=True, price=curr_price, order_role="TP2")
@@ -2227,6 +2271,9 @@ class PrimeSignalBot:
                                         add_log_message(f"[{symbol}] 🚨 Exception placing TP2 order: {e}")
                                         tp2_success = False
                                         tp2_order = None
+                                    finally:
+                                        if not tp2_success and cancelled_spot_sl:
+                                            await self._restore_spot_native_sl(symbol, 'LONG', self.position_size[symbol], self.stop_loss[symbol])
                                 else:
                                     self._dry_run_balance_usdt += tp2_size * curr_price * (rate if is_inr else 1.0)
                                     tp2_success = True
@@ -2397,14 +2444,17 @@ class PrimeSignalBot:
                                 tp1_size = self.position_size[symbol] * tp1_pct
                                 tp1_success = False
                                 tp1_order = None
-                                is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+                                is_inr = self._is_inr_account()
                                 rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
 
                                 cancelled_spot_sl = False
                                 if self.has_keys and not Config.PAPER_TRADING:
                                     ctx = self.order_state_machine.get_context(symbol)
                                     if getattr(Config, 'EXCHANGE_TYPE', 'spot') != 'futures' and ctx.native_sl_order_id:
-                                        await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
+                                        cancel_ok = await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
+                                        if not cancel_ok:
+                                            add_log_message(f"[{symbol}] ⚠️ Failed to safely cancel native SL before TP1. Aborting TP1 attempt to keep position protected.")
+                                            continue
                                         cancelled_spot_sl = True
                                     try:
                                         tp1_order = await self.execution.place_order('buy', 'market', tp1_size, symbol=symbol, is_exit_order=True, price=curr_price, order_role="TP1")
@@ -2413,6 +2463,9 @@ class PrimeSignalBot:
                                         add_log_message(f"[{symbol}] 🚨 Exception placing TP1 order: {e}")
                                         tp1_success = False
                                         tp1_order = None
+                                    finally:
+                                        if not tp1_success and cancelled_spot_sl:
+                                            await self._restore_spot_native_sl(symbol, 'SHORT', self.position_size[symbol], self.stop_loss[symbol])
                                 else:
                                     # Short TP cash return = entry_notional + (entry_notional - exit_notional) = profit + collateral
                                     tp1_pnl_usdt = tp1_size * (self.entry_price[symbol] - curr_price)
@@ -2514,14 +2567,17 @@ class PrimeSignalBot:
                                 tp2_size = self.position_size[symbol] * tp2_frac
                                 tp2_success = False
                                 tp2_order = None
-                                is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+                                is_inr = self._is_inr_account()
                                 rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
 
                                 cancelled_spot_sl = False
                                 if self.has_keys and not Config.PAPER_TRADING:
                                     ctx = self.order_state_machine.get_context(symbol)
                                     if getattr(Config, 'EXCHANGE_TYPE', 'spot') != 'futures' and ctx.native_sl_order_id:
-                                        await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
+                                        cancel_ok = await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
+                                        if not cancel_ok:
+                                            add_log_message(f"[{symbol}] ⚠️ Failed to safely cancel native SL before TP2. Aborting TP2 attempt to keep position protected.")
+                                            continue
                                         cancelled_spot_sl = True
                                     try:
                                         tp2_order = await self.execution.place_order('buy', 'market', tp2_size, symbol=symbol, is_exit_order=True, price=curr_price, order_role="TP2")
@@ -2530,6 +2586,9 @@ class PrimeSignalBot:
                                         add_log_message(f"[{symbol}] 🚨 Exception placing TP2 order: {e}")
                                         tp2_success = False
                                         tp2_order = None
+                                    finally:
+                                        if not tp2_success and cancelled_spot_sl:
+                                            await self._restore_spot_native_sl(symbol, 'SHORT', self.position_size[symbol], self.stop_loss[symbol])
                                 else:
                                     # C-03 FIX: Return collateral (entry_notional) + pnl only
                                     # entry_notional was deducted at SELL entry; buying back at curr_price frees: entry_notional + (entry - curr) * size
@@ -2844,8 +2903,14 @@ class PrimeSignalBot:
             new_sl = await self.execution.place_native_stop_loss(symbol, side, size, stop_price)
             if self._is_active_sl_order(new_sl):
                 new_sl_id = str(new_sl['id']) if isinstance(new_sl, dict) else str(new_sl.exchange_order_id)
-                # Verify the replacement is active!
-                new_status = await self.execution.verify_order_active(symbol, new_sl_id)
+                # Verify the replacement is active with semantic validation!
+                new_status = await self.execution.verify_order_active(
+                    symbol,
+                    new_sl_id,
+                    expected_side=side,
+                    expected_qty=size,
+                    expected_stop_price=stop_price
+                )
                 if new_status == 'ACTIVE':
                     ctx.native_sl_order_id = new_sl_id
                     add_log_message(f"[{symbol}] 🛡️ Native SL replaced for remaining size {size} @ {stop_price:.4f}")

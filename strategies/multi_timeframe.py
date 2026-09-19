@@ -182,8 +182,8 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         metadata['htf_rsi_divergence'] = htf_rsi_div
         
         # Next-Gen Quant Engines: Liquidation Magnet & Order Flow CVD
-        enable_liq = getattr(Config, 'ENABLE_LIQUIDATION_HUNT', True) or getattr(Config, 'ENABLE_LIQUIDATION_MAGNET', True)
-        enable_cvd = getattr(Config, 'ENABLE_CVD_ABSORPTION', True)
+        enable_liq = bool(getattr(Config, 'ENABLE_LIQUIDATION_MAGNET', True)) and bool(getattr(Config, 'ENABLE_LIQUIDATION_HUNT', True))
+        enable_cvd = bool(getattr(Config, 'ENABLE_CVD_ABSORPTION', True))
         liq_info = self.liq_engine.calculate_liquidation_pools(ltf_eval_df) if enable_liq else {}
         cvd_info = self.orderflow_engine.detect_absorption_divergence(ltf_eval_df) if enable_cvd else {}
         metadata['liquidation'] = liq_info
@@ -563,7 +563,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             if getattr(Config, 'ENABLE_CVD_ABSORPTION', True) and cvd_info.get('absorption') == 'BULLISH_ABSORPTION':
                 score += 1.5
                 metadata['debug_checks']['cvd_absorption'] = 'BULLISH_ABSORPTION_PASS'
-            if (getattr(Config, 'ENABLE_LIQUIDATION_HUNT', True) or getattr(Config, 'ENABLE_LIQUIDATION_MAGNET', True)) and liq_info.get('hunt_signal') == 'BULLISH_LIQUIDATION_HUNT':
+            if getattr(Config, 'ENABLE_LIQUIDATION_HUNT', True) and getattr(Config, 'ENABLE_LIQUIDATION_MAGNET', True) and liq_info.get('hunt_signal') == 'BULLISH_LIQUIDATION_HUNT':
                 score += 1.5
                 metadata['debug_checks']['liq_hunt'] = 'BULLISH_LIQ_HUNT_PASS'
             
@@ -789,7 +789,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             if getattr(Config, 'ENABLE_CVD_ABSORPTION', True) and cvd_info.get('absorption') == 'BEARISH_ABSORPTION':
                 score += 1.5
                 metadata['debug_checks']['cvd_absorption'] = 'BEARISH_ABSORPTION_PASS'
-            if (getattr(Config, 'ENABLE_LIQUIDATION_HUNT', True) or getattr(Config, 'ENABLE_LIQUIDATION_MAGNET', True)) and liq_info.get('hunt_signal') == 'BEARISH_LIQUIDATION_HUNT':
+            if getattr(Config, 'ENABLE_LIQUIDATION_HUNT', True) and getattr(Config, 'ENABLE_LIQUIDATION_MAGNET', True) and liq_info.get('hunt_signal') == 'BEARISH_LIQUIDATION_HUNT':
                 score += 1.5
                 metadata['debug_checks']['liq_hunt'] = 'BEARISH_LIQ_HUNT_PASS'
             

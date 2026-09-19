@@ -651,7 +651,14 @@ class ReconciliationEngine:
                             self.bot.save_state()
                             ctx.native_sl_order_id = None
                         else:
-                            sl_status = await exec_engine.verify_order_active(symbol, ctx.native_sl_order_id)
+                            exp_side = 'sell' if str(self.bot.position_side.get(symbol, 'LONG')).upper() == 'LONG' else 'buy'
+                            sl_status = await exec_engine.verify_order_active(
+                                symbol,
+                                ctx.native_sl_order_id,
+                                expected_side=exp_side,
+                                expected_qty=self.bot.position_size[symbol],
+                                expected_stop_price=self.bot.stop_loss[symbol]
+                            )
                             if sl_status == 'UNKNOWN':
                                 ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='SL state UNKNOWN')
                                 self.bot.save_state()
@@ -744,7 +751,14 @@ class ReconciliationEngine:
                     continue
 
                 if ctx.native_sl_order_id and self.bot.has_keys and not Config.PAPER_TRADING:
-                    sl_status = await exec_engine.verify_order_active(symbol, ctx.native_sl_order_id)
+                    exp_side = 'sell' if str(self.bot.position_side.get(symbol, 'LONG')).upper() == 'LONG' else 'buy'
+                    sl_status = await exec_engine.verify_order_active(
+                        symbol,
+                        ctx.native_sl_order_id,
+                        expected_side=exp_side,
+                        expected_qty=self.bot.position_size[symbol],
+                        expected_stop_price=self.bot.stop_loss[symbol]
+                    )
                     if sl_status == 'UNKNOWN':
                         ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='CoinDCX SL state UNKNOWN')
                         self.bot.save_state()

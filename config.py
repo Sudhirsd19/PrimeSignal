@@ -123,6 +123,7 @@ class Config:
     # ─── NEXT-GEN PROPRIETARY QUANT INNOVATIONS ───
     # 1. Liquidation Magnetic Heatmap & Hunt Engine
     ENABLE_LIQUIDATION_MAGNET = os.getenv("ENABLE_LIQUIDATION_MAGNET", "True").lower() in ("true", "1", "yes")
+    ENABLE_LIQUIDATION_HUNT = os.getenv("ENABLE_LIQUIDATION_HUNT", "True").lower() in ("true", "1", "yes")
     LIQUIDATION_PROXIMITY_PCT = float(os.getenv("LIQUIDATION_PROXIMITY_PCT", "0.003")) # 0.3% pool proximity
     
     # 2. Real-Time CVD Absorption & Footprint Divergence Engine

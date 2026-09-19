@@ -450,9 +450,12 @@
 
                 <!-- Timeframe Toggle -->
                 <div class="flex items-center bg-[#1f2937] p-1 rounded-md border border-[#374151] gap-1 text-xs font-semibold text-gray-400">
-                    <div class="flex bg-[#111827] p-0.5 rounded-md border border-[#374151] gap-0.5 sm:gap-1">
+                    <div class="flex bg-[#111827] p-0.5 rounded-md border border-[#374151] gap-0.5 sm:gap-1 flex-wrap">
                         <button id="tf-btn-1m" class="px-1.5 py-0.5 rounded text-[10px] font-extrabold text-gray-400 hover:text-white transition-all cursor-pointer">1M</button>
-                        <button id="tf-btn-5m" class="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-blue-500 text-white shadow-sm transition-all cursor-pointer">5M</button>
+                        <button id="tf-btn-5m" class="px-1.5 py-0.5 rounded text-[10px] font-extrabold text-gray-400 hover:text-white transition-all cursor-pointer">5M</button>
+                        <button id="tf-btn-15m" class="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-blue-500 text-white shadow-sm transition-all cursor-pointer">15M</button>
+                        <button id="tf-btn-1h" class="px-1.5 py-0.5 rounded text-[10px] font-extrabold text-gray-400 hover:text-white transition-all cursor-pointer">1H</button>
+                        <button id="tf-btn-4h" class="px-1.5 py-0.5 rounded text-[10px] font-extrabold text-gray-400 hover:text-white transition-all cursor-pointer">4H</button>
                     </div>
                 </div>
 
@@ -1007,16 +1010,7 @@
             } catch (e) {}
 
             let key = localStorage.getItem('dashboard_api_key') || sessionStorage.getItem('dashboard_api_key');
-            try {
-                const legacyKey = atob('cHJpbWVzaWduYWxfc2VjcmV0X2tleQ==');
-                if (!key || key === legacyKey) {
-                    key = 'Devsd@19';
-                    localStorage.setItem('dashboard_api_key', key);
-                    sessionStorage.setItem('dashboard_api_key', key);
-                }
-            } catch (e) {}
-
-            return key || 'Devsd@19';
+            return key || '';
         }
 
         function getApiHeaders() {
@@ -2747,21 +2741,17 @@
             }
         }
 
-        // --- 3.6 TIMEFRAME TOGGLE SWITCH (1M / 5M) ---
-        let currentLTF = '5m';
+        // --- 3.6 TIMEFRAME TOGGLE SWITCH (All supported) ---
+        let currentLTF = '15m';
+        const allTfButtons = ['1m', '5m', '15m', '1h', '4h'];
         function updateTimeframeVisuals(tf) {
             currentLTF = tf.toLowerCase();
-            const btn1m = document.getElementById('tf-btn-1m');
-            const btn5m = document.getElementById('tf-btn-5m');
-            if (btn1m && btn5m) {
-                if (currentLTF === '1m') {
-                    btn1m.className = "px-2 py-0.5 rounded text-[10px] font-extrabold bg-blue-500 text-white shadow-sm transition-all cursor-pointer";
-                    btn5m.className = "px-2 py-0.5 rounded text-[10px] font-extrabold text-gray-400 hover:text-white transition-all cursor-pointer";
-                } else {
-                    btn5m.className = "px-2 py-0.5 rounded text-[10px] font-extrabold bg-blue-500 text-white shadow-sm transition-all cursor-pointer";
-                    btn1m.className = "px-2 py-0.5 rounded text-[10px] font-extrabold text-gray-400 hover:text-white transition-all cursor-pointer";
-                }
-            }
+            const activeClass = "px-2 py-0.5 rounded text-[10px] font-extrabold bg-blue-500 text-white shadow-sm transition-all cursor-pointer";
+            const inactiveClass = "px-2 py-0.5 rounded text-[10px] font-extrabold text-gray-400 hover:text-white transition-all cursor-pointer";
+            allTfButtons.forEach(t => {
+                const btn = document.getElementById('tf-btn-' + t);
+                if (btn) btn.className = (currentLTF === t) ? activeClass : inactiveClass;
+            });
         }
 
         async function requestTimeframeChange(tf) {
@@ -2777,7 +2767,7 @@
                 });
                 if (response.ok) {
                     updateTimeframeVisuals(tf);
-                    historyLoaded = false; // Reset history load flag to pull new LTF bars
+                    historyLoaded = false;
                 }
             } catch (err) {
                 console.error("Error requesting timeframe change:", err);
@@ -2786,10 +2776,10 @@
             }
         }
 
-        const tfBtn1m = document.getElementById('tf-btn-1m');
-        const tfBtn5m = document.getElementById('tf-btn-5m');
-        if (tfBtn1m) tfBtn1m.addEventListener('click', () => requestTimeframeChange('1m'));
-        if (tfBtn5m) tfBtn5m.addEventListener('click', () => requestTimeframeChange('5m'));
+        allTfButtons.forEach(t => {
+            const btn = document.getElementById('tf-btn-' + t);
+            if (btn) btn.addEventListener('click', () => requestTimeframeChange(t));
+        });
 
         document.getElementById('mode-toggle-btn').addEventListener('click', async () => {
             const nextMode = !isPaperTrading;

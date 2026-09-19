@@ -41,6 +41,7 @@ class BTCAnchorEngine:
         signal: str,
         btc_ltf_data: Any,
         btc_htf_data: Optional[Any] = None,
+        eval_closed_only: bool = False,
     ) -> Tuple[bool, str, float]:
         """
         Evaluates whether an altcoin setup aligns with current BTC macro/micro dynamics.
@@ -50,6 +51,7 @@ class BTCAnchorEngine:
             signal: 'BUY' or 'SELL'.
             btc_ltf_data: BTC 15m candles (DataFrame or list of dicts/lists).
             btc_htf_data: BTC 1h candles (DataFrame or list of dicts/lists, optional).
+            eval_closed_only: If True, evaluates completed closed candles for full strategy parity.
 
         Returns:
             Tuple of (allowed: bool, reason: str, score_adjustment: float)
@@ -71,7 +73,8 @@ class BTCAnchorEngine:
             return True, "Insufficient BTC LTF candles (fail-open)", 0.0
 
         # ── 1. Micro Flash Flush / Pump Guard (15m frame) ──
-        last_candle = btc_ltf_df.iloc[-1]
+        ltf_eval_idx = -2 if (eval_closed_only and len(btc_ltf_df) >= 2) else -1
+        last_candle = btc_ltf_df.iloc[ltf_eval_idx]
         c_open = float(last_candle.get('open', 0.0))
         c_close = float(last_candle.get('close', 0.0))
 
@@ -89,8 +92,10 @@ class BTCAnchorEngine:
                 return False, f"BTC Flash Surge active (+{pump_pct:.2f}% in 15m): Altcoin shorts blocked", 0.0
 
         # ── 2. Rolling Multi-Candle Momentum (3-bar / 45m) ──
-        if len(btc_ltf_df) >= 4:
-            p_3bars_ago = float(btc_ltf_df['close'].iloc[-4])
+        lookback_bars = 4 if ltf_eval_idx == -1 else 5
+        if len(btc_ltf_df) >= lookback_bars:
+            p_3bars_ago_idx = -lookback_bars
+            p_3bars_ago = float(btc_ltf_df['close'].iloc[p_3bars_ago_idx])
             if p_3bars_ago > 0:
                 rolling_ret = (c_close - p_3bars_ago) / p_3bars_ago
                 if signal == "BUY" and rolling_ret <= -self.rolling_3bar_drop_threshold:

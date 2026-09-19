@@ -283,7 +283,7 @@ async def set_mode(req: ModeRequest):
     Config.PAPER_TRADING = req.paper_trading
     if req.paper_trading:
         mode_name = "PAPER TRADING"
-    elif getattr(Config, 'TESTNET', False):
+    elif getattr(Config, 'USE_TESTNET', False):
         mode_name = "LIVE TESTNET (Sandbox)"
     else:
         mode_name = "LIVE REAL MONEY (Mainnet)"
@@ -1244,7 +1244,7 @@ def _build_state_payload():
         "htf_timeframe": Config.HTF_TIMEFRAME,
         "paper_trading": Config.PAPER_TRADING,
         "is_testnet": bool(getattr(Config, 'TESTNET', False)),
-        "trading_mode_label": "PAPER TRADING" if Config.PAPER_TRADING else ("LIVE TESTNET (Sandbox)" if getattr(Config, 'TESTNET', False) else "LIVE REAL MONEY (Mainnet)"),
+        "trading_mode_label": "PAPER TRADING" if Config.PAPER_TRADING else ("LIVE TESTNET (Sandbox)" if getattr(Config, 'USE_TESTNET', False) else "LIVE REAL MONEY (Mainnet)"),
         "balance_currency": getattr(Config, 'PAPER_CURRENCY', 'INR' if Config.COINDCX_TRADE_INR else 'USDT'),
         "trades": DashboardState.trades[-5:],  # Last 5 trades
         "trades_today": bot_instance.trades_today if bot_instance else 0,
