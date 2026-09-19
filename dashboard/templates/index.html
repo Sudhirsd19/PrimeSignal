@@ -2789,8 +2789,16 @@
                     body: JSON.stringify({ timeframe: tf })
                 });
                 if (response.ok) {
-                    updateTimeframeVisuals(tf);
-                    historyLoaded = false;
+                    const data = await response.json();
+                    if (data.status === 'success') {
+                        updateTimeframeVisuals(tf);
+                        historyLoaded = false;
+                    } else {
+                        alert("Timeframe switch rejected: " + (data.message || "Unknown error"));
+                    }
+                } else {
+                    const data = await response.json().catch(() => ({}));
+                    alert("Timeframe switch failed: " + (data.detail || data.message || `Server error ${response.status}`));
                 }
             } catch (err) {
                 console.error("Error requesting timeframe change:", err);

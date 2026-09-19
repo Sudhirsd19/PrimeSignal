@@ -31,7 +31,7 @@ from config import Config
 from execution.execution_engine import ExecutionEngine
 from execution.execution_result import ExecutionResult, ExecutionState
 from execution.exchange_validator import ExchangeValidator
-from core.data_pipeline import RealTimeDataPipeline
+from core.data_pipeline import RealTimeDataPipeline, parse_timeframe_to_minutes
 from core.order_state_machine import OrderStateMachine, OrderState, PositionContext
 from core.immutable_ledger import ImmutableLedger
 from core.config_journal import ConfigAuditJournal
@@ -965,7 +965,7 @@ class PrimeSignalBot:
                 avg_vol = ltf_df['volume'].iloc[:-1].rolling(14).mean().iloc[-1] if len(ltf_df) > 15 else 0.0
                 
                 # Extrapolate current live candle volume based on elapsed time to make a fair comparison
-                tf_minutes = int(getattr(Config, 'LTF_TIMEFRAME', '15m').replace('m', '').replace('h', '')) * (60 if 'h' in getattr(Config, 'LTF_TIMEFRAME', '15m') else 1)
+                tf_minutes = parse_timeframe_to_minutes(getattr(Config, 'LTF_TIMEFRAME', '15m'))
                 
                 candle_start_ms = last_candle['timestamp'] if 'timestamp' in ltf_df.columns else last_candle.name.timestamp() * 1000
                 elapsed_ms = (time.time() * 1000) - candle_start_ms
@@ -998,7 +998,7 @@ class PrimeSignalBot:
             else:
                 ts_obj = pd.Timestamp(str(ltf_df.index[-1]))
                 open_time = float(ts_obj.timestamp()) if hasattr(ts_obj, 'timestamp') else 0.0
-            tf_mins = int(Config.LTF_TIMEFRAME.replace('m', '').replace('h', '')) * (60 if 'h' in Config.LTF_TIMEFRAME else 1)
+            tf_mins = parse_timeframe_to_minutes(Config.LTF_TIMEFRAME)
             close_time = open_time + (tf_mins * 60)
             delay = time.time() - close_time
             if delay > 120:
@@ -2092,7 +2092,7 @@ class PrimeSignalBot:
                             if getattr(Config, 'ENABLE_TIME_STOP', True) and not self.partial_tp_taken[symbol]:
                                 entry_ts = self.entry_time.get(symbol, 0)
                                 if entry_ts > 0:
-                                    tf_mins = int(Config.LTF_TIMEFRAME.replace('m', '').replace('h', '')) * (60 if 'h' in Config.LTF_TIMEFRAME else 1)
+                                    tf_mins = parse_timeframe_to_minutes(Config.LTF_TIMEFRAME)
                                     time_elapsed_secs = time.time() - (entry_ts / 1000.0)
                                     candles_open = time_elapsed_secs / (tf_mins * 60)
                                     max_stagnant_candles = getattr(Config, 'MAX_STAGNANT_CANDLES', 16)
@@ -2403,7 +2403,7 @@ class PrimeSignalBot:
                             if getattr(Config, 'ENABLE_TIME_STOP', True) and not self.partial_tp_taken[symbol]:
                                 entry_ts = self.entry_time.get(symbol, 0)
                                 if entry_ts > 0:
-                                    tf_mins = int(Config.LTF_TIMEFRAME.replace('m', '').replace('h', '')) * (60 if 'h' in Config.LTF_TIMEFRAME else 1)
+                                    tf_mins = parse_timeframe_to_minutes(Config.LTF_TIMEFRAME)
                                     time_elapsed_secs = time.time() - (entry_ts / 1000.0)
                                     candles_open = time_elapsed_secs / (tf_mins * 60)
                                     max_stagnant_candles = getattr(Config, 'MAX_STAGNANT_CANDLES', 16)
@@ -3269,30 +3269,82 @@ class PrimeSignalBot:
         else:
             DashboardState.ml_confidence = 0.5
 
-    async def change_execution_timeframe(self, new_tf):
-        new_tf = new_tf.lower()
-        if new_tf not in ['1m', '5m']:
-            return
-        add_log_message(f"⏱️ Switching execution timeframe to {new_tf.upper()}...")
-        Config.LTF_TIMEFRAME = new_tf
-        
-        # Warm up LTF historical candles for the new timeframe across all symbols
-        for sym in Config.SUPPORTED_SYMBOLS:
-            ltf_ohlcv = await self.execution.fetch_ohlcv(
-                symbol=sym,
-                timeframe=new_tf,
-                limit=500
-            )
-            if ltf_ohlcv:
-                self.pipeline.ltf_candles[sym] = ltf_ohlcv
-                df = prepare_dataframe(ltf_ohlcv)
-                self.ml_models[sym].train(df)
-        
-        await self.pipeline.restart_streams()
-        sym = Config.SYMBOL
-        DashboardState.ltf_timeframe = new_tf
-        DashboardState.chart_history = self.pipeline.ltf_candles[sym][-100:] if self.pipeline.ltf_candles[sym] else []
-        add_log_message(f"✅ Execution timeframe switched to {new_tf.upper()}. Chart & signals active.")
+    SUPPORTED_TIMEFRAMES = ("1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d")
+
+    async def change_execution_timeframe(self, new_tf: str):
+        """Switches the live execution timeframe across all supported symbols and restarts data pipelines.
+
+        Guarantees that Config.LTF_TIMEFRAME is only permanently updated after successful validation,
+        caches warmup, and stream restart, avoiding premature desynchronization between config and feeds.
+        """
+        new_tf = (new_tf or "").strip().lower()
+        if new_tf not in self.SUPPORTED_TIMEFRAMES:
+            msg = f"Rejected timeframe '{new_tf}'. Allowed timeframes: {', '.join(self.SUPPORTED_TIMEFRAMES)}"
+            add_log_message(f"⚠️ {msg}")
+            return False, msg
+
+        if new_tf == Config.LTF_TIMEFRAME:
+            return True, f"Timeframe is already set to {new_tf.upper()}."
+
+        # Guard: Check order state machine to prevent stream interruption during critical in-flight transitions
+        if hasattr(self, 'order_state_machine') and self.order_state_machine is not None:
+            unconfirmed = []
+            for s in Config.SUPPORTED_SYMBOLS:
+                ctx_state = getattr(self.order_state_machine.get_context(s), 'state', None)
+                if ctx_state not in ("IDLE", "EMERGENCY_FLATTENED", "PROTECTED", "TP1_LOCKED", "TP2_LOCKED", None):
+                    unconfirmed.append(f"{s}:{ctx_state}")
+            if unconfirmed:
+                msg = f"Cannot switch timeframe while order execution is in transition: {', '.join(unconfirmed)}."
+                add_log_message(f"⚠️ {msg}")
+                return False, msg
+
+        if not hasattr(self, '_timeframe_switch_lock') or self._timeframe_switch_lock is None:
+            self._timeframe_switch_lock = asyncio.Lock()
+
+        if self._timeframe_switch_lock.locked():
+            return False, "Timeframe switch is already in progress. Please wait."
+
+        async with self._timeframe_switch_lock:
+            old_tf = Config.LTF_TIMEFRAME
+            add_log_message(f"⏱️ Switching execution timeframe from {old_tf.upper()} to {new_tf.upper()}...")
+
+            try:
+                # 1. Update Config.LTF_TIMEFRAME so restart_streams and initialize_history pull new_tf
+                Config.LTF_TIMEFRAME = new_tf
+
+                # 2. Restart WebSocket streams and warm up historical caches for new_tf
+                await self.pipeline.restart_streams()
+
+                # 3. Retrain ML models on the freshly warmed up LTF candles
+                for sym in Config.SUPPORTED_SYMBOLS:
+                    candles = self.pipeline.ltf_candles.get(sym)
+                    if candles:
+                        df = prepare_dataframe(candles)
+                        if sym in self.ml_models and df is not None and not df.empty:
+                            try:
+                                self.ml_models[sym].train(df)
+                            except Exception as mle:
+                                print(f"[ML] Retrain warning for {sym} on {new_tf}: {mle}")
+
+                # 4. Update Dashboard state to reflect the new live timeframe and chart candles
+                DashboardState.ltf_timeframe = new_tf
+                sym = Config.SYMBOL
+                DashboardState.chart_history = self.pipeline.ltf_candles[sym][-100:] if self.pipeline.ltf_candles.get(sym) else []
+                msg = f"Execution timeframe successfully switched to {new_tf.upper()}. Chart & signals active."
+                add_log_message(f"✅ {msg}")
+                return True, msg
+
+            except Exception as e:
+                # Rollback Config.LTF_TIMEFRAME on failure to prevent config / pipeline desynchronization
+                Config.LTF_TIMEFRAME = old_tf
+                err_msg = f"Failed to switch timeframe to {new_tf.upper()}: {e}. Reverted to {old_tf.upper()}."
+                add_log_message(f"❌ {err_msg}")
+                print(f"[TIMEFRAME SWITCH] Error: {e}")
+                try:
+                    await self.pipeline.restart_streams()
+                except Exception:
+                    pass
+                return False, err_msg
 
     def lock_position_profit(self, symbol):
         """Manually lock profit for an active position by adjusting Stop Loss to breakeven or trailing profit."""

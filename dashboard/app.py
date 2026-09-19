@@ -307,17 +307,23 @@ async def set_timeframe(req: TimeframeRequest):
     tf = req.timeframe.strip().lower()
     allowed_tfs = ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"]
     if tf not in allowed_tfs:
-        return {"status": "error", "message": f"Invalid timeframe. Choose one of: {', '.join(allowed_tfs)}."}
+        return {"status": "error", "message": f"Invalid timeframe '{tf}'. Choose one of: {', '.join(allowed_tfs)}."}
     
-    Config.LTF_TIMEFRAME = tf
     if bot_instance is not None:
         try:
-            asyncio.create_task(bot_instance.change_execution_timeframe(tf))
+            success, msg = await bot_instance.change_execution_timeframe(tf)
+            if not success:
+                return {"status": "error", "message": msg}
+            return {"status": "success", "message": msg, "timeframe": Config.LTF_TIMEFRAME}
         except Exception as e:
             print(f"[TIMEFRAME SWITCH] Error: {e}")
-            
-    add_log_message(f"Execution timeframe set to {tf.upper()}")
-    return {"status": "success", "message": f"Timeframe switched to {tf.upper()}"}
+            return {"status": "error", "message": f"Timeframe switch failed: {e}"}
+    else:
+        # Standalone dashboard fallback (no bot instance attached)
+        Config.LTF_TIMEFRAME = tf
+        DashboardState.ltf_timeframe = tf
+        add_log_message(f"Execution timeframe set to {tf.upper()}")
+        return {"status": "success", "message": f"Timeframe switched to {tf.upper()}", "timeframe": tf}
 
 @app.post("/api/emergency_stop", dependencies=[Depends(verify_dashboard_key)])
 async def emergency_stop():
