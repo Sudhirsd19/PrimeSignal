@@ -256,7 +256,10 @@ class ReconciliationEngine:
         return False
 
     def _paper_position_is_valid(self, symbol: str) -> bool:
-        """Validate persisted paper position before adopting it as protected."""
+        """Validate persisted paper position before adopting it as protected.
+        Note: Trailing stops ratchet SL into profit (sl > entry for LONG, sl < entry for SHORT),
+        so requiring sl on the losing side of entry would falsely invalidate profitable positions.
+        """
         try:
             active = bool(self.bot.in_position.get(symbol, False))
             qty = float(self.bot.position_size.get(symbol, 0.0) or 0.0)
@@ -265,8 +268,7 @@ class ReconciliationEngine:
             side = str(self.bot.position_side.get(symbol, 'HOLD')).upper()
             return (
                 active and qty > 0.0 and entry > 0.0 and sl > 0.0 and
-                side in ('LONG', 'SHORT') and
-                ((side == 'LONG' and sl < entry) or (side == 'SHORT' and sl > entry))
+                side in ('LONG', 'SHORT')
             )
         except (TypeError, ValueError, OverflowError):
             return False
