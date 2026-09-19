@@ -148,6 +148,7 @@ class ReconciliationEngine:
                                 self.bot.highest_price_reached[symbol] = fill_p
                                 self.bot.lowest_price_reached[symbol] = fill_p
                                 self.bot.entry_time[symbol] = time.time() * 1000.0
+                                await self._release_reserved_risk(ctx)
                                 self.bot.save_state()
                         elif order_role in ('TP1', 'TP2'):
                             current_size = float(self.bot.position_size.get(symbol, 0.0))
@@ -174,6 +175,7 @@ class ReconciliationEngine:
                                 self.bot.position_side[symbol] = 'HOLD'
                                 self.bot.position_size[symbol] = 0.0
                                 ctx.transition_to(OrderState.CLOSED, reason=f'Durable intent replay: {order_role} fill confirmed')
+                                await self._release_reserved_risk(ctx)
                             self.bot.save_state()
 
             if not self.bot.has_keys or Config.PAPER_TRADING:
@@ -494,6 +496,7 @@ class ReconciliationEngine:
                                     ctx.native_sl_order_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
                                     ctx.transition_to(OrderState.PROTECTED, reason='Adopted position with confirmed Native SL')
                                     print(f'[RECONCILIATION] ✅ Native SL placed for adopted position {symbol} @ {sl_price}')
+                                    await self._release_reserved_risk(ctx)
                                 else:
                                     ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Failed native SL on adopted position')
                                     self.safe_mode_active = True
@@ -502,6 +505,7 @@ class ReconciliationEngine:
                                 self.safe_mode_active = True
                         else:
                             ctx.transition_to(OrderState.PROTECTED, reason='Virtual SL active for adopted position')
+                            await self._release_reserved_risk(ctx)
                         self.bot.save_state()
                     else:
                         local_qty = self.bot.position_size.get(symbol, 0.0)
@@ -531,6 +535,7 @@ class ReconciliationEngine:
                                                 self.bot.in_position[symbol] = False
                                                 self.bot.position_side[symbol] = 'HOLD'
                                                 ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason='Unprotected futures position lacked durable SL; emergency flattened')
+                                                await self._release_reserved_risk(ctx)
                                             else:
                                                 ctx.transition_to(OrderState.EXIT_UNKNOWN, reason='Unprotected futures position emergency flatten partially filled')
                                         else:
@@ -545,12 +550,14 @@ class ReconciliationEngine:
                                         ctx.native_sl_order_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
                                         if ctx.state not in (OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING):
                                             ctx.transition_to(OrderState.PROTECTED, reason='Reconciled and placed replacement Native SL')
+                                            await self._release_reserved_risk(ctx)
                                     else:
                                         flatten_res = await exec_engine.emergency_flatten_position(symbol, self.bot.position_side[symbol], contracts, reason='UNPROTECTED_FUTURES_POSITION')
                                         if flatten_res and flatten_res.is_fill_confirmed:
                                             ctx.transition_to(OrderState.EMERGENCY_FLATTENED, reason='Emergency flattened unprotected futures position')
                                             self.bot.in_position[symbol] = False
                                             self.bot.position_size[symbol] = 0.0
+                                            await self._release_reserved_risk(ctx)
                                         else:
                                             ctx.transition_to(OrderState.EXIT_UNKNOWN, reason='Open futures position lacking SL could not be flattened')
                                             self.safe_mode_active = True
@@ -561,10 +568,12 @@ class ReconciliationEngine:
                             else:
                                 if ctx.state not in (OrderState.PROTECTED, OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING):
                                     ctx.transition_to(OrderState.PROTECTED, reason='Reconciled active position with verified Native SL')
+                                    await self._release_reserved_risk(ctx)
                                     self.bot.save_state()
                         else:
                             if ctx.state not in (OrderState.PROTECTED, OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.PARTIALLY_FILLED):
                                 ctx.transition_to(OrderState.PROTECTED, reason='Virtual SL active for position')
+                                await self._release_reserved_risk(ctx)
                                 self.bot.save_state()
                 else:
                     is_locally_open = self.bot.in_position.get(symbol, False)

@@ -145,8 +145,13 @@ class PositionContext:
         return ctx
 
 class OrderStateMachine:
-    def __init__(self, supported_symbols: List[str]):
-        self.contexts = {sym: PositionContext(sym) for sym in supported_symbols}
+    def __init__(self, supported_symbols: Optional[List[str]] = None):
+        if supported_symbols is None:
+            from config import Config
+            syms = Config.SUPPORTED_SYMBOLS
+        else:
+            syms = supported_symbols
+        self.contexts = {sym: PositionContext(sym) for sym in syms}
     def get_context(self, symbol: str):
         if symbol not in self.contexts: self.contexts[symbol] = PositionContext(symbol)
         return self.contexts[symbol]
