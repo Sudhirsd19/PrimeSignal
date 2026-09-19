@@ -7,6 +7,8 @@ from typing import Any
 from strategies.base import BaseStrategy
 from strategies.indicators import calculate_ema, calculate_rsi, calculate_atr, calculate_vwap, calculate_adx, calculate_bollinger_bands, detect_rsi_divergence
 from strategies.smc import detect_fvgs, detect_order_blocks, detect_structure
+from strategies.regime_classifier import MarketRegimeClassifier, MarketRegime
+from strategies.liquidity_sweeps import LiquiditySweepEngine
 from core.liquidation_engine import LiquidationEngine
 from core.orderflow_engine import OrderFlowEngine
 from config import Config
@@ -16,6 +18,8 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         super().__init__(name="MultiTimeframeSMC")
         self.liq_engine = LiquidationEngine()
         self.orderflow_engine = OrderFlowEngine()
+        self.regime_classifier = MarketRegimeClassifier()
+        self.liquidity_sweep_engine = LiquiditySweepEngine()
 
     def generate_signal(self, htf_df, ltf_df, relaxed=False, allow_short=True):
         """
@@ -486,13 +490,24 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                         zone_ts = ltf_df.index[target_idx]
                         reason = f"Dynamic Setup: EMA 50 Pullback"
 
+                if not in_zone:
+                    sweep_setup = self.liquidity_sweep_engine.detect_sweep_setup(ltf_df)
+                    if sweep_setup.get('is_setup') and sweep_setup.get('signal') == 'BUY':
+                        in_zone = True
+                        entry_type = f"SWEEP_{sweep_setup.get('sweep_level_type', 'LIQ')}"
+                        zone_bottom = sweep_setup.get('stop_loss', curr_price * 0.99)
+                        zone_top = sweep_setup.get('sweep_level', curr_price)
+                        zone_ts = ltf_df.index[target_idx]
+                        reason = sweep_setup.get('reason', 'Institutional Liquidity Sweep')
+                        ob_sl = sweep_setup.get('stop_loss', 0.0)
+
             metadata['debug_checks']['zone'] = 'PASS' if in_zone else 'FAIL'
 
             rsi_trigger       = (prev_rsi < Config.RSI_OVERSOLD) or ((prev_rsi < Config.RSI_OVERSOLD + 5) and (curr_rsi >= Config.RSI_OVERSOLD))
             crossover_trigger = (prev_short <= prev_long) and (curr_short > curr_long)
             wick_trigger      = (candle_range > 0) and ((min(trigger_open, trigger_close) - trigger_low) / candle_range >= 0.65)
             engulfing_trigger = (trigger_close > trigger_open) and (ltf_df.iloc[target_idx - 1]['close'] < ltf_df.iloc[target_idx - 1]['open']) and (trigger_close > ltf_df.iloc[target_idx - 1]['open'])
-            trigger_pass      = rsi_trigger or crossover_trigger or wick_trigger or engulfing_trigger
+            trigger_pass      = rsi_trigger or crossover_trigger or wick_trigger or engulfing_trigger or (entry_type is not None and entry_type.startswith("SWEEP"))
             metadata['debug_checks']['trigger'] = 'PASS' if trigger_pass else 'FAIL'
 
             vwap_pass = curr_vwap >= prev_vwap
@@ -521,7 +536,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 metadata['debug_checks']['structure'] = 'COUNTER_BOS_PRESENT'
             
             score = 0
-            if in_zone and entry_type in ["OB", "FVG", "SWEEP", "VWAP", "EMA"]: score += 2
+            if in_zone and (entry_type in ["OB", "FVG", "SWEEP", "VWAP", "EMA"] or (entry_type is not None and entry_type.startswith("SWEEP"))): score += 2
             if vwap_pass: score += 1
             if trigger_pass: score += 1
             if micro_bos: score += 1
@@ -549,17 +564,8 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             # 1. Zone Setups (OB, FVG, SWEEP) with rejection trigger OR micro_bos
             # 2. Dynamic Pullback Setups (EMA, VWAP) with trend alignment + trigger
             # All paths enforce regime-aware score_thresh (AUD-C1 fix)
-            #
-            # NOTE ON RELAXED MODE (M-01 FIX): the previous "relaxed" branch was
-            # unreachable — whenever in_zone is True, entry_type is always one of
-            # OB/FVG/SWEEP/VWAP/EMA, so it fell into one of the two branches above
-            # and the third branch never executed. Relaxed mode was therefore
-            # silently identical to strict mode apart from accepting
-            # partially-mitigated zones. It is now a real, reachable mode: it
-            # accepts a zone that produced a rejection trigger alone (no VWAP or
-            # micro-BOS confluence required) with one tier of score slack.
             valid_entry = False
-            if in_zone and entry_type in ["OB", "FVG", "SWEEP"]:
+            if in_zone and (entry_type in ["OB", "FVG", "SWEEP"] or (entry_type is not None and entry_type.startswith("SWEEP"))):
                 if (micro_bos or trigger_pass or rsi_trigger) and (vwap_pass or strong_trend) and score >= score_thresh:
                     valid_entry = True
                 elif relaxed and trigger_pass and score >= (score_thresh - 1.0):
@@ -591,7 +597,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 return "HOLD", metadata
 
             if valid_entry:
-                if entry_type in ["OB", "FVG"]:
+                if entry_type in ["OB", "FVG"] or (entry_type is not None and entry_type.startswith("SWEEP")):
                     ob_sl = zone_bottom * 0.9985
                 else:
                     ob_sl = 0.0
@@ -606,8 +612,10 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
 
                 risk        = max(curr_price - stop_loss, 1e-9)
                 fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
-                take_profit_1r = curr_price + (risk * getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0)) + fee_adj
-                take_profit_2r = curr_price + (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.0)) + fee_adj
+                tp1_mult    = regime_diag.get('tp1_mult', getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0))
+                tp2_mult    = regime_diag.get('tp2_mult', getattr(Config, 'RISK_REWARD_RATIO', 2.0))
+                take_profit_1r = curr_price + (risk * tp1_mult) + fee_adj
+                take_profit_2r = curr_price + (risk * tp2_mult) + fee_adj
                 take_profit_3r = curr_price + (risk * 4.0) + fee_adj
 
                 metadata['stop_loss']  = stop_loss
@@ -708,13 +716,24 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                         zone_ts = ltf_df.index[target_idx]
                         reason = f"Dynamic Setup: EMA 50 Pullback"
 
+                if not in_zone and allow_short:
+                    sweep_setup = self.liquidity_sweep_engine.detect_sweep_setup(ltf_df)
+                    if sweep_setup.get('is_setup') and sweep_setup.get('signal') == 'SELL':
+                        in_zone = True
+                        entry_type = f"SWEEP_{sweep_setup.get('sweep_level_type', 'LIQ')}"
+                        zone_bottom = sweep_setup.get('sweep_level', curr_price)
+                        zone_top = sweep_setup.get('stop_loss', curr_price * 1.01)
+                        zone_ts = ltf_df.index[target_idx]
+                        reason = sweep_setup.get('reason', 'Institutional Liquidity Sweep')
+                        ob_sl = sweep_setup.get('stop_loss', 0.0)
+
             metadata['debug_checks']['zone'] = 'PASS' if in_zone else 'FAIL'
 
             rsi_trigger       = (prev_rsi > Config.RSI_OVERBOUGHT) or ((prev_rsi > Config.RSI_OVERBOUGHT - 5) and (curr_rsi <= Config.RSI_OVERBOUGHT))
             crossover_trigger = (prev_short >= prev_long) and (curr_short < curr_long)
             wick_trigger      = (candle_range > 0) and ((trigger_high - max(trigger_open, trigger_close)) / candle_range >= 0.65)
             engulfing_trigger = (trigger_close < trigger_open) and (ltf_df.iloc[target_idx - 1]['close'] > ltf_df.iloc[target_idx - 1]['open']) and (trigger_close < ltf_df.iloc[target_idx - 1]['open'])
-            trigger_pass      = rsi_trigger or crossover_trigger or wick_trigger or engulfing_trigger
+            trigger_pass      = rsi_trigger or crossover_trigger or wick_trigger or engulfing_trigger or (entry_type is not None and entry_type.startswith("SWEEP"))
             metadata['debug_checks']['trigger'] = 'PASS' if trigger_pass else 'FAIL'
 
             vwap_pass = curr_vwap <= prev_vwap
@@ -743,7 +762,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 metadata['debug_checks']['structure'] = 'COUNTER_BOS_PRESENT'
             
             score = 0
-            if in_zone and entry_type in ["OB", "FVG", "SWEEP", "VWAP", "EMA"]: score += 2
+            if in_zone and (entry_type in ["OB", "FVG", "SWEEP", "VWAP", "EMA"] or (entry_type is not None and entry_type.startswith("SWEEP"))): score += 2
             if vwap_pass: score += 1
             if trigger_pass: score += 1
             if micro_bos: score += 1
@@ -771,9 +790,8 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             # 1. Zone Setups (OB, FVG, SWEEP) with rejection trigger OR micro_bos
             # 2. Dynamic Pullback Setups (EMA, VWAP) with trend alignment + trigger
             # All paths enforce regime-aware score_thresh (AUD-C1 fix)
-            # See the RELAXED MODE note in the BULLISH branch (M-01 FIX).
             valid_entry = False
-            if in_zone and entry_type in ["OB", "FVG", "SWEEP"]:
+            if in_zone and (entry_type in ["OB", "FVG", "SWEEP"] or (entry_type is not None and entry_type.startswith("SWEEP"))):
                 if (micro_bos or trigger_pass or rsi_trigger) and (vwap_pass or strong_trend) and score >= score_thresh:
                     valid_entry = True
                 elif relaxed and trigger_pass and score >= (score_thresh - 1.0):
@@ -800,14 +818,14 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 elif entry_type == 'OB' and not strong_trend: valid_entry = False
 
             if valid_entry:
-                if entry_type in ["OB", "FVG"]:
+                if entry_type in ["OB", "FVG"] or (entry_type is not None and entry_type.startswith("SWEEP")):
                     ob_sl = zone_top * 1.0015
                 else:
                     ob_sl = 999999999.0
                 atr_sl = curr_price + (1.5 * curr_atr)
                 
                 # Structural invalidation SL: tighter of OB boundary or 1.5x ATR
-                stop_loss = min(ob_sl, atr_sl) if entry_type in ["OB", "FVG"] else atr_sl
+                stop_loss = min(ob_sl, atr_sl) if (entry_type in ["OB", "FVG"] or (entry_type is not None and entry_type.startswith("SWEEP"))) else atr_sl
                 # FIX-3: Minimum SL raised 0.3% → 0.5% so TP1 at 1.0R gives ≥0.45% net after round-trip fees (~0.15%).
                 # At 0.3% SL, TP1 = 0.36% gross; after fees effective profit ≈ 0.21% — barely viable.
                 stop_loss = max(stop_loss, curr_price * (1 + 0.005))
@@ -815,8 +833,10 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
 
                 risk        = max(stop_loss - curr_price, 1e-9)
                 fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
-                take_profit_1r = curr_price - (risk * getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0)) - fee_adj
-                take_profit_2r = curr_price - (risk * getattr(Config, 'RISK_REWARD_RATIO', 2.0)) - fee_adj
+                tp1_mult    = regime_diag.get('tp1_mult', getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0))
+                tp2_mult    = regime_diag.get('tp2_mult', getattr(Config, 'RISK_REWARD_RATIO', 2.0))
+                take_profit_1r = curr_price - (risk * tp1_mult) - fee_adj
+                take_profit_2r = curr_price - (risk * tp2_mult) - fee_adj
                 take_profit_3r = curr_price - (risk * 4.0) - fee_adj
 
                 metadata['stop_loss']  = stop_loss

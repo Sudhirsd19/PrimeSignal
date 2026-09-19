@@ -36,6 +36,7 @@ from core.order_state_machine import OrderStateMachine, OrderState, PositionCont
 from core.immutable_ledger import ImmutableLedger
 from core.config_journal import ConfigAuditJournal
 from core.reconciliation_engine import ReconciliationEngine
+from core.btc_anchor import BTCAnchorEngine
 from strategies.multi_timeframe import MultiTimeframeSMCStrategy
 from strategies.indicators import prepare_dataframe, calculate_atr, calculate_ema, calculate_rsi, calculate_vwap
 from ml.confirmation import MLSignalConfirmator
@@ -126,6 +127,7 @@ class PrimeSignalBot:
         self.config_journal = ConfigAuditJournal()
         self.config_journal.record_change(event="STARTUP_CONFIG_SNAPSHOT", source="ENGINE_STARTUP")
         self.reconciliation = ReconciliationEngine(self, check_interval=15.0)
+        self.btc_anchor = BTCAnchorEngine()
         
         # Empty dictionaries
         self.ml_models = {}
@@ -1033,17 +1035,20 @@ class PrimeSignalBot:
                 await self.exit_position(symbol, "SIGNAL_REVERSAL")
             return
 
-        # BTC Correlation Filter
-        if signal == "BUY" and symbol != "BTC/USDT":
-            btc_raw = self.pipeline.ltf_candles.get("BTC/USDT")
-            if btc_raw:
-                btc_df = prepare_dataframe(btc_raw) if isinstance(btc_raw, list) else btc_raw
-                if not btc_df.empty:
-                    btc_last = btc_df.iloc[-1]
-                    btc_drop = (btc_last['open'] - btc_last['close']) / btc_last['open']
-                    if btc_drop > 0.014:
-                        add_log_message(f"[{symbol}] Trade blocked: BTC dropped > 1.4% in last 5m. Blocking altcoin longs.")
-                        return
+        # BTC Master Correlation & Confluence Anchor
+        if symbol != "BTC/USDT":
+            btc_ltf = self.pipeline.ltf_candles.get("BTC/USDT")
+            btc_htf = self.pipeline.htf_candles.get("BTC/USDT")
+            btc_allowed, btc_reason, btc_boost = self.btc_anchor.evaluate_btc_confluence(
+                symbol, signal, btc_ltf, btc_htf
+            )
+            if not btc_allowed:
+                add_log_message(f"[{symbol}] ⛔ Trade blocked by BTC Anchor: {btc_reason}")
+                return
+            if btc_boost > 0:
+                current_score = float(metadata.get('score', 3.0))
+                metadata['score'] = min(5.0, current_score + btc_boost)
+                add_log_message(f"[{symbol}] 🚀 BTC Confluence boost (+{btc_boost:.1f} score): {btc_reason}")
 
         # Funding Rate & Crowded Trade Sentiment Filter (Perpetual Futures ONLY — spot has no funding rate)
         fr: float = 0.0
