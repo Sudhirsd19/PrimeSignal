@@ -58,8 +58,26 @@ class TimeframeRequest(BaseModel):
     timeframe: str
 
 # ─── F-01 FIX: Fail-closed Dashboard API Key Authentication ─────────────────
-# Never use hardcoded secrets. Requires DASHBOARD_SECRET in environment.
-_DASHBOARD_SECRET = os.getenv("DASHBOARD_SECRET", "").strip()
+# Never use hardcoded secrets. Requires DASHBOARD_SECRET in environment or .env.
+def _resolve_dashboard_secret() -> str:
+    sec = os.getenv("DASHBOARD_SECRET", "").strip()
+    if sec:
+        return sec
+    cfg_sec = getattr(Config, 'DASHBOARD_SECRET', '').strip()
+    if cfg_sec:
+        return cfg_sec
+    try:
+        from dotenv import load_dotenv
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env_file = os.path.join(base_dir, ".env")
+        if os.path.exists(env_file):
+            load_dotenv(env_file)
+            return os.getenv("DASHBOARD_SECRET", "").strip()
+    except Exception:
+        pass
+    return ""
+
+_DASHBOARD_SECRET = _resolve_dashboard_secret()
 if _DASHBOARD_SECRET:
     print("[SECURITY] Dashboard API key auth is ENABLED.")
 else:
@@ -68,8 +86,10 @@ _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 async def verify_dashboard_key(key: Optional[str] = Depends(_api_key_header)):
     """Enforces auth for all environments. Fails closed if DASHBOARD_SECRET is unset."""
-    secret = os.getenv("DASHBOARD_SECRET", "").strip() or _DASHBOARD_SECRET
-    if not secret:
+    env_secret = os.getenv("DASHBOARD_SECRET", "").strip()
+    mem_secret = (_DASHBOARD_SECRET or "").strip()
+    valid_keys = {k for k in (env_secret, mem_secret) if k}
+    if not valid_keys:
         raise HTTPException(
             status_code=503,
             detail="SECURITY ERROR: DASHBOARD_SECRET is not configured in .env. Mutating actions are blocked."
@@ -77,7 +97,6 @@ async def verify_dashboard_key(key: Optional[str] = Depends(_api_key_header)):
     import urllib.parse
     key_unquoted = urllib.parse.unquote(key).strip() if key else ""
     key_raw = key.strip() if key else ""
-    valid_keys = {secret}
     is_valid = any(
         (k and secrets.compare_digest(k, vk))
         for k in (key_unquoted, key_raw)

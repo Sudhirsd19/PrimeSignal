@@ -1040,6 +1040,11 @@
                     headers['X-API-Key'] = clean;
                     res = await fetch(url, { ...options, headers });
                 }
+            } else if (res.status === 503) {
+                const errJson = await res.clone().json().catch(() => ({}));
+                const detail = errJson.detail || "Server security error: DASHBOARD_SECRET not configured on backend.";
+                console.error("Server 503:", detail);
+                alert("⚠️ Server Configuration Error (503):\n" + detail);
             }
             return res;
         }
@@ -3318,7 +3323,12 @@
                         if (sbMax) sbMax.innerText = data.max_daily_trades;
                     }
                 } else {
-                    console.error("Failed to update max daily trades on server:", res ? res.status : "No response");
+                    const errJson = await (res ? res.clone().json().catch(() => ({})) : Promise.resolve({}));
+                    const detail = errJson.detail || errJson.message || (res ? `Status ${res.status}` : "No response");
+                    console.error("Failed to update max daily trades on server:", detail);
+                    if (res && res.status !== 503 && res.status !== 401 && res.status !== 403) {
+                        alert("⚠️ Failed to update max daily trades: " + detail);
+                    }
                     window.currentMaxTrades = oldMax;
                     window._maxTradesUpdating = 0;
                     if (badge) badge.innerText = `${window.currentTradesToday || 0}/${oldMax} TRADES`;

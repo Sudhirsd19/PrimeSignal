@@ -18,7 +18,11 @@ aiohttp.connector.DefaultResolver = aiohttp.resolver.ThreadedResolver
 # engine un-importable (it prevented the test-suite and CLI tools from running).
 try:  # pragma: no cover - trivial import shim
     from dotenv import load_dotenv
-    load_dotenv()
+    _env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(_env_file):
+        load_dotenv(_env_file)
+    else:
+        load_dotenv()
 except ImportError:  # pragma: no cover
     pass
 
@@ -28,6 +32,7 @@ class Config:
     API_KEY = os.getenv("BINANCE_API_KEY", "")
     SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "")
     USE_TESTNET = os.getenv("USE_TESTNET", "True").lower() in ("true", "1", "yes")
+    DASHBOARD_SECRET = os.getenv("DASHBOARD_SECRET", "").strip()
     
     # Product Settings (Top 20 High-Liquidity Institutional USDT Pairs)
     SYMBOL = os.getenv("SYMBOL", "BTC/USDT")

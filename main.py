@@ -12,9 +12,21 @@ aiohttp.connector.DefaultResolver = aiohttp.resolver.ThreadedResolver
 
 import asyncio
 import math
+import os
 import sys
 import types
 from pathlib import Path
+
+# Load environment configuration from repository root
+try:
+    from dotenv import load_dotenv
+    _env_path = Path(__file__).resolve().parent / ".env"
+    if _env_path.exists():
+        load_dotenv(str(_env_path))
+    else:
+        load_dotenv()
+except ImportError:
+    pass
 
 LEGACY_PATH = Path(__file__).with_name("main_legacy.py")
 
