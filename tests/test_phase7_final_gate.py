@@ -39,6 +39,7 @@ class TestPhase7FinalGate(unittest.IsolatedAsyncioTestCase):
         Config.COINDCX_ACTIVE = False
 
     def tearDown(self):
+        Config.PAPER_TRADING = True
         self.test_dir.cleanup()
 
     def _create_bot(self):
@@ -138,6 +139,7 @@ for i in range(10000):
             requested_qty=0.6,
             order_role="ENTRY",
             price=92000.0,
+            protection={"stop_loss": 89000.0, "position_side": "LONG"},
         )
 
         mock_order = {
@@ -193,6 +195,7 @@ for i in range(10000):
             requested_qty=2.0, # Requested 2.0 BTC
             order_role="ENTRY",
             price=90000.0,
+            protection={"stop_loss": 85000.0, "position_side": "LONG"},
         )
 
         mock_open = [{

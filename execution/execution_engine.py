@@ -953,6 +953,7 @@ class ExecutionEngine:
                 discovered.raw['symbol'] = symbol
                 discovered.raw['side'] = side
                 discovered.raw['price'] = price
+                discovered.raw['protection'] = intent.get('protection')
                 discovered.intent_id = intent_id
                 discovered.client_order_id = client_order_id
                 discovered.venue = venue
@@ -965,6 +966,7 @@ class ExecutionEngine:
                 discovered.raw['symbol'] = symbol
                 discovered.raw['side'] = side
                 discovered.raw['price'] = price
+                discovered.raw['protection'] = intent.get('protection')
                 discovered.intent_id = intent_id
                 discovered.client_order_id = client_order_id
                 discovered.venue = venue
@@ -980,7 +982,7 @@ class ExecutionEngine:
                     intent_id=intent_id,
                     venue=venue,
                     error="Unplaced or rejected before restart; verified absent on exchange",
-                    raw={'order_role': order_role, 'symbol': symbol, 'side': side, 'price': price}
+                    raw={'order_role': order_role, 'symbol': symbol, 'side': side, 'price': price, 'protection': intent.get('protection')}
                 )
                 self.intent_journal.result(rejected_res)
                 resolutions[intent_id] = rejected_res

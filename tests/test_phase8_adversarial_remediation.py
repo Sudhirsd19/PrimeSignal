@@ -27,6 +27,14 @@ class TestPhase8AdversarialRemediation(unittest.IsolatedAsyncioTestCase):
         Config.RISK_PCT = 0.8
         Config.MAX_TRADE_ALLOCATION_PCT = 0.35
         Config.USDT_INR_RATE = 85.0
+        Config.TRADING_VENUE = 'BINANCE'
+        Config.EXCHANGE_TYPE = 'futures'
+
+    def tearDown(self):
+        Config.PAPER_TRADING = True
+        Config.COINDCX_TRADE_INR = False
+        Config.TRADING_VENUE = 'BINANCE'
+        Config.EXCHANGE_TYPE = 'futures'
 
     # ──────────────────────────────────────────────────────────────────────────
     # AUD-P0-01: CURRENCY ISOLATION & SIZING TESTS
@@ -393,11 +401,16 @@ class TestPhase8AdversarialRemediation(unittest.IsolatedAsyncioTestCase):
         from main import PrimeSignalBot
         from dashboard.app import DashboardState
         
+        Config.TRADING_VENUE = 'COINDCX'
+        Config.EXCHANGE_TYPE = 'spot'
+        Config.PAPER_TRADING = False
+        Config.COINDCX_TRADE_INR = True
+
         bot = PrimeSignalBot()
         bot.has_keys = True
         bot.reconciliation.initial_reconciliation_done = True
-        Config.PAPER_TRADING = False
-        Config.COINDCX_TRADE_INR = True
+        bot.macro_calendar = MagicMock()
+        bot.macro_calendar.is_blackout.return_value = (False, "")
         
         bot.execution.fetch_balance = AsyncMock(return_value={
             'total': {'INR': 12500.0, 'BTC': 0.05, 'USDT': 10.0},

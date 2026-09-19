@@ -17,7 +17,9 @@ class TestPhase3ExecutionQuantity(unittest.IsolatedAsyncioTestCase):
         self.bot.has_keys = True
         self.bot.reconciliation.initial_reconciliation_done = True
         self.bot.global_pause_until = 0
-        
+        self.bot.macro_calendar = MagicMock()
+        self.bot.macro_calendar.is_blackout.return_value = (False, "")
+
         # Mocks
         self.bot.execution = AsyncMock()
         self.bot.execution.fetch_balance = AsyncMock(return_value={'total': {'USDT': 10000.0}})
@@ -55,6 +57,9 @@ class TestPhase3ExecutionQuantity(unittest.IsolatedAsyncioTestCase):
         self.bot.pipeline.ltf_candles['BTC/USDT'] = dummy_candles
         self.bot.pipeline.htf_candles['BTC/USDT'] = dummy_candles
         self.bot.pipeline.latest_prices['BTC/USDT'] = 100.0
+
+    async def asyncTearDown(self):
+        Config.PAPER_TRADING = True
 
     def create_mock_fill(self, state, req, filled, price=100.0, avg=100.0):
         res = ExecutionResult(

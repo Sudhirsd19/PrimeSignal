@@ -29,9 +29,11 @@ class TestPhase5CrashRecovery(unittest.IsolatedAsyncioTestCase):
         Config.INTENT_JOURNAL_FILE = str(self.journal_file)
         Config.IMMUTABLE_LEDGER_FILE = str(self.ledger_file)
         Config.PAPER_TRADING = False
+        Config.TRADING_VENUE = "BINANCE"
         Config.EXCHANGE_TYPE = "futures"
 
     def tearDown(self):
+        Config.PAPER_TRADING = True
         self.test_dir.cleanup()
 
     def _create_valid_state_file(self, data=None):
@@ -81,7 +83,8 @@ class TestPhase5CrashRecovery(unittest.IsolatedAsyncioTestCase):
             side="buy",
             requested_qty=0.5,
             order_role="ENTRY",
-            price=90000.0
+            price=90000.0,
+            protection={"stop_loss": 89000.0, "position_side": "LONG"}
         )
         
         bot = self._mock_bot()
@@ -108,7 +111,8 @@ class TestPhase5CrashRecovery(unittest.IsolatedAsyncioTestCase):
             side="buy",
             requested_qty=0.5,
             order_role="ENTRY",
-            price=90000.0
+            price=90000.0,
+            protection={"stop_loss": 89000.0, "position_side": "LONG"}
         )
         journal.append({
             "event": "INTENT_UNKNOWN",
@@ -152,7 +156,8 @@ class TestPhase5CrashRecovery(unittest.IsolatedAsyncioTestCase):
             side="buy",
             requested_qty=0.5,
             order_role="ENTRY",
-            price=90000.0
+            price=90000.0,
+            protection={"stop_loss": 89000.0, "position_side": "LONG"}
         )
         journal.append({
             "event": "INTENT_UNKNOWN",
@@ -184,7 +189,8 @@ class TestPhase5CrashRecovery(unittest.IsolatedAsyncioTestCase):
             side="buy",
             requested_qty=0.5,
             order_role="ENTRY",
-            price=90000.0
+            price=90000.0,
+            protection={"stop_loss": 89000.0, "position_side": "LONG"}
         )
         journal.append({
             "event": "INTENT_ACCEPTED",
@@ -215,8 +221,9 @@ class TestPhase5CrashRecovery(unittest.IsolatedAsyncioTestCase):
 
     # 5. Post-partial fill crash recovery (exchange filled 0.3 of 1.0)
     async def test_post_partial_fill_crash_recovery(self):
-        self._create_valid_state_file()
+        self._create_valid_state_file({"stop_loss": {"BTC/USDT": 89000.0}})
         bot = self._mock_bot()
+        bot.load_state()
         
         mock_positions = [{'symbol': 'BTC/USDT', 'contracts': 0.3, 'entryPrice': 91000.0, 'side': 'LONG'}]
         bot.execution.trade_client.fetch_positions = AsyncMock(return_value=mock_positions)
@@ -232,8 +239,9 @@ class TestPhase5CrashRecovery(unittest.IsolatedAsyncioTestCase):
 
     # 6. Post-full fill crash before state save (reconstruct position from exchange)
     async def test_post_full_fill_crash_before_state_save(self):
-        self._create_valid_state_file() # local state has 0 contracts
+        self._create_valid_state_file({"stop_loss": {"BTC/USDT": 88000.0}}) # local state has 0 contracts
         bot = self._mock_bot()
+        bot.load_state()
         
         mock_positions = [{'symbol': 'BTC/USDT', 'contracts': 1.0, 'entryPrice': 90000.0, 'side': 'LONG'}]
         bot.execution.trade_client.fetch_positions = AsyncMock(return_value=mock_positions)
@@ -271,8 +279,9 @@ class TestPhase5CrashRecovery(unittest.IsolatedAsyncioTestCase):
 
     # 8. Unprotected position startup recovery (places native SL)
     async def test_unprotected_position_startup_recovery(self):
-        self._create_valid_state_file()
+        self._create_valid_state_file({"stop_loss": {"BTC/USDT": 86000.0}})
         bot = self._mock_bot()
+        bot.load_state()
         
         mock_positions = [{'symbol': 'BTC/USDT', 'contracts': 0.75, 'entryPrice': 88000.0, 'side': 'LONG'}]
         bot.execution.trade_client.fetch_positions = AsyncMock(return_value=mock_positions)

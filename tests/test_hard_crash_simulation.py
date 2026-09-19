@@ -75,7 +75,9 @@ for i in range(10000):
             [sys.executable, "-u", "-c", child_code],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            encoding="utf-8",
+            errors="replace"
         )
         
         # Read until child indicates it has written state
@@ -152,7 +154,9 @@ time.sleep(10) # Wait to be killed
             [sys.executable, "-u", "-c", intent_child_code],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            encoding="utf-8",
+            errors="replace"
         )
         
         # Wait until child has written intent to journal

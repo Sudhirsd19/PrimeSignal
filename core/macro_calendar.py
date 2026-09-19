@@ -132,9 +132,13 @@ class MacroNewsCalendar:
         # Paper mode is explicitly a simulation and must remain usable when the
         # optional external calendar source is unavailable.
         if not events:
-            reason = f"Macro calendar unavailable — trading halted ({self.last_error or 'no relevant calendar events loaded'})"
+            if getattr(Config, "ENABLE_RECURRING_NEWS_WINDOWS", False):
+                recur_blocked, recur_reason = self._recurring_fallback(now)
+                if recur_blocked:
+                    return True, recur_reason
             if getattr(Config, "PAPER_TRADING", False):
-                return False, f"Paper mode: macro calendar unavailable; live fail-closed rule not applied"
+                return False, ""
+            reason = f"Macro calendar unavailable — trading halted ({self.last_error or 'no relevant calendar events loaded'})"
             return True, reason
         before = timedelta(minutes=int(getattr(Config, "NEWS_BLACKOUT_BEFORE_MIN", 15)))
         after = timedelta(minutes=int(getattr(Config, "NEWS_BLACKOUT_AFTER_MIN", 20)))
@@ -147,9 +151,9 @@ class MacroNewsCalendar:
 
     def _recurring_fallback(self, now):
         if now.weekday() >= 5: return False, ""
-        if now.hour == 12 and 20 <= now.minute <= 45: return True, "Recurring window: US morning macro data"
-        if now.hour == 13 and 20 <= now.minute <= 45: return True, "Recurring window: US main macro data"
-        if now.weekday() == 2 and (now.hour == 18 or (now.hour == 19 and now.minute <= 30)): return True, "Recurring window: Fed FOMC legacy window"
+        if now.hour == 12 and 20 <= now.minute <= 45: return True, "Recurring window (legacy heuristic): US morning macro data"
+        if now.hour == 13 and 20 <= now.minute <= 45: return True, "Recurring window (legacy heuristic): US main macro data"
+        if now.weekday() == 2 and (now.hour == 18 or (now.hour == 19 and now.minute <= 30)): return True, "Recurring window (legacy heuristic): Fed FOMC legacy window"
         return False, ""
 
     def next_event(self, now_utc: Optional[datetime] = None):

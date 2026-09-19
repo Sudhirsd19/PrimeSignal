@@ -315,7 +315,8 @@ class DailyRiskStateTests(unittest.TestCase):
 
     def test_main_wires_the_daily_envelope_into_persistence(self):
         """Wiring guard: the counters must be written to and read from bot state."""
-        src = (PROJECT_ROOT / "main.py").read_text(encoding="utf-8")
+        target_path = (PROJECT_ROOT / "main_legacy.py") if (PROJECT_ROOT / "main_legacy.py").exists() else (PROJECT_ROOT / "main.py")
+        src = target_path.read_text(encoding="utf-8")
         self.assertIn("'daily_risk_state': self.risk.serialize_daily_state()", src)
         self.assertIn("self.risk.load_daily_state(", src)
         self.assertIn("'daily_counters'", src)

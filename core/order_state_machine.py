@@ -25,7 +25,18 @@ class PositionContext:
     _LEGAL_TRANSITIONS = {
         # Recovery paths from IDLE are explicit because reconciliation can adopt
         # a broker-confirmed position or close/reset a stale local context.
-        OrderState.IDLE: {OrderState.ORDER_INTENT_CREATED, OrderState.PROTECTED, OrderState.CLOSED},
+        OrderState.IDLE: {
+            OrderState.ORDER_INTENT_CREATED,
+            OrderState.PROTECTED,
+            OrderState.PARTIALLY_FILLED,
+            OrderState.TP1_LOCKED,
+            OrderState.TP2_LOCKED,
+            OrderState.CLOSING,
+            OrderState.CLOSED,
+            OrderState.EMERGENCY_FLATTENED,
+            OrderState.EXECUTION_UNKNOWN,
+            OrderState.EXIT_UNKNOWN,
+        },
         OrderState.ORDER_INTENT_CREATED: {OrderState.ORDER_SUBMITTED, OrderState.EXECUTION_UNKNOWN, OrderState.REJECTED, OrderState.CLOSED},
         OrderState.ORDER_SUBMITTED: {OrderState.ORDER_ACK, OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.EXECUTION_UNKNOWN, OrderState.REJECTED, OrderState.CLOSED},
         OrderState.ORDER_ACK: {OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.EXECUTION_UNKNOWN, OrderState.REJECTED, OrderState.CLOSED},
@@ -36,7 +47,7 @@ class PositionContext:
         OrderState.TP1_LOCKED: {OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN, OrderState.CLOSED},
         OrderState.TP2_LOCKED: {OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN, OrderState.CLOSED},
         OrderState.RUNNER_ACTIVE: {OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN, OrderState.CLOSED},
-        OrderState.CLOSING: {OrderState.CLOSED, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN, OrderState.EMERGENCY_FLATTENED},
+        OrderState.CLOSING: {OrderState.CLOSED, OrderState.PROTECTED, OrderState.PARTIALLY_FILLED, OrderState.EXIT_UNKNOWN, OrderState.EXECUTION_UNKNOWN, OrderState.EMERGENCY_FLATTENED},
         OrderState.EXECUTION_UNKNOWN: {OrderState.ORDER_ACK, OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.SL_PLACEMENT_PENDING, OrderState.PROTECTED, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.CLOSED, OrderState.REJECTED},
         OrderState.EXIT_UNKNOWN: {OrderState.CLOSING, OrderState.CLOSED, OrderState.EMERGENCY_FLATTENED, OrderState.EXECUTION_UNKNOWN},
         OrderState.REJECTED: {OrderState.IDLE, OrderState.ORDER_INTENT_CREATED},

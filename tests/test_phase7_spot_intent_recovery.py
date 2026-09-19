@@ -34,6 +34,7 @@ class TestPhase7SpotIntentRecovery(unittest.IsolatedAsyncioTestCase):
         Config.COINDCX_ACTIVE = False
 
     def tearDown(self):
+        Config.PAPER_TRADING = True
         self.test_dir.cleanup()
 
     def _create_bot(self):
@@ -65,6 +66,7 @@ class TestPhase7SpotIntentRecovery(unittest.IsolatedAsyncioTestCase):
             requested_qty=0.5,
             order_role="ENTRY",
             price=90000.0,
+            protection={"stop_loss": 85000.0, "position_side": "LONG"},
         )
         
         # Mock exchange finding the filled order
@@ -106,6 +108,7 @@ class TestPhase7SpotIntentRecovery(unittest.IsolatedAsyncioTestCase):
             requested_qty=1.0,
             order_role="ENTRY",
             price=90000.0,
+            protection={"stop_loss": 85000.0, "position_side": "LONG"},
         )
         
         mock_order = {
@@ -146,6 +149,7 @@ class TestPhase7SpotIntentRecovery(unittest.IsolatedAsyncioTestCase):
             requested_qty=0.5,
             order_role="ENTRY",
             price=90000.0,
+            protection={"stop_loss": 85000.0, "position_side": "LONG"},
         )
         
         # Absent on exchange
@@ -189,6 +193,7 @@ class TestPhase7SpotIntentRecovery(unittest.IsolatedAsyncioTestCase):
             requested_qty=0.5,
             order_role="ENTRY",
             price=90000.0,
+            protection={"stop_loss": 85000.0, "position_side": "LONG"},
         )
         
         mock_order = {
@@ -227,6 +232,7 @@ class TestPhase7SpotIntentRecovery(unittest.IsolatedAsyncioTestCase):
             requested_qty=0.25,
             order_role="ENTRY",
             price=90000.0,
+            protection={"stop_loss": 85000.0, "position_side": "LONG"},
         )
         
         mock_order = {
@@ -267,6 +273,7 @@ class TestPhase7SpotIntentRecovery(unittest.IsolatedAsyncioTestCase):
             requested_qty=0.5,
             order_role="ENTRY",
             price=90000.0,
+            protection={"stop_loss": 85000.0, "position_side": "LONG"},
         )
         
         mock_order = {
@@ -310,6 +317,7 @@ class TestPhase7SpotIntentRecovery(unittest.IsolatedAsyncioTestCase):
             requested_qty=0.75,
             order_role="ENTRY",
             price=90000.0,
+            protection={"stop_loss": 85000.0, "position_side": "LONG"},
         )
         mock_order = {
             "id": "EX_108",
@@ -355,6 +363,7 @@ class TestPhase7SpotIntentRecovery(unittest.IsolatedAsyncioTestCase):
             requested_qty=0.5,
             order_role="ENTRY",
             price=90000.0,
+            protection={"stop_loss": 85000.0, "position_side": "LONG"},
         )
         # Already resolved in journal
         journal.result(ExecutionResult(
@@ -389,6 +398,7 @@ class TestPhase7SpotIntentRecovery(unittest.IsolatedAsyncioTestCase):
             requested_qty=0.5,
             order_role="ENTRY",
             price=90000.0,
+            protection={"stop_loss": 85000.0, "position_side": "LONG"},
         )
         
         # CCXT raises network error during fetch
@@ -419,6 +429,7 @@ class TestPhase7SpotIntentRecovery(unittest.IsolatedAsyncioTestCase):
             requested_qty=1.0,
             order_role="ENTRY",
             price=90000.0,
+            protection={"stop_loss": 85000.0, "position_side": "LONG"},
         )
         bot.execution.trade_client.fetch_open_orders = AsyncMock(side_effect=ConnectionError("Exchange unreachable"))
         bot.execution.trade_client.fetch_closed_orders = AsyncMock(side_effect=ConnectionError("Exchange unreachable"))
@@ -448,6 +459,7 @@ class TestPhase7SpotIntentRecovery(unittest.IsolatedAsyncioTestCase):
             requested_qty=0.5,
             order_role="ENTRY",
             price=90000.0,
+            protection={"stop_loss": 85000.0, "position_side": "LONG"},
         )
         
         orders = [
@@ -480,6 +492,7 @@ class TestPhase7SpotIntentRecovery(unittest.IsolatedAsyncioTestCase):
             requested_qty=0.4,
             order_role="ENTRY",
             price=90000.0,
+            protection={"stop_loss": 85000.0, "position_side": "LONG"},
         )
         
         orders = [
@@ -512,6 +525,7 @@ class TestPhase7SpotIntentRecovery(unittest.IsolatedAsyncioTestCase):
             requested_qty=1.0,
             order_role="ENTRY",
             price=90000.0,
+            protection={"stop_loss": 85000.0, "position_side": "LONG"},
         )
         
         # First check: partially filled 0.4

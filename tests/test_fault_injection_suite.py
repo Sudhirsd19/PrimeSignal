@@ -153,6 +153,7 @@ class TestFaultInjectionSuite(unittest.IsolatedAsyncioTestCase):
         reconciler = ReconciliationEngine(bot, check_interval=1.0)
         
         # Case 1: Exchange reports open BTC position, local thinks IDLE -> Orphan adoption
+        bot.stop_loss['BTC/USDT'] = 83000.0
         mock_positions = [{'symbol': 'BTC/USDT', 'contracts': 0.25, 'entryPrice': 85000.0, 'side': 'LONG'}]
         bot.execution.trade_client.fetch_positions = AsyncMock(return_value=mock_positions)
         

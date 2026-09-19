@@ -71,8 +71,9 @@ class TestForensicAuditRemediations(unittest.TestCase):
         self.assertIn("htf_df['close'].iloc[htf_eval_idx]", code)
 
     def test_f06_funding_rate_fail_closed(self):
-        """F-06: Verify main.py fails closed when funding rate is unavailable."""
-        with open("main.py", "r", encoding="utf-8") as f:
+        """F-06: Verify main fails closed when funding rate is unavailable."""
+        target_file = "main_legacy.py" if Path("main_legacy.py").exists() else "main.py"
+        with open(target_file, "r", encoding="utf-8") as f:
             code = f.read()
         self.assertIn("Funding rate data unavailable from exchange (fail-closed protection)", code)
 

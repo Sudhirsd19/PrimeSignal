@@ -54,10 +54,10 @@ class BTCAnchorEngine:
         Returns:
             Tuple of (allowed: bool, reason: str, score_adjustment: float)
         """
-        clean_sym = symbol.replace("/", "").upper()
-        if "BTC" in clean_sym and "USDT" in clean_sym:
+        clean_sym = symbol.replace("/", "").replace("_", "").replace("-", "").upper()
+        if clean_sym.startswith("BTC") and not clean_sym.startswith("BTCST"):
             # Self-reference: BTC doesn't filter itself via correlation
-            return True, "Primary Asset (BTC/USDT)", 0.0
+            return True, f"Primary Asset ({symbol})", 0.0
 
         if signal not in ("BUY", "SELL"):
             return True, "No directional signal", 0.0
