@@ -309,9 +309,9 @@
                         <p class="text-[10px] text-gray-500">Max trades allowed today</p>
                     </div>
                     <div class="flex items-center gap-1.5 bg-[#111827] px-2 py-1 rounded-lg border border-[#374151]">
-                        <button onclick="changeMaxTrades(-1)" class="w-6 h-6 rounded bg-[#1f2937] hover:bg-blue-600 text-blue-400 hover:text-white font-bold flex items-center justify-center transition-colors cursor-pointer text-xs">-</button>
-                        <span id="sidebar-max-trades" class="text-xs font-black text-white terminal-font px-2">6</span>
-                        <button onclick="changeMaxTrades(1)" class="w-6 h-6 rounded bg-[#1f2937] hover:bg-blue-600 text-blue-400 hover:text-white font-bold flex items-center justify-center transition-colors cursor-pointer text-xs">+</button>
+                        <button type="button" onclick="changeMaxTrades(-1, event)" class="w-6 h-6 rounded bg-[#1f2937] hover:bg-blue-600 text-blue-400 hover:text-white font-bold flex items-center justify-center transition-colors cursor-pointer text-xs select-none active:scale-95" title="Decrease Daily Trade Limit">-</button>
+                        <span id="sidebar-max-trades" class="text-xs font-black text-white terminal-font px-2 select-none">6</span>
+                        <button type="button" onclick="changeMaxTrades(1, event)" class="w-6 h-6 rounded bg-[#1f2937] hover:bg-blue-600 text-blue-400 hover:text-white font-bold flex items-center justify-center transition-colors cursor-pointer text-xs select-none active:scale-95" title="Increase Daily Trade Limit">+</button>
                     </div>
                 </div>
 
@@ -603,9 +603,9 @@
                 <div class="flex justify-between items-center">
                     <span class="text-xs font-bold uppercase tracking-wider text-slate-400">🛡️ Daily Drawdown</span>
                     <div class="flex items-center gap-1 bg-blue-500/15 border border-blue-500/30 px-1.5 py-0.5 rounded-full shadow-sm">
-                        <button onclick="changeMaxTrades(-1)" class="w-4 h-4 rounded-full bg-[#111827] hover:bg-blue-600 text-blue-400 hover:text-white flex items-center justify-center text-[10px] font-black transition-colors cursor-pointer" title="Decrease Max Trades">-</button>
-                        <span id="daily-trades-badge" class="text-[10px] text-blue-400 font-extrabold px-1">0/6 TRADES</span>
-                        <button onclick="changeMaxTrades(1)" class="w-4 h-4 rounded-full bg-[#111827] hover:bg-blue-600 text-blue-400 hover:text-white flex items-center justify-center text-[10px] font-black transition-colors cursor-pointer" title="Increase Max Trades">+</button>
+                        <button type="button" onclick="changeMaxTrades(-1, event)" class="w-4 h-4 rounded-full bg-[#111827] hover:bg-blue-600 text-blue-400 hover:text-white flex items-center justify-center text-[10px] font-black transition-colors cursor-pointer select-none active:scale-90" title="Decrease Max Trades">-</button>
+                        <span id="daily-trades-badge" class="text-[10px] text-blue-400 font-extrabold px-1 select-none">0/6 TRADES</span>
+                        <button type="button" onclick="changeMaxTrades(1, event)" class="w-4 h-4 rounded-full bg-[#111827] hover:bg-blue-600 text-blue-400 hover:text-white flex items-center justify-center text-[10px] font-black transition-colors cursor-pointer select-none active:scale-90" title="Increase Max Trades">+</button>
                     </div>
                 </div>
                 <div class="flex items-baseline space-x-1.5 my-1">
@@ -1018,6 +1018,30 @@
                 'Content-Type': 'application/json',
                 'X-API-Key': getDashboardApiKey()
             };
+        }
+
+        async function apiFetch(url, options = {}) {
+            let key = getDashboardApiKey();
+            let headers = {
+                'Content-Type': 'application/json',
+                ...(options.headers || {})
+            };
+            if (key) {
+                headers['X-API-Key'] = key;
+            }
+            
+            let res = await fetch(url, { ...options, headers });
+            if (res.status === 401 || res.status === 403) {
+                const entered = prompt("Dashboard authentication required. Please enter your DASHBOARD_SECRET:");
+                if (entered && entered.trim()) {
+                    const clean = entered.trim();
+                    localStorage.setItem('dashboard_api_key', clean);
+                    sessionStorage.setItem('dashboard_api_key', clean);
+                    headers['X-API-Key'] = clean;
+                    res = await fetch(url, { ...options, headers });
+                }
+            }
+            return res;
         }
 
         let chart = null;
@@ -1974,24 +1998,25 @@
                             }
                         }
 
-                        // Daily Trades Badge update
+                        // Daily Trades Badge & Max Trades sync
+                        const isAdjustingTrades = window._maxTradesUpdating && (Date.now() < window._maxTradesUpdating);
+                        if (state.trades_today !== undefined) {
+                            window.currentTradesToday = state.trades_today;
+                        }
+                        if (state.max_daily_trades !== undefined && !isAdjustingTrades) {
+                            window.currentMaxTrades = state.max_daily_trades;
+                            const sbMax = document.getElementById('sidebar-max-trades');
+                            if (sbMax) sbMax.innerText = state.max_daily_trades;
+                        }
+
                         const dailyTradesBadge = document.getElementById('daily-trades-badge');
-                        if (dailyTradesBadge && state.max_daily_trades !== undefined) {
-                            const executed = state.trades_today || 0;
-                            const maxTr = state.max_daily_trades || 6;
+                        if (dailyTradesBadge) {
+                            const executed = window.currentTradesToday || 0;
+                            const maxTr = window.currentMaxTrades || 6;
                             dailyTradesBadge.innerText = `${executed}/${maxTr} TRADES`;
                             dailyTradesBadge.className = executed >= maxTr 
                                 ? "text-[10px] text-red-400 font-black px-1 animate-pulse"
                                 : "text-[10px] text-blue-400 font-extrabold px-1";
-                        }
-                        // Dynamic trades today & max trades sync
-                        if (state.trades_today !== undefined) {
-                            window.currentTradesToday = state.trades_today;
-                        }
-                        if (state.max_daily_trades !== undefined) {
-                            window.currentMaxTrades = state.max_daily_trades;
-                            const sbMax = document.getElementById('sidebar-max-trades');
-                            if (sbMax) sbMax.innerText = state.max_daily_trades;
                         }
 
                         // Daily Profit Lock State Sync
@@ -2695,9 +2720,8 @@
                 const chartLoadingEl = document.getElementById('chart-loading');
                 if (chartLoadingEl) chartLoadingEl.classList.remove('hidden');
                 try {
-                    const response = await fetch('/api/change_symbol', {
+                    const response = await apiFetch('/api/change_symbol', {
                         method: 'POST',
-                        headers: getApiHeaders(),
                         body: JSON.stringify({ symbol: newSymbol })
                     });
                     if (!response.ok) {
@@ -2760,9 +2784,8 @@
             const chartLoadingEl = document.getElementById('chart-loading');
             if (chartLoadingEl) chartLoadingEl.classList.remove('hidden');
             try {
-                const response = await fetch('/api/set_timeframe', {
+                const response = await apiFetch('/api/set_timeframe', {
                     method: 'POST',
-                    headers: getApiHeaders(),
                     body: JSON.stringify({ timeframe: tf })
                 });
                 if (response.ok) {
@@ -2786,9 +2809,8 @@
             const modeName = nextMode ? "PAPER TRADING" : "REAL MONEY";
             console.log("Requesting mode switch to: " + modeName);
             try {
-                const response = await fetch('/api/set_mode', {
+                const response = await apiFetch('/api/set_mode', {
                     method: 'POST',
-                    headers: getApiHeaders(),
                     body: JSON.stringify({ paper_trading: nextMode })
                 });
                 if (!response.ok) {
@@ -2851,9 +2873,8 @@
         async function clearAnalyticsHistory() {
             if (!confirm("Are you sure you want to clean and wipe all historical trade analytics data?")) return;
             try {
-                const response = await fetch('/api/clear_analytics', {
-                    method: 'POST',
-                    headers: getApiHeaders()
+                const response = await apiFetch('/api/clear_analytics', {
+                    method: 'POST'
                 });
                 const data = await response.json();
                 if (data.status === 'success') {
@@ -2871,9 +2892,7 @@
 
         async function loadAnalytics() {
             try {
-                const response = await fetch('/api/analytics', {
-                    headers: getApiHeaders()
-                });
+                const response = await apiFetch('/api/analytics');
                 const data = await response.json();
                 
                 if (data.status === 'success') {
@@ -3071,9 +3090,8 @@
                 const maxTr = window.currentMaxTrades || 6;
                 const sidebarTsl = document.getElementById('sidebar-tsl-toggle');
                 const tslActive = sidebarTsl ? sidebarTsl.checked : true;
-                await fetch('/api/update_risk_settings', {
+                await apiFetch('/api/update_risk_settings', {
                     method: 'POST',
-                    headers: getApiHeaders(),
                     body: JSON.stringify({
                         tsl_enabled: tslActive,
                         tsl_multiplier: 2.0,
@@ -3088,9 +3106,8 @@
         async function emergencyCloseAllPositions() {
             if (confirm("🚨 EMERGENCY: Immediately close ALL active positions?")) {
                 try {
-                    const response = await fetch('/api/emergency_stop', {
-                        method: 'POST',
-                        headers: getApiHeaders()
+                    const response = await apiFetch('/api/emergency_stop', {
+                        method: 'POST'
                     });
                     const data = await response.json();
                     if (response.ok && data.status === 'success') {
@@ -3117,9 +3134,8 @@
         async function lockProfitForSymbol(sym) {
             console.log("Requesting profit lock for: " + sym);
             try {
-                const response = await fetch('/api/lock_profit', {
+                const response = await apiFetch('/api/lock_profit', {
                     method: 'POST',
-                    headers: getApiHeaders(),
                     body: JSON.stringify({ symbol: sym })
                 });
                 const res = await response.json();
@@ -3135,9 +3151,8 @@
 
         async function setTradingCurrency(curr) {
             try {
-                const response = await fetch('/api/change_currency', {
+                const response = await apiFetch('/api/change_currency', {
                     method: 'POST',
-                    headers: getApiHeaders(),
                     body: JSON.stringify({ currency: curr })
                 });
                 const data = await response.json();
@@ -3175,9 +3190,8 @@
             const targetVal = curCurr === 'INR' ? 2000.0 : 10000.0;
             if (confirm(`Reset paper trading balance to ${curAmount} and close all active positions for fresh trading?`)) {
                 try {
-                    const response = await fetch('/api/reset_account', {
+                    const response = await apiFetch('/api/reset_account', {
                         method: 'POST',
-                        headers: getApiHeaders(),
                         body: JSON.stringify({ target_balance: targetVal })
                     });
                     const data = await response.json();
@@ -3259,27 +3273,55 @@
         // --- 7. DYNAMIC MAX DAILY TRADES STEPPER ---
         window.currentTradesToday = 0;
         window.currentMaxTrades = 6;
+        window._maxTradesUpdating = 0;
 
-        async function changeMaxTrades(delta) {
-            const newMax = Math.max(1, Math.min(200, (window.currentMaxTrades || 6) + delta));
+        async function changeMaxTrades(delta, event) {
+            if (event) {
+                try {
+                    event.stopPropagation();
+                    event.preventDefault();
+                } catch (e) {}
+            }
+            const oldMax = window.currentMaxTrades || 6;
+            const newMax = Math.max(1, Math.min(200, oldMax + delta));
+            if (newMax === oldMax) return;
+
             window.currentMaxTrades = newMax;
+            window._maxTradesUpdating = Date.now() + 4000;
             
             const badge = document.getElementById('daily-trades-badge');
-            if (badge) badge.innerText = `${window.currentTradesToday}/${newMax} TRADES`;
+            if (badge) badge.innerText = `${window.currentTradesToday || 0}/${newMax} TRADES`;
             
             const sbMax = document.getElementById('sidebar-max-trades');
             if (sbMax) sbMax.innerText = newMax;
 
             try {
-                await fetch('/api/update_risk_settings', {
+                const res = await apiFetch('/api/update_risk_settings', {
                     method: 'POST',
-                    headers: getApiHeaders(),
                     body: JSON.stringify({
                         max_daily_trades: newMax
                     })
                 });
+                if (res && res.ok) {
+                    const data = await res.json();
+                    if (data && data.max_daily_trades !== undefined) {
+                        window.currentMaxTrades = data.max_daily_trades;
+                        if (badge) badge.innerText = `${window.currentTradesToday || 0}/${data.max_daily_trades} TRADES`;
+                        if (sbMax) sbMax.innerText = data.max_daily_trades;
+                    }
+                } else {
+                    console.error("Failed to update max daily trades on server:", res ? res.status : "No response");
+                    window.currentMaxTrades = oldMax;
+                    window._maxTradesUpdating = 0;
+                    if (badge) badge.innerText = `${window.currentTradesToday || 0}/${oldMax} TRADES`;
+                    if (sbMax) sbMax.innerText = oldMax;
+                }
             } catch (err) {
                 console.error("Error updating max daily trades:", err);
+                window.currentMaxTrades = oldMax;
+                window._maxTradesUpdating = 0;
+                if (badge) badge.innerText = `${window.currentTradesToday || 0}/${oldMax} TRADES`;
+                if (sbMax) sbMax.innerText = oldMax;
             }
         }
 
@@ -3292,9 +3334,8 @@
                 return;
             }
             try {
-                const res = await fetch('/api/set_daily_profit_target', {
+                const res = await apiFetch('/api/set_daily_profit_target', {
                     method: 'POST',
-                    headers: getApiHeaders(),
                     body: JSON.stringify({ target_pct: val })
                 });
                 const data = await res.json();
@@ -3326,9 +3367,8 @@
                 btn.innerText = "Saving...";
             }
             try {
-                const res = await fetch('/api/set_daily_profit_target', {
+                const res = await apiFetch('/api/set_daily_profit_target', {
                     method: 'POST',
-                    headers: getApiHeaders(),
                     body: JSON.stringify({ target_pct: val })
                 });
                 const data = await res.json();
@@ -3375,9 +3415,8 @@
                 return;
             }
             try {
-                const res = await fetch('/api/unlock_daily_profit', {
-                    method: 'POST',
-                    headers: getApiHeaders()
+                const res = await apiFetch('/api/unlock_daily_profit', {
+                    method: 'POST'
                 });
                 const data = await res.json();
                 if (data.status === 'success') {

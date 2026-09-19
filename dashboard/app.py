@@ -1243,7 +1243,7 @@ def _build_state_payload():
         "ltf_timeframe": Config.LTF_TIMEFRAME,
         "htf_timeframe": Config.HTF_TIMEFRAME,
         "paper_trading": Config.PAPER_TRADING,
-        "is_testnet": bool(getattr(Config, 'TESTNET', False)),
+        "is_testnet": bool(getattr(Config, 'USE_TESTNET', False)),
         "trading_mode_label": "PAPER TRADING" if Config.PAPER_TRADING else ("LIVE TESTNET (Sandbox)" if getattr(Config, 'USE_TESTNET', False) else "LIVE REAL MONEY (Mainnet)"),
         "balance_currency": getattr(Config, 'PAPER_CURRENCY', 'INR' if Config.COINDCX_TRADE_INR else 'USDT'),
         "trades": DashboardState.trades[-5:],  # Last 5 trades
