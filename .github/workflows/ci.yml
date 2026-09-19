@@ -1,0 +1,52 @@
+name: PrimeSignal Institutional Verification & CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  audit-and-test:
+    name: Subsystem & Forensic Audit Verification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Forensic Audit Certification Suite (Phase 3 - Crash/Risk/Funding)
+        run: |
+          python -m unittest tests/test_audit_remediation_p3.py -v
+
+      - name: Run Forensic Audit Suite (Phase 2 - Futures/Timeouts/Slippage)
+        run: |
+          python -m unittest tests/test_audit_remediation_p2.py -v
+
+      - name: Run Execution Integrity Suite (Phase 1 - Idempotency & Retries)
+        run: |
+          python -m unittest tests/test_execution_integrity_phase1.py -v
+
+      - name: Run Phase 9B Remediation Suite (Emergency Close & Risk Bounds)
+        run: |
+          python -m unittest tests/test_phase9b_remediation.py -v
+
+      - name: Run Comprehensive Verification Suite (24 Subsystems)
+        run: |
+          python comprehensive_verification_suite.py
+
+      - name: Run Full System Audit Suite (8 Subsystem Modules)
+        run: |
+          python full_system_audit.py
