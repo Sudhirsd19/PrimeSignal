@@ -3271,6 +3271,24 @@ class PrimeSignalBot:
 
     SUPPORTED_TIMEFRAMES = ("1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d")
 
+    async def _retrain_models_background(self, new_tf: str):
+        """Retrains ML models across all symbols in a separate worker thread to avoid blocking asyncio."""
+        def _sync_retrain():
+            for sym in Config.SUPPORTED_SYMBOLS:
+                candles = self.pipeline.ltf_candles.get(sym)
+                if candles:
+                    df = prepare_dataframe(candles)
+                    if sym in self.ml_models and df is not None and not df.empty:
+                        try:
+                            self.ml_models[sym].train(df)
+                        except Exception as mle:
+                            print(f"[ML] Retrain warning for {sym} on {new_tf}: {mle}")
+        try:
+            await asyncio.to_thread(_sync_retrain)
+            add_log_message(f"🧠 ML models successfully retrained on {new_tf.upper()} candles.")
+        except Exception as e:
+            print(f"[ML] Background retrain error: {e}")
+
     async def change_execution_timeframe(self, new_tf: str):
         """Switches the live execution timeframe across all supported symbols and restarts data pipelines.
 
@@ -3328,23 +3346,15 @@ class PrimeSignalBot:
                 # 2. Restart WebSocket streams and warm up historical caches for new_tf
                 await self.pipeline.restart_streams()
 
-                # 3. Retrain ML models on the freshly warmed up LTF candles
-                for sym in Config.SUPPORTED_SYMBOLS:
-                    candles = self.pipeline.ltf_candles.get(sym)
-                    if candles:
-                        df = prepare_dataframe(candles)
-                        if sym in self.ml_models and df is not None and not df.empty:
-                            try:
-                                self.ml_models[sym].train(df)
-                            except Exception as mle:
-                                print(f"[ML] Retrain warning for {sym} on {new_tf}: {mle}")
-
-                # 4. Update Dashboard state to reflect the new live timeframe and chart candles
+                # 3. Update Dashboard state to reflect the new live timeframe and chart candles immediately
                 DashboardState.ltf_timeframe = new_tf
                 sym = Config.SYMBOL
                 DashboardState.chart_history = self.pipeline.ltf_candles[sym][-100:] if self.pipeline.ltf_candles.get(sym) else []
                 msg = f"Execution timeframe successfully switched to {new_tf.upper()}. Chart & signals active."
                 add_log_message(f"✅ {msg}")
+
+                # 4. Asynchronously retrain ML models in a background thread to keep event loop responsive
+                asyncio.create_task(self._retrain_models_background(new_tf))
                 return True, msg
 
             except Exception as e:
