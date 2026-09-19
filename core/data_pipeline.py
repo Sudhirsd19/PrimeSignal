@@ -163,8 +163,28 @@ class RealTimeDataPipeline:
         
         self.websocket_task = asyncio.create_task(self._websocket_loop(url))
 
+    async def refresh_ltf_history(self):
+        """Concurrent warmup of LTF candle caches for all symbols using asyncio.gather."""
+        print(f"[DATA] Refreshing LTF candle caches for all symbols on {Config.LTF_TIMEFRAME}...")
+        target_bars = int(getattr(Config, 'LTF_HISTORY_BARS', 2000))
+        async def _fetch_one(symbol):
+            try:
+                ltf_ohlcv = await self._fetch_ohlcv_paged(
+                    symbol=symbol,
+                    timeframe=Config.LTF_TIMEFRAME,
+                    total_bars=target_bars,
+                )
+                if ltf_ohlcv:
+                    self.ltf_candles[symbol] = ltf_ohlcv
+                    print(f"[DATA] {symbol}: {len(ltf_ohlcv)} LTF bars warmed up ({Config.LTF_TIMEFRAME}).")
+            except Exception as e:
+                print(f"[DATA] Error refreshing {symbol} {Config.LTF_TIMEFRAME}: {e}")
+
+        await asyncio.gather(*[_fetch_one(s) for s in Config.SUPPORTED_SYMBOLS])
+        print(f"[DATA] Historical LTF caches refreshed for {Config.LTF_TIMEFRAME}.")
+
     async def restart_streams(self):
-        """Restarts the websocket connection with updated LTF/HTF streams."""
+        """Restarts the websocket connection with updated LTF streams."""
         if self.websocket_task and not self.websocket_task.done():
             self.websocket_active = False
             if self.current_websocket:
@@ -173,8 +193,22 @@ class RealTimeDataPipeline:
                 except Exception:
                     pass
             self.websocket_task.cancel()
-            await asyncio.sleep(0.5)
-        await self.start()
+            await asyncio.sleep(0.2)
+
+        # Refresh only LTF candles concurrently across all symbols
+        await self.refresh_ltf_history()
+
+        streams = []
+        for symbol in Config.SUPPORTED_SYMBOLS:
+            stream_symbol = symbol.replace('/', '').lower()
+            streams.append(f"{stream_symbol}@miniTicker")
+            streams.append(f"{stream_symbol}@kline_{Config.LTF_TIMEFRAME}")
+            streams.append(f"{stream_symbol}@kline_{Config.HTF_TIMEFRAME}")
+            streams.append(f"{stream_symbol}@kline_4h")
+            
+        streams_joined = '/'.join(streams)
+        url = f"wss://stream.binance.com:9443/stream?streams={streams_joined}"
+        self.websocket_task = asyncio.create_task(self._websocket_loop(url))
 
     async def _websocket_loop(self, url):
         self.websocket_active = True

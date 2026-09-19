@@ -716,16 +716,9 @@ class PrimeSignalBot:
             DashboardState.balance_usdt = self.calculate_total_equity()
             DashboardState.balance_base = 0.0
         
-        # Train ML Models on historical candles for each symbol
-        for sym in Config.SUPPORTED_SYMBOLS:
-            ltf_history = self.pipeline.ltf_candles[sym]
-            if ltf_history:
-                df = prepare_dataframe(ltf_history)
-                trained = self.ml_models[sym].train(df)
-                if not trained:
-                    self.ml_models[sym].is_trained = False
-        
-        add_log_message("ML Models initialized (optional filtering mode).")
+        # Launch ML Models training asynchronously in background so bot is immediately operational
+        asyncio.create_task(self._retrain_models_background(Config.LTF_TIMEFRAME))
+        add_log_message("ML Models initialization dispatched in background.")
 
         DashboardState.latest_price = self.pipeline.latest_prices.get(Config.SYMBOL, 0.0)
         DashboardState.chart_history = self.pipeline.ltf_candles[Config.SYMBOL][-100:] if self.pipeline.ltf_candles[Config.SYMBOL] else []
