@@ -338,12 +338,26 @@ class ReconciliationEngine:
                 await exec_engine.cancel_order_safe(symbol, o_id)
             return None
 
-        if protective_orders:
-            matched = [o for o in protective_orders if str(o.get('id', '')) == str(local_sl)]
+        pos_side = str(self.bot.position_side.get(symbol, '')).upper()
+        expected_sl_side = 'sell' if pos_side == 'LONG' else ('buy' if pos_side == 'SHORT' else None)
+
+        valid_protective = []
+        for o in protective_orders:
+            o_side = str(o.get('side', '')).lower()
+            if expected_sl_side and o_side and o_side != expected_sl_side:
+                try:
+                    print(f'[RECONCILIATION] Protective order {o.get("id")} side ({o_side}) does not match expected stop side ({expected_sl_side}) for {pos_side} position. Skipping adoption.')
+                except Exception:
+                    pass
+                continue
+            valid_protective.append(o)
+
+        if valid_protective:
+            matched = [o for o in valid_protective if str(o.get('id', '')) == str(local_sl)]
             if matched:
                 resolved_sl = str(matched[0].get('id'))
             else:
-                resolved_sl = str(protective_orders[-1].get('id'))
+                resolved_sl = str(valid_protective[-1].get('id'))
                 try:
                     print(f'[RECONCILIATION] Discovered existing exchange SL {resolved_sl} for {symbol}. Adopting.')
                 except Exception:

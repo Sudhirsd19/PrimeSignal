@@ -56,6 +56,42 @@ class PrimeSignalBot:
             return float(val if val is not None else default_req)
         return float(order.filled_qty) if order.is_fill_confirmed else 0.0
 
+    def _extract_fill_price(self, order, fallback_price: float) -> float:
+        if not order:
+            return fallback_price
+        if isinstance(order, dict):
+            raw = order.get('average') or order.get('average_fill_price') or order.get('price') or order.get('avg_price')
+        else:
+            raw = getattr(order, 'average_fill_price', None) or getattr(order, 'price', None)
+        try:
+            val = float(raw) if raw is not None else 0.0
+            return val if val > 0 else fallback_price
+        except (ValueError, TypeError):
+            return fallback_price
+
+    async def _restore_spot_native_sl(self, symbol: str, side: str, size: float, sl_price: float):
+        if getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures' or not self.has_keys or Config.PAPER_TRADING:
+            return
+        ctx = self.order_state_machine.get_context(symbol)
+        sl_side = 'sell' if side.upper() == 'LONG' else 'buy'
+        try:
+            restored_sl = await self.execution.place_native_stop_loss(symbol, sl_side, size, sl_price)
+            if self._is_active_sl_order(restored_sl):
+                ctx.native_sl_order_id = str(restored_sl['id']) if isinstance(restored_sl, dict) else str(restored_sl.exchange_order_id)
+                add_log_message(f"[{symbol}] 🛡️ Native SL restored after TP rejection @ {sl_price:.4f}")
+            else:
+                ctx.native_sl_order_id = None
+                ctx.transition_to(OrderState.EXIT_UNKNOWN, reason="Failed to restore native SL after TP rejection")
+                if hasattr(self, 'reconciliation'):
+                    self.reconciliation.safe_mode_active = True
+                add_log_message(f"[{symbol}] 🚨 Restored native SL inactive after TP rejection. Safe mode active.")
+        except Exception as e:
+            ctx.native_sl_order_id = None
+            ctx.transition_to(OrderState.EXIT_UNKNOWN, reason=f"Exception restoring native SL after TP rejection: {e}")
+            if hasattr(self, 'reconciliation'):
+                self.reconciliation.safe_mode_active = True
+            add_log_message(f"[{symbol}] 🚨 Exception restoring native SL after TP rejection: {e}. Safe mode active.")
+
     def _is_truthy_fill(self, order) -> bool:
         if not order: return False
         if isinstance(order, dict):
@@ -760,7 +796,12 @@ class PrimeSignalBot:
         total_risk_pct = 0.0
         longs_count = 0
         shorts_count = 0
-        current_eq = self.calculate_total_equity() if (not self.has_keys or Config.PAPER_TRADING) else DashboardState.balance_usdt
+        is_paper = (not self.has_keys or Config.PAPER_TRADING)
+        current_eq = self.calculate_total_equity() if is_paper else DashboardState.balance_usdt
+        is_inr = (getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)) if is_paper else (DashboardState.balance_currency == "INR")
+        rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
+        if rate <= 0:
+            rate = 85.0
 
         for sym in Config.SUPPORTED_SYMBOLS:
             if self.in_position[sym]:
@@ -770,8 +811,9 @@ class PrimeSignalBot:
                 elif self.position_side[sym] == "SHORT":
                     shorts_count += 1
                 risk_usdt = self.position_size[sym] * abs(self.entry_price[sym] - self.stop_loss[sym])
+                effective_risk = (risk_usdt * rate) if is_inr else risk_usdt
                 if current_eq > 0:
-                    total_risk_pct += (risk_usdt / current_eq)
+                    total_risk_pct += (effective_risk / current_eq)
                 else:
                     total_risk_pct += getattr(Config, 'RISK_PCT', 0.01)
         return count, total_risk_pct, longs_count, shorts_count
@@ -844,7 +886,8 @@ class PrimeSignalBot:
             if balance and isinstance(balance, dict):
                 total_dict = balance.get('total', {})
                 if isinstance(total_dict, dict):
-                    if Config.COINDCX_TRADE_INR:
+                    is_coindcx_venue = str(getattr(Config, 'TRADING_VENUE', 'COINDCX')).upper() == 'COINDCX'
+                    if is_coindcx_venue and getattr(Config, 'COINDCX_TRADE_INR', False):
                         inr_balance = total_dict.get('INR', None)
                         if inr_balance is not None and float(inr_balance) > 0:
                             DashboardState.balance_usdt = float(inr_balance)
@@ -1213,6 +1256,12 @@ class PrimeSignalBot:
         score = float(metadata.get('score') or 3.0)
         trade_risk_pct = Config.risk_pct_for_score(score)
         
+        # Adaptive Market Regime Risk Multiplier (e.g. 0.5x in Volatility Shock)
+        regime_risk_mult = float(metadata.get('regime_diag', {}).get('risk_mult', 1.0))
+        if 0.0 < regime_risk_mult < 1.0:
+            trade_risk_pct *= regime_risk_mult
+            add_log_message(f"[{symbol}] Adaptive Market Regime Risk: Scaled by {regime_risk_mult}x ({metadata.get('regime_diag', {}).get('regime', 'VOLATILE')}).")
+        
         # Dynamic Kelly Criterion Sizing (when enabled)
         if getattr(Config, 'ENABLE_KELLY_SIZING', False):
             dynamic_risk = self.risk.calculate_kelly_risk_pct(DashboardState.trades, base_risk=trade_risk_pct * 100.0)
@@ -1426,7 +1475,7 @@ class PrimeSignalBot:
                 'ml_confidence': raw_prob,
                 'directional_ml_confidence': prob,
                 'funding_rate': fr,
-                'bb_squeeze': False,
+                'bb_squeeze': bool(metadata.get('regime_diag', {}).get('bb_squeeze', False)),
                 'spread_pct': spread
             }
             debate_result = self.courtroom.conduct_debate(signal, metadata, market_context)
@@ -2062,15 +2111,16 @@ class PrimeSignalBot:
                                 if tp1_success:
                                     if self.has_keys and not Config.PAPER_TRADING:
                                         tp1_size = self._extract_filled_qty(tp1_order, tp1_size)
+                                    actual_tp1_price = self._extract_fill_price(tp1_order, curr_price)
                                     self.position_size[symbol] -= tp1_size
                                     self.partial_tp_taken[symbol] = True
                                     
                                     # Log partial TP1 trade record for accurate PnL tracking
-                                    tp1_pnl_usdt = tp1_size * (curr_price - self.entry_price[symbol])
+                                    tp1_pnl_usdt = tp1_size * (actual_tp1_price - self.entry_price[symbol])
                                     # --- PROFIT-BASED LOGIC: Net fee deduction ---
-                                    tp1_fee = tp1_size * self.entry_price[symbol] * Config.FEE_RATE + tp1_size * curr_price * Config.FEE_RATE
+                                    tp1_fee = tp1_size * self.entry_price[symbol] * Config.FEE_RATE + tp1_size * actual_tp1_price * Config.FEE_RATE
                                     tp1_pnl_usdt -= tp1_fee
-                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + (tp1_size * curr_price * Config.FEE_RATE)
+                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + (tp1_size * actual_tp1_price * Config.FEE_RATE)
                                     tp1_pnl_pct = (curr_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
                                     self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp1_pnl_usdt
                                     
@@ -2085,9 +2135,9 @@ class PrimeSignalBot:
                                         'side': 'LONG',
                                         'type': 'TP1_PARTIAL',
                                         'entry_price': self.entry_price[symbol],
-                                        'exit_price': curr_price,
+                                        'exit_price': actual_tp1_price,
                                         'entry': self.entry_price[symbol],
-                                        'exit': curr_price,
+                                        'exit': actual_tp1_price,
                                         'size': tp1_size,
                                         'pnl_usdt': round(tp1_pnl_usdt, 4),
                                         'pnl': round(tp1_pnl_usdt * (rate if is_inr else 1.0), 2),
@@ -2142,6 +2192,7 @@ class PrimeSignalBot:
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP1 order REJECTED by exchange. State NOT updated.")
+                                    await self._restore_spot_native_sl(symbol, 'LONG', self.position_size[symbol], self.stop_loss[symbol])
                                     
                             # TP2 (Remaining Runner Scale-Out at 3.0R)
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price >= self.take_profit_2r[symbol]:
@@ -2165,15 +2216,16 @@ class PrimeSignalBot:
                                 if tp2_success:
                                     if self.has_keys and not Config.PAPER_TRADING:
                                         tp2_size = self._extract_filled_qty(tp2_order, tp2_size)
+                                    actual_tp2_price = self._extract_fill_price(tp2_order, curr_price)
                                     self.position_size[symbol] -= tp2_size
                                     self.tp2_taken[symbol] = True
                                     
                                     # Log partial TP2 trade record for accurate PnL tracking
-                                    tp2_pnl_usdt = tp2_size * (curr_price - self.entry_price[symbol])
+                                    tp2_pnl_usdt = tp2_size * (actual_tp2_price - self.entry_price[symbol])
                                     # --- PROFIT-BASED LOGIC: Net fee deduction ---
-                                    tp2_fee = tp2_size * self.entry_price[symbol] * Config.FEE_RATE + tp2_size * curr_price * Config.FEE_RATE
+                                    tp2_fee = tp2_size * self.entry_price[symbol] * Config.FEE_RATE + tp2_size * actual_tp2_price * Config.FEE_RATE
                                     tp2_pnl_usdt -= tp2_fee
-                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + (tp2_size * curr_price * Config.FEE_RATE)
+                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + (tp2_size * actual_tp2_price * Config.FEE_RATE)
                                     tp2_pnl_pct = (curr_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
                                     self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp2_pnl_usdt
                                     
@@ -2188,9 +2240,9 @@ class PrimeSignalBot:
                                         'side': 'LONG',
                                         'type': 'TP2_PARTIAL',
                                         'entry_price': self.entry_price[symbol],
-                                        'exit_price': curr_price,
+                                        'exit_price': actual_tp2_price,
                                         'entry': self.entry_price[symbol],
-                                        'exit': curr_price,
+                                        'exit': actual_tp2_price,
                                         'size': tp2_size,
                                         'pnl_usdt': round(tp2_pnl_usdt, 4),
                                         'pnl': round(tp2_pnl_usdt * (rate if is_inr else 1.0), 2),
@@ -2216,11 +2268,10 @@ class PrimeSignalBot:
                                     except Exception as e:
                                         print(f"[LOG] Failed to write TP2 log: {e}")
                                     
-                                    # Lock SL at TP1 level (Guaranteed deep profit lock)
-                                    if self.take_profit_1r[symbol] > self.stop_loss[symbol]:
-                                        self.stop_loss[symbol] = self.take_profit_1r[symbol]
-                                        if symbol == Config.SYMBOL: DashboardState.stop_loss = self.take_profit_1r[symbol]
-                                        
+                                    # Trailing runner logic: Move stop loss to lock profit at 1.5R
+                                    self.stop_loss[symbol] = self.entry_price[symbol] + (1.5 * r_dist)
+                                    if symbol == Config.SYMBOL: DashboardState.stop_loss = self.stop_loss[symbol]
+                                    
                                     # P1 / LOGIC-015 fix: Resize Native SL to match remaining position quantity
                                     ctx = self.order_state_machine.get_context(symbol)
                                     if self.has_keys and not Config.PAPER_TRADING and ctx.native_sl_order_id:
@@ -2245,6 +2296,7 @@ class PrimeSignalBot:
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP2 order REJECTED by exchange. State NOT updated.")
+                                    await self._restore_spot_native_sl(symbol, 'LONG', self.position_size[symbol], self.stop_loss[symbol])
 
                             if self.partial_tp_taken[symbol]:
                                 new_sl = self.risk.update_trailing_stop(self.entry_price[symbol], self.highest_price_reached[symbol], self.stop_loss[symbol], curr_atr, "LONG")
@@ -2345,15 +2397,16 @@ class PrimeSignalBot:
                                 if tp1_success:
                                     if self.has_keys and not Config.PAPER_TRADING:
                                         tp1_size = self._extract_filled_qty(tp1_order, tp1_size)
+                                    actual_tp1_price = self._extract_fill_price(tp1_order, curr_price)
                                     self.position_size[symbol] -= tp1_size
                                     self.partial_tp_taken[symbol] = True
                                     
                                     # Log partial TP1 trade record for accurate PnL tracking
-                                    tp1_pnl_usdt = tp1_size * (self.entry_price[symbol] - curr_price)
+                                    tp1_pnl_usdt = tp1_size * (self.entry_price[symbol] - actual_tp1_price)
                                     # --- PROFIT-BASED LOGIC: Net fee deduction ---
-                                    tp1_fee = tp1_size * self.entry_price[symbol] * Config.FEE_RATE + tp1_size * curr_price * Config.FEE_RATE
+                                    tp1_fee = tp1_size * self.entry_price[symbol] * Config.FEE_RATE + tp1_size * actual_tp1_price * Config.FEE_RATE
                                     tp1_pnl_usdt -= tp1_fee
-                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + (tp1_size * curr_price * Config.FEE_RATE)
+                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + (tp1_size * actual_tp1_price * Config.FEE_RATE)
                                     tp1_pnl_pct = (self.entry_price[symbol] - curr_price) / self.entry_price[symbol] * 100.0
                                     self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp1_pnl_usdt
                                     
@@ -2368,9 +2421,9 @@ class PrimeSignalBot:
                                         'side': 'SHORT',
                                         'type': 'TP1_PARTIAL',
                                         'entry_price': self.entry_price[symbol],
-                                        'exit_price': curr_price,
+                                        'exit_price': actual_tp1_price,
                                         'entry': self.entry_price[symbol],
-                                        'exit': curr_price,
+                                        'exit': actual_tp1_price,
                                         'size': tp1_size,
                                         'pnl_usdt': round(tp1_pnl_usdt, 4),
                                         'pnl': round(tp1_pnl_usdt * (rate if is_inr else 1.0), 2),
@@ -2425,6 +2478,7 @@ class PrimeSignalBot:
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP1 order REJECTED by exchange. State NOT updated.")
+                                    await self._restore_spot_native_sl(symbol, 'SHORT', self.position_size[symbol], self.stop_loss[symbol])
                                     
                             # TP2 (Remaining Runner Scale-Out at 3.0R)
                             if self.partial_tp_taken[symbol] and not self.tp2_taken[symbol] and curr_price <= self.take_profit_2r[symbol]:
@@ -2453,15 +2507,16 @@ class PrimeSignalBot:
                                 if tp2_success:
                                     if self.has_keys and not Config.PAPER_TRADING:
                                         tp2_size = self._extract_filled_qty(tp2_order, tp2_size)
+                                    actual_tp2_price = self._extract_fill_price(tp2_order, curr_price)
                                     self.position_size[symbol] -= tp2_size
                                     self.tp2_taken[symbol] = True
                                     
                                     # Log partial TP2 trade record for accurate PnL tracking
-                                    tp2_pnl_usdt = tp2_size * (self.entry_price[symbol] - curr_price)
+                                    tp2_pnl_usdt = tp2_size * (self.entry_price[symbol] - actual_tp2_price)
                                     # --- PROFIT-BASED LOGIC: Net fee deduction ---
-                                    tp2_fee = tp2_size * self.entry_price[symbol] * Config.FEE_RATE + tp2_size * curr_price * Config.FEE_RATE
+                                    tp2_fee = tp2_size * self.entry_price[symbol] * Config.FEE_RATE + tp2_size * actual_tp2_price * Config.FEE_RATE
                                     tp2_pnl_usdt -= tp2_fee
-                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + (tp2_size * curr_price * Config.FEE_RATE)
+                                    self.accumulated_fees[symbol] = self.accumulated_fees.get(symbol, 0.0) + (tp2_size * actual_tp2_price * Config.FEE_RATE)
                                     tp2_pnl_pct = (self.entry_price[symbol] - curr_price) / self.entry_price[symbol] * 100.0
                                     self.realized_pnl[symbol] = self.realized_pnl.get(symbol, 0.0) + tp2_pnl_usdt
                                     
@@ -2476,9 +2531,9 @@ class PrimeSignalBot:
                                         'side': 'SHORT',
                                         'type': 'TP2_PARTIAL',
                                         'entry_price': self.entry_price[symbol],
-                                        'exit_price': curr_price,
+                                        'exit_price': actual_tp2_price,
                                         'entry': self.entry_price[symbol],
-                                        'exit': curr_price,
+                                        'exit': actual_tp2_price,
                                         'size': tp2_size,
                                         'pnl_usdt': round(tp2_pnl_usdt, 4),
                                         'pnl': round(tp2_pnl_usdt * (rate if is_inr else 1.0), 2),
@@ -2533,6 +2588,7 @@ class PrimeSignalBot:
                                     self.save_state()
                                 else:
                                     add_log_message(f"[{symbol}] ⚠️ TP2 order REJECTED by exchange. State NOT updated.")
+                                    await self._restore_spot_native_sl(symbol, 'SHORT', self.position_size[symbol], self.stop_loss[symbol])
 
                             if self.partial_tp_taken[symbol]:
                                 new_sl = self.risk.update_trailing_stop(self.entry_price[symbol], self.lowest_price_reached[symbol], self.stop_loss[symbol], curr_atr, "SHORT")
@@ -2822,6 +2878,7 @@ class PrimeSignalBot:
                 
             if self._is_truthy_fill(order):
                 actual_exit = self._extract_filled_qty(order, self.position_size[symbol])
+                exit_price = self._extract_fill_price(order, exit_price)
                 is_full_close = (actual_exit >= (self.position_size[symbol] - 0.0001))
 
                 # Cancel active native stop loss if it exists on exchange AND we fully closed
@@ -2922,8 +2979,16 @@ class PrimeSignalBot:
                                     new_sl_id = str(new_sl['id']) if isinstance(new_sl, dict) else str(new_sl.exchange_order_id)
                                     ctx.native_sl_order_id = new_sl_id
                                     add_log_message(f"[{symbol}] 🛡️ Native SL placed for remaining size {remaining_size} @ {self.stop_loss[symbol]:.4f}")
+                                else:
+                                    add_log_message(f"[{symbol}] 🚨 Failed to place native SL on partial exit: order inactive. Activating safe mode.")
+                                    if hasattr(self, 'reconciliation'):
+                                        self.reconciliation.safe_mode_active = True
+                                    ctx.transition_to(OrderState.EXIT_UNKNOWN, reason="Partial exit SL placement inactive")
                             except Exception as e:
-                                add_log_message(f"[{symbol}] 🚨 Failed to place native SL on partial exit: {e}")
+                                add_log_message(f"[{symbol}] 🚨 Failed to place native SL on partial exit: {e}. Activating safe mode.")
+                                if hasattr(self, 'reconciliation'):
+                                    self.reconciliation.safe_mode_active = True
+                                ctx.transition_to(OrderState.EXIT_UNKNOWN, reason=f"Partial exit SL exception: {e}")
 
                 # Record in Immutable Ledger
                 self.immutable_ledger.record_exit(

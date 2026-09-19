@@ -37,7 +37,7 @@ class AdversarialDebateCourtroom:
 
         # SMC Zone & Dynamic Trend Setups
         setup_type = metadata.get('setup_type', 'NONE')
-        if setup_type in ['OB', 'FVG', 'SWEEP']:
+        if setup_type in ['OB', 'FVG', 'SWEEP'] or (isinstance(setup_type, str) and setup_type.startswith("SWEEP")):
             advocate_score += 20
             advocate_points.append(f"Institutional SMC {setup_type} zone confluence (+20pts)")
         elif setup_type in ['EMA', 'VWAP']:

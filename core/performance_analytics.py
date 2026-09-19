@@ -158,4 +158,7 @@ def _calculate_streaks(pnl_values: list[float]) -> tuple[int, int, int, str]:
                 current = 1
                 current_type = "loss"
             max_losses = max(max_losses, current)
+        else:
+            current = 0
+            current_type = "none"
     return max_wins, max_losses, current, current_type

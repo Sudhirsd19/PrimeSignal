@@ -199,7 +199,8 @@ class MLSignalConfirmator:
             try:
                 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
                 if len(X) >= 100:
-                    tscv = TimeSeriesSplit(n_splits=min(5, len(X) // 50))
+                    lookahead = int(getattr(Config, 'ML_LABEL_LOOKAHEAD', 20))
+                    tscv = TimeSeriesSplit(n_splits=min(5, len(X) // 50), gap=lookahead)
                     # FIX-D: Use standard 'accuracy' or balanced_accuracy for CV to avoid the ValueError: 
                     # "Number of classes in y_true not equal to the number of columns in 'y_score'"
                     # which happens during TimeSeriesSplit when a small fold is entirely missing class 0, 1, or 2.
@@ -213,8 +214,13 @@ class MLSignalConfirmator:
                         ),
                         X, y, cv=tscv, scoring='balanced_accuracy', n_jobs=-1
                     )
-                    mean_auc = cv_scores.mean()
-                    std_auc  = cv_scores.std()
+                    valid_scores = [s for s in cv_scores if not (np.isnan(s) if isinstance(s, (float, np.floating)) else False)]
+                    if valid_scores:
+                        mean_auc = float(np.mean(valid_scores))
+                        std_auc  = float(np.std(valid_scores))
+                    else:
+                        mean_auc = 0.5
+                        std_auc  = 0.0
                     # H-07 FIX: report the metric that is actually computed.
                     # This is TimeSeriesSplit BALANCED ACCURACY, not AUC.
                     self.cv_score = float(mean_auc)

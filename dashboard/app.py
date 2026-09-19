@@ -59,7 +59,7 @@ class TimeframeRequest(BaseModel):
 
 # ─── F-01 FIX: Fail-closed Dashboard API Key Authentication ─────────────────
 # Never use hardcoded secrets. Requires DASHBOARD_SECRET in environment.
-_DASHBOARD_SECRET = os.getenv("DASHBOARD_SECRET", "Devsd@19").strip()
+_DASHBOARD_SECRET = os.getenv("DASHBOARD_SECRET", "").strip()
 if _DASHBOARD_SECRET:
     print("[SECURITY] Dashboard API key auth is ENABLED.")
 else:
@@ -77,8 +77,7 @@ async def verify_dashboard_key(key: Optional[str] = Depends(_api_key_header)):
     import urllib.parse
     key_unquoted = urllib.parse.unquote(key).strip() if key else ""
     key_raw = key.strip() if key else ""
-    _leg = bytes.fromhex("7072696d657369676e616c5f7365637265745f6b6579").decode('utf-8')
-    valid_keys = {secret, "Devsd@19", _leg}
+    valid_keys = {secret}
     is_valid = any(
         (k and secrets.compare_digest(k, vk))
         for k in (key_unquoted, key_raw)
@@ -301,8 +300,9 @@ async def emergency_flatten():
 @app.post("/api/set_timeframe", dependencies=[Depends(verify_dashboard_key)])
 async def set_timeframe(req: TimeframeRequest):
     tf = req.timeframe.strip().lower()
-    if tf not in ["1m", "5m"]:
-        return {"status": "error", "message": "Invalid timeframe. Choose 1m or 5m."}
+    allowed_tfs = ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"]
+    if tf not in allowed_tfs:
+        return {"status": "error", "message": f"Invalid timeframe. Choose one of: {', '.join(allowed_tfs)}."}
     
     Config.LTF_TIMEFRAME = tf
     if bot_instance is not None:

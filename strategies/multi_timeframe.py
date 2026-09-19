@@ -73,9 +73,6 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             metadata['reason'] = "Insufficient data"
             return "HOLD", metadata
 
-        regime_diag = self.regime_classifier.classify_regime(ltf_df)
-        metadata['regime_diag'] = regime_diag
-
         # FIX-RACE-CONDITION: Calculate target_idx safely to ensure we evaluate the closed candle.
         # If the last candle's window hasn't expired, it's still forming, so the closed candle is iloc[-2].
         tf_mins = int(getattr(Config, 'LTF_TIMEFRAME', '15m').replace('m', '').replace('h', '')) * (60 if 'h' in getattr(Config, 'LTF_TIMEFRAME', '15m') else 1)
@@ -98,6 +95,10 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             current_time_ms = float(last_ts_ms) + tf_ms
         
         target_idx = -2 if current_time_ms < (last_ts_ms + tf_ms) else -1
+        ltf_eval_df = ltf_df.iloc[:target_idx + 1] if target_idx == -2 else ltf_df
+
+        regime_diag = self.regime_classifier.classify_regime(ltf_eval_df)
+        metadata['regime_diag'] = regime_diag
         
         htf_mins = int(getattr(Config, 'HTF_TIMEFRAME', '1h').replace('m', '').replace('h', '')) * (60 if 'h' in getattr(Config, 'HTF_TIMEFRAME', '1h') else 1)
         htf_ms = htf_mins * 60 * 1000
@@ -155,6 +156,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             return "HOLD", metadata
 
         ltf_closes = ltf_df['close']
+        # LTF Indicators
         ltf_rsi    = calculate_rsi(ltf_df, Config.RSI_PERIOD)
         ltf_atr    = calculate_atr(ltf_df, Config.ATR_PERIOD)
         ltf_vwap   = calculate_vwap(ltf_df)
@@ -179,8 +181,8 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         metadata['htf_rsi_divergence'] = htf_rsi_div
         
         # Next-Gen Quant Engines: Liquidation Magnet & Order Flow CVD
-        liq_info = self.liq_engine.calculate_liquidation_pools(ltf_df)
-        cvd_info = self.orderflow_engine.detect_absorption_divergence(ltf_df)
+        liq_info = self.liq_engine.calculate_liquidation_pools(ltf_eval_df)
+        cvd_info = self.orderflow_engine.detect_absorption_divergence(ltf_eval_df)
         metadata['liquidation'] = liq_info
         metadata['cvd'] = cvd_info
         
@@ -555,10 +557,10 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             score += choch_bonus
             
             # Next-Gen Quant Confluence: CVD Absorption & Liquidation Hunt
-            if cvd_info.get('absorption') == 'BULLISH_ABSORPTION':
+            if getattr(Config, 'ENABLE_CVD_ABSORPTION', True) and cvd_info.get('absorption') == 'BULLISH_ABSORPTION':
                 score += 1.5
                 metadata['debug_checks']['cvd_absorption'] = 'BULLISH_ABSORPTION_PASS'
-            if liq_info.get('hunt_signal') == 'BULLISH_LIQUIDATION_HUNT':
+            if getattr(Config, 'ENABLE_LIQUIDATION_HUNT', True) and liq_info.get('hunt_signal') == 'BULLISH_LIQUIDATION_HUNT':
                 score += 1.5
                 metadata['debug_checks']['liq_hunt'] = 'BULLISH_LIQ_HUNT_PASS'
             
@@ -781,10 +783,10 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             score += choch_bonus
             
             # Next-Gen Quant Confluence: CVD Absorption & Liquidation Hunt
-            if cvd_info.get('absorption') == 'BEARISH_ABSORPTION':
+            if getattr(Config, 'ENABLE_CVD_ABSORPTION', True) and cvd_info.get('absorption') == 'BEARISH_ABSORPTION':
                 score += 1.5
                 metadata['debug_checks']['cvd_absorption'] = 'BEARISH_ABSORPTION_PASS'
-            if liq_info.get('hunt_signal') == 'BEARISH_LIQUIDATION_HUNT':
+            if getattr(Config, 'ENABLE_LIQUIDATION_HUNT', True) and liq_info.get('hunt_signal') == 'BEARISH_LIQUIDATION_HUNT':
                 score += 1.5
                 metadata['debug_checks']['liq_hunt'] = 'BEARISH_LIQ_HUNT_PASS'
             
