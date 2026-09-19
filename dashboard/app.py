@@ -214,8 +214,9 @@ async def set_mode(req: ModeRequest):
             unconfirmed = []
             for s in Config.SUPPORTED_SYMBOLS:
                 ctx_state = getattr(bot_instance.order_state_machine.get_context(s), 'state', None)
-                if ctx_state not in ("IDLE", "EMERGENCY_FLATTENED", None):
-                    unconfirmed.append(f"{s}:{ctx_state}")
+                st_val = getattr(ctx_state, 'value', str(ctx_state))
+                if ctx_state not in ("IDLE", "CLOSED", "REJECTED", "EMERGENCY_FLATTENED", None) and st_val not in ("IDLE", "CLOSED", "REJECTED", "EMERGENCY_FLATTENED", "None"):
+                    unconfirmed.append(f"{s}:{st_val}")
             if unconfirmed:
                 return {
                     "status": "error",

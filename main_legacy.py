@@ -3289,10 +3289,23 @@ class PrimeSignalBot:
         # Guard: Check order state machine to prevent stream interruption during critical in-flight transitions
         if hasattr(self, 'order_state_machine') and self.order_state_machine is not None:
             unconfirmed = []
+            in_transition_states = {
+                OrderState.ORDER_INTENT_CREATED,
+                OrderState.ORDER_SUBMITTED,
+                OrderState.EXECUTION_UNKNOWN,
+                OrderState.EXIT_UNKNOWN,
+                OrderState.ORDER_ACK,
+                OrderState.PARTIALLY_FILLED,
+                OrderState.FILLED,
+                OrderState.SL_PLACEMENT_PENDING,
+                OrderState.CLOSING,
+            }
+            transition_str_values = {st.value for st in in_transition_states}
             for s in Config.SUPPORTED_SYMBOLS:
                 ctx_state = getattr(self.order_state_machine.get_context(s), 'state', None)
-                if ctx_state not in ("IDLE", "EMERGENCY_FLATTENED", "PROTECTED", "TP1_LOCKED", "TP2_LOCKED", None):
-                    unconfirmed.append(f"{s}:{ctx_state}")
+                st_val = getattr(ctx_state, 'value', str(ctx_state))
+                if ctx_state in in_transition_states or st_val in transition_str_values:
+                    unconfirmed.append(f"{s}:{st_val}")
             if unconfirmed:
                 msg = f"Cannot switch timeframe while order execution is in transition: {', '.join(unconfirmed)}."
                 add_log_message(f"⚠️ {msg}")
