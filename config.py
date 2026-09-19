@@ -165,6 +165,7 @@ class Config:
     TP_EXIT_COOLDOWN_MINUTES = int(os.getenv("TP_EXIT_COOLDOWN_MINUTES", "25"))   # M-04 FIX: Was hardcoded in main.py
     POST_EXIT_COOLDOWN_MINUTES = int(os.getenv("POST_EXIT_COOLDOWN_MINUTES", "15"))  # M-05 FIX: Was hardcoded in main.py
     MAX_SLIPPAGE_PCT = float(os.getenv("MAX_SLIPPAGE_PCT", "0.004"))
+    MAX_TP_SLIPPAGE_PCT = float(os.getenv("MAX_TP_SLIPPAGE_PCT", "0.008")) # 0.8% max slippage tolerance on TP orders
     FEE_RATE = float(os.getenv("FEE_RATE", "0.00075"))
     MAX_PORTFOLIO_RISK_PCT = float(os.getenv("MAX_PORTFOLIO_RISK_PCT", "6.0"))    # Total portfolio risk cap (%)
     

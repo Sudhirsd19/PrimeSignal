@@ -61,10 +61,23 @@ class ExecutionEngine:
 
         self._tickers_cache = {}
         self._tickers_cache_time = 0.0
-        self._futures_initialized = False
+        self._futures_initialized_symbols: set[str] = set()
         self.intent_journal = ExecutionIntentJournal(intent_journal_path)
         if self.coindcx_client:
             self.coindcx_client.intent_journal = cast(Any, self.intent_journal)
+
+    @property
+    def _futures_initialized(self) -> bool:
+        return bool(getattr(self, '_futures_initialized_symbols', set()))
+
+    @_futures_initialized.setter
+    def _futures_initialized(self, value: bool):
+        if not hasattr(self, '_futures_initialized_symbols'):
+            self._futures_initialized_symbols = set()
+        if not value:
+            self._futures_initialized_symbols.clear()
+        else:
+            self._futures_initialized_symbols.add(Config.SYMBOL)
 
     def prepare_order_intent(
         self,
@@ -104,10 +117,12 @@ class ExecutionEngine:
         return self.intent_journal.unresolved()
 
     async def _init_futures(self, symbol=None):
-        """One-time setup for futures: load markets, set leverage and margin mode."""
-        if self._futures_initialized or Config.EXCHANGE_TYPE != 'futures':
+        """Setup for futures: load markets, set leverage and margin mode per symbol."""
+        if Config.EXCHANGE_TYPE != 'futures':
             return
         sym = symbol or Config.SYMBOL
+        if sym in self._futures_initialized_symbols:
+            return
         try:
             await self.trade_client.load_markets()
             # Set margin mode (isolated / cross)
@@ -129,10 +144,10 @@ class ExecutionEngine:
             except Exception as e:
                 raise RuntimeError(f"Failed to set futures leverage to {Config.FUTURES_LEVERAGE}x on {sym}: {e}")
 
-            self._futures_initialized = True
+            self._futures_initialized_symbols.add(sym)
         except Exception as e:
-            self._futures_initialized = False
-            print(f"[FUTURES CRITICAL] Error initializing futures settings: {e}")
+            self._futures_initialized_symbols.discard(sym)
+            print(f"[FUTURES CRITICAL] Error initializing futures settings for {sym}: {e}")
             raise
 
     async def close(self):
@@ -258,6 +273,21 @@ class ExecutionEngine:
 
         print(f"[FILL] Order {order_id} TIMED OUT after {timeout}s — cancelling before returning UNKNOWN")
         await self.cancel_order_safe(symbol, order_id)
+        try:
+            order = await self.trade_client.fetch_order(order_id, symbol)
+            res = ExecutionResult.from_exchange(
+                order,
+                requested_qty=requested_qty,
+                client_order_id=client_order_id,
+                intent_id=intent_id,
+                venue="BINANCE",
+            )
+            if res.is_fill_confirmed or res.state in (ExecutionState.CANCELLED, ExecutionState.REJECTED):
+                print(f"[FILL] Order {order_id} post-cancel status resolved: {res.state.value} (filled: {res.filled_qty})")
+                return res
+        except Exception as e:
+            print(f"[FILL] Post-cancel verification error for {order_id}: {e}")
+
         return ExecutionResult(
             state=ExecutionState.EXECUTION_UNKNOWN,
             requested_qty=requested_qty or 0.0,
@@ -381,11 +411,18 @@ class ExecutionEngine:
         except Exception as e:
             print(f"[EXECUTION] WARNING: Could not check minimum order size ({e}). Proceeding anyway.")
 
-        # 1. Slippage check for market ENTRY orders only
-        if order_type.upper() == "MARKET" and not is_exit_order:
+        # 1. Slippage check:
+        # Protective exits (SL, EMERGENCY, FLATTEN) and default exit orders without an explicit TP role
+        # bypass slippage check so risk-reducing closures never get blocked.
+        # Normal market ENTRY orders and explicit Take-Profit (TP, TP1, TP2) orders enforce slippage boundaries.
+        is_tp_exit = is_exit_order and order_role.upper() in ("TP", "TP1", "TP2")
+        should_check_slippage = (order_type.upper() == "MARKET") and (not is_exit_order or is_tp_exit)
+        effective_max_slippage = getattr(Config, 'MAX_TP_SLIPPAGE_PCT', 0.008) if is_exit_order else max_slippage_pct
+
+        if should_check_slippage:
             ticker = await self.execute_with_retry(self.public_client.fetch_ticker, symbol)
             if not ticker:
-                print("[EXECUTION] Order aborted: Unable to fetch live price ticker for slippage check.")
+                print(f"[EXECUTION] Order aborted: Unable to fetch live price ticker for slippage check ({order_role}).")
                 result = ExecutionResult(
                     state=ExecutionState.NOT_SUBMITTED,
                     requested_qty=float(amount),
@@ -401,8 +438,8 @@ class ExecutionEngine:
             if price is not None:
                 if side.upper() == "BUY":
                     slippage = (current_price - price) / price
-                    if slippage > max_slippage_pct:
-                        print(f"[EXECUTION] Order aborted: Slippage ({slippage*100:.2f}%) exceeds max ({max_slippage_pct*100:.2f}%).")
+                    if slippage > effective_max_slippage:
+                        print(f"[EXECUTION] Order aborted: Slippage ({slippage*100:.2f}%) exceeds max ({effective_max_slippage*100:.2f}%).")
                         result = ExecutionResult(
                             state=ExecutionState.NOT_SUBMITTED,
                             requested_qty=float(amount),
@@ -415,8 +452,8 @@ class ExecutionEngine:
                         return result
                 elif side.upper() == "SELL":
                     slippage = (price - current_price) / price
-                    if slippage > max_slippage_pct:
-                        print(f"[EXECUTION] Order aborted: Slippage ({slippage*100:.2f}%) exceeds max ({max_slippage_pct*100:.2f}%).")
+                    if slippage > effective_max_slippage:
+                        print(f"[EXECUTION] Order aborted: Slippage ({slippage*100:.2f}%) exceeds max ({effective_max_slippage*100:.2f}%).")
                         result = ExecutionResult(
                             state=ExecutionState.NOT_SUBMITTED,
                             requested_qty=float(amount),

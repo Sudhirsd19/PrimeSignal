@@ -1484,7 +1484,19 @@ class PrimeSignalBot:
                     fill_price = float(order.get('average') or order.get('price') or order.get('avg_price') or entry_price) if isinstance(order, dict) else float(getattr(order, 'average_fill_price', None) or getattr(order, 'price', None) or entry_price)
                     ctx.filled_qty = filled_amount
                     ctx.fill_avg_price = fill_price
-                    ctx.transition_to(OrderState.FILLED, reason="BUY fill confirmed")
+
+                    is_partial = filled_amount < (pos_size - 1e-6)
+                    if is_partial:
+                        ctx.remaining_qty = max(0.0, pos_size - filled_amount)
+                        ctx.transition_to(OrderState.PARTIALLY_FILLED, reason=f"BUY partial fill confirmed ({filled_amount:.6f}/{pos_size:.6f})")
+                        if self.has_keys and not Config.PAPER_TRADING:
+                            order_id = str(order.get('id')) if isinstance(order, dict) else str(getattr(order, 'exchange_order_id', ''))
+                            if order_id:
+                                add_log_message(f"[{symbol}] Partial fill: cancelling remaining open order {order_id} on exchange")
+                                await self.execution.cancel_order_safe(symbol, order_id)
+                    else:
+                        ctx.remaining_qty = 0.0
+                        ctx.transition_to(OrderState.FILLED, reason="BUY fill confirmed")
                     
                     # ── NATIVE EXCHANGE STOP LOSS PLACEMENT & VERIFICATION ──
                     if self.has_keys and not Config.PAPER_TRADING:
@@ -1691,7 +1703,19 @@ class PrimeSignalBot:
                     fill_price = float(order.get('average') or order.get('price') or order.get('avg_price') or entry_price) if isinstance(order, dict) else float(getattr(order, 'average_fill_price', None) or getattr(order, 'price', None) or entry_price)
                     ctx.filled_qty = filled_amount
                     ctx.fill_avg_price = fill_price
-                    ctx.transition_to(OrderState.FILLED, reason="SELL fill confirmed")
+
+                    is_partial = filled_amount < (pos_size - 1e-6)
+                    if is_partial:
+                        ctx.remaining_qty = max(0.0, pos_size - filled_amount)
+                        ctx.transition_to(OrderState.PARTIALLY_FILLED, reason=f"SELL partial fill confirmed ({filled_amount:.6f}/{pos_size:.6f})")
+                        if self.has_keys and not Config.PAPER_TRADING:
+                            order_id = str(order.get('id')) if isinstance(order, dict) else str(getattr(order, 'exchange_order_id', ''))
+                            if order_id:
+                                add_log_message(f"[{symbol}] Partial fill: cancelling remaining open order {order_id} on exchange")
+                                await self.execution.cancel_order_safe(symbol, order_id)
+                    else:
+                        ctx.remaining_qty = 0.0
+                        ctx.transition_to(OrderState.FILLED, reason="SELL fill confirmed")
                     
                     # ── NATIVE EXCHANGE STOP LOSS PLACEMENT & VERIFICATION ──
                     if self.has_keys and not Config.PAPER_TRADING:
@@ -2025,7 +2049,7 @@ class PrimeSignalBot:
                                     ctx = self.order_state_machine.get_context(symbol)
                                     if getattr(Config, 'EXCHANGE_TYPE', 'spot') != 'futures' and ctx.native_sl_order_id:
                                         await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
-                                    tp1_order = await self.execution.place_order('sell', 'market', tp1_size, symbol=symbol, is_exit_order=True)
+                                    tp1_order = await self.execution.place_order('sell', 'market', tp1_size, symbol=symbol, is_exit_order=True, price=curr_price, order_role="TP1")
                                     tp1_success = self._is_truthy_fill(tp1_order)
                                 else:
                                     self._dry_run_balance_usdt += tp1_size * curr_price * (rate if is_inr else 1.0)
@@ -2128,7 +2152,7 @@ class PrimeSignalBot:
                                     ctx = self.order_state_machine.get_context(symbol)
                                     if getattr(Config, 'EXCHANGE_TYPE', 'spot') != 'futures' and ctx.native_sl_order_id:
                                         await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
-                                    tp2_order = await self.execution.place_order('sell', 'market', tp2_size, symbol=symbol, is_exit_order=True)
+                                    tp2_order = await self.execution.place_order('sell', 'market', tp2_size, symbol=symbol, is_exit_order=True, price=curr_price, order_role="TP2")
                                     tp2_success = self._is_truthy_fill(tp2_order)
                                 else:
                                     self._dry_run_balance_usdt += tp2_size * curr_price * (rate if is_inr else 1.0)
@@ -2305,7 +2329,7 @@ class PrimeSignalBot:
                                     ctx = self.order_state_machine.get_context(symbol)
                                     if getattr(Config, 'EXCHANGE_TYPE', 'spot') != 'futures' and ctx.native_sl_order_id:
                                         await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
-                                    tp1_order = await self.execution.place_order('buy', 'market', tp1_size, symbol=symbol, is_exit_order=True)
+                                    tp1_order = await self.execution.place_order('buy', 'market', tp1_size, symbol=symbol, is_exit_order=True, price=curr_price, order_role="TP1")
                                     tp1_success = self._is_truthy_fill(tp1_order)
                                 else:
                                     # Short TP cash return = entry_notional + (entry_notional - exit_notional) = profit + collateral
@@ -2412,7 +2436,7 @@ class PrimeSignalBot:
                                     ctx = self.order_state_machine.get_context(symbol)
                                     if getattr(Config, 'EXCHANGE_TYPE', 'spot') != 'futures' and ctx.native_sl_order_id:
                                         await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
-                                    tp2_order = await self.execution.place_order('buy', 'market', tp2_size, symbol=symbol, is_exit_order=True)
+                                    tp2_order = await self.execution.place_order('buy', 'market', tp2_size, symbol=symbol, is_exit_order=True, price=curr_price, order_role="TP2")
                                     tp2_success = self._is_truthy_fill(tp2_order)
                                 else:
                                     # C-03 FIX: Return collateral (entry_notional) + pnl only
@@ -2779,8 +2803,9 @@ class PrimeSignalBot:
             add_log_message(f"[{symbol}] Exiting at price: {exit_price:.4f} (reason: {reason})")
             if self.has_keys and not Config.PAPER_TRADING:
                 side = 'buy' if self.position_side[symbol] == 'SHORT' else 'sell'
+                exit_role = "TP" if ("TAKE_PROFIT" in reason.upper() or "TP" in reason.upper()) else ("SL" if ("STOP_LOSS" in reason.upper() or "SL" in reason.upper()) else "EMERGENCY")
                 try:
-                    order = await self.execution.place_order(side, 'market', self.position_size[symbol], price=exit_price, is_exit_order=True, symbol=symbol)
+                    order = await self.execution.place_order(side, 'market', self.position_size[symbol], price=exit_price, is_exit_order=True, symbol=symbol, order_role=exit_role)
                 except Exception as e:
                     add_log_message(f"[{symbol}] 🚨 Exception during exit execution: {e}. Transitioning to EXIT_UNKNOWN.")
                     ctx.transition_to(OrderState.EXIT_UNKNOWN, reason=f"Exit NetworkError: {e}")

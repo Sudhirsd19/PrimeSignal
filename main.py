@@ -329,6 +329,15 @@ def _load_patched_legacy():
     exec(compile(patched, str(LEGACY_PATH), "exec"), module.__dict__)
     return module
 
+_legacy_instance = None
+
+def __getattr__(name):
+    global _legacy_instance
+    if _legacy_instance is None:
+        _legacy_instance = _load_patched_legacy()
+    if hasattr(_legacy_instance, name):
+        return getattr(_legacy_instance, name)
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 if __name__ == "__main__":
     legacy = _load_patched_legacy()

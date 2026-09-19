@@ -1,3 +1,12 @@
+"""
+EXPERIMENTAL HISTORICAL RESEARCH SCRIPT — NOT VALIDATED FOR LIVE PRODUCTION USE.
+================================================================================
+This script is a standalone offline research test for historical pattern exploration.
+It does NOT mirror the live execution engine, live risk ladder, multi-symbol portfolio
+manager, or dynamic slippage/order book models. For canonical backtests, use
+backtester/backtester.py.
+"""
+
 import json
 import os
 import pandas as pd
@@ -257,9 +266,9 @@ def run_sniper_80pct_strategy():
                         high_p = entry_p
                         low_p = entry_p
 
-    print("\n" + "="*70)
-    print("      PRIMESIGNAL 80% WIN RATE SNIPER STRATEGY REPORT         ")
-    print("="*70)
+    print("\n" + "="*75)
+    print("  PRIMESIGNAL HISTORICAL RESEARCH SNIPER STRATEGY (OFFLINE EXPERIMENTAL)   ")
+    print("="*75)
     wins = [t for t in trades if float(t['pnl']) > 0]
     losses = [t for t in trades if float(t['pnl']) <= 0]
     wr = len(wins) / len(trades) * 100 if trades else 0.0
