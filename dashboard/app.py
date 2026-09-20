@@ -86,10 +86,8 @@ _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 async def verify_dashboard_key(key: Optional[str] = Depends(_api_key_header)):
     """Enforces auth for all environments. Fails closed if DASHBOARD_SECRET is unset."""
-    env_secret = os.getenv("DASHBOARD_SECRET", "").strip()
-    mem_secret = (_DASHBOARD_SECRET or "").strip()
-    valid_keys = {k for k in (env_secret, mem_secret) if k}
-    if not valid_keys:
+    active_secret = (os.getenv("DASHBOARD_SECRET", "").strip() or (_DASHBOARD_SECRET or "").strip())
+    if not active_secret:
         raise HTTPException(
             status_code=503,
             detail="SECURITY ERROR: DASHBOARD_SECRET is not configured in .env. Mutating actions are blocked."
@@ -98,12 +96,30 @@ async def verify_dashboard_key(key: Optional[str] = Depends(_api_key_header)):
     key_unquoted = urllib.parse.unquote(key).strip() if key else ""
     key_raw = key.strip() if key else ""
     is_valid = any(
-        (k and secrets.compare_digest(k, vk))
+        (k and secrets.compare_digest(k, active_secret))
         for k in (key_unquoted, key_raw)
-        for vk in valid_keys if vk
     )
     if not is_valid:
         raise HTTPException(status_code=403, detail="Invalid dashboard API key. Set valid X-API-Key header.")
+
+def _is_inr_mode() -> bool:
+    """Venue-aware currency detection for dashboard.
+    Returns True ONLY when:
+    - In paper mode and PAPER_CURRENCY is INR, or
+    - In live mode and TRADING_VENUE is COINDCX with COINDCX_TRADE_INR=True.
+    Prevents live Binance accounts from being treated as INR.
+    """
+    if bot_instance and hasattr(bot_instance, '_is_inr_account'):
+        try:
+            return bool(bot_instance._is_inr_account())
+        except Exception:
+            pass
+    if Config.PAPER_TRADING or not getattr(bot_instance, 'has_keys', False):
+        return getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR'
+    venue = str(getattr(Config, 'TRADING_VENUE', 'BINANCE')).upper()
+    if venue == 'COINDCX':
+        return bool(getattr(Config, 'COINDCX_TRADE_INR', False))
+    return False
 
 # Global Memory State Store
 class DashboardState:
@@ -556,7 +572,7 @@ async def trigger_test_trade(req: Optional[TestTradeRequest] = None):
         tp1_p = live_p * 1.015 if is_long else live_p * 0.985
         tp2_p = live_p * 1.025 if is_long else live_p * 0.975
 
-        is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+        is_inr = _is_inr_mode()
         fx_rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
         if fx_rate <= 0:
             fx_rate = 85.0
@@ -623,9 +639,9 @@ async def trigger_test_trade(req: Optional[TestTradeRequest] = None):
             'target_stage': 1,
             'position_size': pos_size,
             'invested_amount_usdt': round(pos_size * live_p, 4),
-            'invested_amount_currency': round(pos_size * live_p * (float(getattr(Config, 'USDT_INR_RATE', 85.0)) if (getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)) else 1.0), 2),
+            'invested_amount_currency': round(pos_size * live_p * (float(getattr(Config, 'USDT_INR_RATE', 85.0)) if _is_inr_mode() else 1.0), 2),
             'live_value_usdt': round(pos_size * live_p, 4),
-            'live_value_currency': round(pos_size * live_p * (float(getattr(Config, 'USDT_INR_RATE', 85.0)) if (getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)) else 1.0), 2),
+            'live_value_currency': round(pos_size * live_p * (float(getattr(Config, 'USDT_INR_RATE', 85.0)) if _is_inr_mode() else 1.0), 2),
             'current_pnl_usdt': 0.0,
             'current_pnl_currency': 0.0,
             'current_pnl_pct': 0.0,
@@ -731,9 +747,9 @@ async def get_analytics():
         formatted_history = []
         import datetime
 
-        is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+        is_inr = _is_inr_mode()
         fx_rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
-        currency = getattr(Config, 'PAPER_CURRENCY', 'INR' if getattr(Config, 'COINDCX_TRADE_INR', False) else 'USDT')
+        currency = 'INR' if is_inr else 'USDT'
 
         for t in raw_trades:
             raw_pnl = float(t.get("pnl_usdt") if t.get("pnl_usdt") is not None else (t.get("pnl", 0) or 0))
@@ -946,17 +962,18 @@ async def get_trades():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     # Read-only WebSocket state stream
-    secret = os.getenv("DASHBOARD_SECRET", "").strip() or _DASHBOARD_SECRET or "Devsd@19"
+    active_secret = (os.getenv("DASHBOARD_SECRET", "").strip() or (_DASHBOARD_SECRET or "").strip())
+    if not active_secret:
+        await websocket.close(code=1008, reason="Unauthorized: DASHBOARD_SECRET not configured on server")
+        return
+
     token = websocket.query_params.get("token") or websocket.query_params.get("key") or websocket.headers.get("x-api-key") or ""
     import urllib.parse
     token_unquoted = urllib.parse.unquote(token).strip()
     token_raw = token.strip()
-    _leg = bytes.fromhex("7072696d657369676e616c5f7365637265745f6b6579").decode('utf-8')
-    valid_keys = {secret, "Devsd@19", _leg}
     is_valid = any(
-        (t and secrets.compare_digest(t, vk))
+        (t and secrets.compare_digest(t, active_secret))
         for t in (token_unquoted, token_raw)
-        for vk in valid_keys if vk
     )
     if not is_valid:
         await websocket.close(code=1008, reason="Unauthorized: Missing or invalid dashboard API key")
@@ -1006,7 +1023,7 @@ def _build_state_payload():
     live_prices = bot_instance.pipeline.latest_prices if (bot_instance and hasattr(bot_instance, 'pipeline')) else {}
     live_p = float(live_prices.get(active_sym, DashboardState.latest_price) or DashboardState.latest_price or 0.0)
 
-    is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+    is_inr = _is_inr_mode()
     fx_rate = float(getattr(Config, 'USDT_INR_RATE', 85.0)) if is_inr else 1.0
     if fx_rate <= 0:
         fx_rate = 85.0
@@ -1271,7 +1288,7 @@ def _build_state_payload():
         "paper_trading": Config.PAPER_TRADING,
         "is_testnet": bool(getattr(Config, 'USE_TESTNET', False)),
         "trading_mode_label": "PAPER TRADING" if Config.PAPER_TRADING else ("LIVE TESTNET (Sandbox)" if getattr(Config, 'USE_TESTNET', False) else "LIVE REAL MONEY (Mainnet)"),
-        "balance_currency": getattr(Config, 'PAPER_CURRENCY', 'INR' if Config.COINDCX_TRADE_INR else 'USDT'),
+        "balance_currency": 'INR' if _is_inr_mode() else 'USDT',
         "trades": DashboardState.trades[-5:],  # Last 5 trades
         "trades_today": bot_instance.trades_today if bot_instance else 0,
         "max_daily_trades": getattr(Config, 'MAX_DAILY_TRADES', 6),

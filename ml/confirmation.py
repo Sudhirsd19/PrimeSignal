@@ -212,7 +212,9 @@ class MLSignalConfirmator:
                 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
                 if len(X) >= 100:
                     lookahead = int(getattr(Config, 'ML_LABEL_LOOKAHEAD', 20))
-                    tscv = TimeSeriesSplit(n_splits=min(5, len(X) // 50), gap=lookahead)
+                    # Ensure each split has sufficient samples to avoid single-class folds
+                    n_splits = min(5, max(2, (len(X) - lookahead) // 80))
+                    tscv = TimeSeriesSplit(n_splits=n_splits, gap=lookahead)
                     # FIX-D: Use standard 'accuracy' or balanced_accuracy for CV to avoid the ValueError: 
                     # "Number of classes in y_true not equal to the number of columns in 'y_score'"
                     # which happens during TimeSeriesSplit when a small fold is entirely missing class 0, 1, or 2.
@@ -227,7 +229,8 @@ class MLSignalConfirmator:
                         X, y, cv=tscv, scoring='balanced_accuracy', n_jobs=-1
                     )
                     valid_scores = [s for s in cv_scores if not (np.isnan(s) if isinstance(s, (float, np.floating)) else False)]
-                    if valid_scores:
+                    min_required_folds = max(2, tscv.n_splits // 2)
+                    if len(valid_scores) >= min_required_folds:
                         mean_auc = float(np.mean(valid_scores))
                         std_auc  = float(np.std(valid_scores))
                     else:
@@ -236,9 +239,9 @@ class MLSignalConfirmator:
                     # H-07 FIX: report the metric that is actually computed.
                     # This is TimeSeriesSplit BALANCED ACCURACY, not AUC.
                     self.cv_score = float(mean_auc)
-                    self.cv_folds = int(tscv.n_splits)
+                    self.cv_folds = int(len(valid_scores))
                     floor = float(getattr(Config, 'ML_MIN_CV_ACCURACY', 0.55))
-                    print(f"[ML] TimeSeriesSplit balanced accuracy: {mean_auc:.3f} +/- {std_auc:.3f}  (folds: {tscv.n_splits}, gate floor: {floor:.2f})")
+                    print(f"[ML] TimeSeriesSplit balanced accuracy: {mean_auc:.3f} +/- {std_auc:.3f}  (folds: {len(valid_scores)}/{tscv.n_splits}, gate floor: {floor:.2f})")
                     if mean_auc < floor:
                         print(f"[ML] [!] WEAK MODEL: {mean_auc:.3f} is near-random (0.5 = coin flip).")
                         print(f"[ML]     -> Entries will NOT be gated by ML; the model only scales risk.")
@@ -305,11 +308,14 @@ class MLSignalConfirmator:
     def gate_decision(self, df, signal_type) -> tuple[bool, float, str]:
         """Returns (allowed, directional_probability, reason) for an entry.
 
-        Fails OPEN when the model is untrained: we must not silently halt trading
-        because a model could not be fitted.
+        Fails OPEN when the model is untrained in auto/off/risk modes.
+        Fails CLOSED when ML_GATE_MODE == 'gate' to strictly enforce ML confirmation.
         """
+        mode = str(getattr(Config, 'ML_GATE_MODE', 'auto')).strip().lower()
         if not self.is_trained:
-            return True, 0.5, "ML model untrained — not gating"
+            if mode == 'gate':
+                return False, 0.5, "ML model untrained — hard gate BLOCKED"
+            return True, 0.5, f"ML model untrained — not gating ({mode} mode)"
         confirmed, prob = self.confirm_signal(df, signal_type)
         threshold = float(getattr(Config, 'ML_CONFIRMATION_THRESHOLD', 0.60))
         if confirmed:

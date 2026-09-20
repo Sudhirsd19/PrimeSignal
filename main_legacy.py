@@ -179,6 +179,7 @@ class PrimeSignalBot:
         
         # Empty dictionaries
         self.ml_models = {}
+        self._retrain_task = None
         self.in_position = {}
         self.position_side = {}
         self.entry_price = {}
@@ -1100,7 +1101,7 @@ class PrimeSignalBot:
             btc_ltf = self.pipeline.ltf_candles.get("BTC/USDT")
             btc_htf = self.pipeline.htf_candles.get("BTC/USDT")
             btc_allowed, btc_reason, btc_boost = self.btc_anchor.evaluate_btc_confluence(
-                symbol, signal, btc_ltf, btc_htf
+                symbol, signal, btc_ltf, btc_htf, eval_closed_only=True
             )
             if not btc_allowed:
                 add_log_message(f"[{symbol}] ⛔ Trade blocked by BTC Anchor: {btc_reason}")
@@ -2978,7 +2979,7 @@ class PrimeSignalBot:
                     await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
                     ctx.native_sl_order_id = None
 
-                is_inr = getattr(Config, 'PAPER_CURRENCY', 'INR') == 'INR' or getattr(Config, 'COINDCX_TRADE_INR', False)
+                is_inr = self._is_inr_account()
                 rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
                 if self.position_side[symbol] == "LONG":
                     pnl_pct = (exit_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
@@ -3280,6 +3281,9 @@ class PrimeSignalBot:
                 await asyncio.to_thread(_train_single, sym)
                 await asyncio.sleep(0.2)
             add_log_message(f"🧠 ML models successfully retrained on {new_tf.upper()} candles.")
+        except asyncio.CancelledError:
+            print(f"[ML] Background retrain cancelled for {new_tf}.")
+            raise
         except Exception as e:
             print(f"[ML] Background retrain error: {e}")
 
@@ -3348,7 +3352,16 @@ class PrimeSignalBot:
                 add_log_message(f"✅ {msg}")
 
                 # 4. Asynchronously retrain ML models in a background thread to keep event loop responsive
-                asyncio.create_task(self._retrain_models_background(new_tf))
+                # Cancel previous retrain task if still running to avoid conflicting model updates
+                if hasattr(self, '_retrain_task') and self._retrain_task and not self._retrain_task.done():
+                    self._retrain_task.cancel()
+
+                # Mark models as untrained during retrain window so stale models from old timeframe don't gate
+                for s in Config.SUPPORTED_SYMBOLS:
+                    if s in self.ml_models and hasattr(self.ml_models[s], 'is_trained'):
+                        self.ml_models[s].is_trained = False
+
+                self._retrain_task = asyncio.create_task(self._retrain_models_background(new_tf))
                 return True, msg
 
             except Exception as e:

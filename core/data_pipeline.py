@@ -164,9 +164,17 @@ class RealTimeDataPipeline:
         self.websocket_task = asyncio.create_task(self._websocket_loop(url))
 
     async def refresh_ltf_history(self):
-        """Concurrent warmup of LTF candle caches for all symbols using asyncio.gather."""
+        """Concurrent warmup of LTF candle caches for all symbols using asyncio.gather.
+        Guarantees all-or-nothing atomicity: self.ltf_candles is ONLY updated if ALL symbols
+        are successfully fetched with adequate candle history. If any symbol fails, raises
+        RuntimeError to trigger clean rollback in change_execution_timeframe().
+        """
         print(f"[DATA] Refreshing LTF candle caches for all symbols on {Config.LTF_TIMEFRAME}...")
         target_bars = int(getattr(Config, 'LTF_HISTORY_BARS', 2000))
+        new_candles = {}
+        failed_symbols = []
+        lock = asyncio.Lock()
+
         async def _fetch_one(symbol):
             try:
                 ltf_ohlcv = await self._fetch_ohlcv_paged(
@@ -174,14 +182,32 @@ class RealTimeDataPipeline:
                     timeframe=Config.LTF_TIMEFRAME,
                     total_bars=target_bars,
                 )
-                if ltf_ohlcv:
-                    self.ltf_candles[symbol] = ltf_ohlcv
+                if ltf_ohlcv and len(ltf_ohlcv) >= 10:
+                    async with lock:
+                        new_candles[symbol] = ltf_ohlcv
                     print(f"[DATA] {symbol}: {len(ltf_ohlcv)} LTF bars warmed up ({Config.LTF_TIMEFRAME}).")
+                else:
+                    bars_count = len(ltf_ohlcv) if ltf_ohlcv else 0
+                    async with lock:
+                        failed_symbols.append(f"{symbol} (insufficient bars: {bars_count})")
+                    print(f"[DATA] Insufficient LTF bars for {symbol} ({bars_count} < 10) on {Config.LTF_TIMEFRAME}.")
             except Exception as e:
+                async with lock:
+                    failed_symbols.append(f"{symbol} ({e})")
                 print(f"[DATA] Error refreshing {symbol} {Config.LTF_TIMEFRAME}: {e}")
 
         await asyncio.gather(*[_fetch_one(s) for s in Config.SUPPORTED_SYMBOLS])
-        print(f"[DATA] Historical LTF caches refreshed for {Config.LTF_TIMEFRAME}.")
+
+        if failed_symbols:
+            err_msg = f"Failed to refresh LTF history atomically for: {', '.join(failed_symbols)}"
+            print(f"[DATA] ❌ {err_msg}. Aborting cache update to prevent mixed-cache state.")
+            raise RuntimeError(err_msg)
+
+        # Apply atomically to all symbols
+        for sym, candles in new_candles.items():
+            self.ltf_candles[sym] = candles
+
+        print(f"[DATA] Historical LTF caches atomically refreshed for {Config.LTF_TIMEFRAME}.")
 
     async def restart_streams(self):
         """Restarts the websocket connection with updated LTF streams."""

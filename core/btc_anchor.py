@@ -41,7 +41,7 @@ class BTCAnchorEngine:
         signal: str,
         btc_ltf_data: Any,
         btc_htf_data: Optional[Any] = None,
-        eval_closed_only: bool = False,
+        eval_closed_only: bool = True,
     ) -> Tuple[bool, str, float]:
         """
         Evaluates whether an altcoin setup aligns with current BTC macro/micro dynamics.
@@ -73,25 +73,32 @@ class BTCAnchorEngine:
             return True, "Insufficient BTC LTF candles (fail-open)", 0.0
 
         # ── 1. Micro Flash Flush / Pump Guard (15m frame) ──
-        ltf_eval_idx = -2 if (eval_closed_only and len(btc_ltf_df) >= 2) else -1
-        last_candle = btc_ltf_df.iloc[ltf_eval_idx]
-        c_open = float(last_candle.get('open', 0.0))
-        c_close = float(last_candle.get('close', 0.0))
+        # Flash drop/pump circuit breaker inspects the latest live candle (iloc[-1])
+        # as well as the last closed candle (iloc[-2]) if eval_closed_only to catch sudden crashes in real time.
+        check_candles = [btc_ltf_df.iloc[-1]]
+        if eval_closed_only and len(btc_ltf_df) >= 2:
+            check_candles.append(btc_ltf_df.iloc[-2])
 
-        if c_open > 0:
-            single_bar_ret = (c_close - c_open) / c_open
-            
-            # Flash Drop check
-            if signal == "BUY" and single_bar_ret <= -self.flash_drop_threshold:
-                drop_pct = abs(single_bar_ret) * 100.0
-                return False, f"BTC Flash Flush active (-{drop_pct:.2f}% in 15m): Altcoin longs blocked", 0.0
+        for last_candle in check_candles:
+            c_open = float(last_candle.get('open', 0.0))
+            c_close = float(last_candle.get('close', 0.0))
 
-            # Flash Pump check (for shorts)
-            if signal == "SELL" and single_bar_ret >= self.flash_pump_threshold:
-                pump_pct = single_bar_ret * 100.0
-                return False, f"BTC Flash Surge active (+{pump_pct:.2f}% in 15m): Altcoin shorts blocked", 0.0
+            if c_open > 0:
+                single_bar_ret = (c_close - c_open) / c_open
+                
+                # Flash Drop check
+                if signal == "BUY" and single_bar_ret <= -self.flash_drop_threshold:
+                    drop_pct = abs(single_bar_ret) * 100.0
+                    return False, f"BTC Flash Flush active (-{drop_pct:.2f}% in 15m): Altcoin longs blocked", 0.0
+
+                # Flash Pump check (for shorts)
+                if signal == "SELL" and single_bar_ret >= self.flash_pump_threshold:
+                    pump_pct = single_bar_ret * 100.0
+                    return False, f"BTC Flash Surge active (+{pump_pct:.2f}% in 15m): Altcoin shorts blocked", 0.0
 
         # ── 2. Rolling Multi-Candle Momentum (3-bar / 45m) ──
+        ltf_eval_idx = -2 if (eval_closed_only and len(btc_ltf_df) >= 2) else -1
+        c_close = float(btc_ltf_df['close'].iloc[ltf_eval_idx])
         lookback_bars = 4 if ltf_eval_idx == -1 else 5
         if len(btc_ltf_df) >= lookback_bars:
             p_3bars_ago_idx = -lookback_bars
