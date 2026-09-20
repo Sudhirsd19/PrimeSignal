@@ -75,11 +75,9 @@ class RealTimeDataPipeline:
                 print(f"ERROR: Failed to fetch historical data (4H) for {symbol}")
                 
             # Fetch LTF history.
-            # H-03 FIX: 500 bars (~5 days on 15m) is far too little to fit a
-            # GradientBoosting model — ml/confirmation.py itself warns that it
-            # needs 2000+ bars. The pipeline now paginates past the exchange's
-            # 1000-bar per-request limit up to Config.LTF_HISTORY_BARS.
-            target_bars = int(getattr(Config, 'LTF_HISTORY_BARS', 2000))
+            # Deep history on low timeframes (1m/5m) ensures 10,000+ bars for robust ML training.
+            # Persistent disk caching ensures instant startup by loading cached history and fetching only delta.
+            target_bars = self.get_target_ltf_bars(Config.LTF_TIMEFRAME)
             ltf_ohlcv = await self._fetch_ohlcv_paged(
                 symbol=symbol,
                 timeframe=Config.LTF_TIMEFRAME,
@@ -92,12 +90,19 @@ class RealTimeDataPipeline:
                 print(f"ERROR: Failed to fetch historical data (LTF) for {symbol}")
         print("[DATA] Historical caches warmed up.")
 
-    async def _fetch_ohlcv_paged(self, symbol: str, timeframe: str, total_bars: int) -> list:
-        """Fetches up to `total_bars` of recent history, paginating forward.
+    @staticmethod
+    def get_target_ltf_bars(timeframe: str) -> int:
+        """Determines target historical candle count based on timeframe depth requirements."""
+        tf = (timeframe or '').strip().lower()
+        if tf in ('1m', '5m'):
+            return int(getattr(Config, 'LTF_HISTORY_BARS_DEEP', 10000))
+        return int(getattr(Config, 'LTF_HISTORY_BARS', 2000))
 
-        Exchanges cap a single OHLCV request (Binance: 1000). We walk forward
-        from `now - total_bars * tf` using `since`, de-duplicate by timestamp and
-        return the most recent `total_bars`, chronologically sorted.
+    async def _fetch_ohlcv_paged(self, symbol: str, timeframe: str, total_bars: int) -> list:
+        """Fetches up to `total_bars` of recent history, paginating forward with persistent disk caching.
+
+        Loads cached candles from data/candles_cache_{clean_symbol}_{timeframe}.json, fetches only
+        the delta since the newest cached candle, and saves the updated history back to disk.
         """
         if total_bars <= 0:
             return []
@@ -107,42 +112,73 @@ class RealTimeDataPipeline:
             tf_mins = 15
         tf_ms = tf_mins * 60 * 1000
 
-        page_limit = min(1000, total_bars)
-        since = int(time.time() * 1000) - (total_bars * tf_ms)
+        from pathlib import Path
+        clean_sym = symbol.replace('/', '_').lower()
+        cache_path = Path("data") / f"candles_cache_{clean_sym}_{timeframe.lower()}.json"
+
         collected: dict[int, list] = {}
-        max_requests = (total_bars // page_limit) + 3
 
-        for _ in range(max_requests):
-            try:
-                batch = await self.execution.fetch_ohlcv(
-                    symbol=symbol, timeframe=timeframe, limit=page_limit, since=since
-                )
-            except TypeError:
-                # Older execution engines may not accept `since`.
-                batch = await self.execution.fetch_ohlcv(
-                    symbol=symbol, timeframe=timeframe, limit=page_limit
-                )
-            except Exception as exc:
-                print(f"[DATA] Paged fetch error for {symbol} {timeframe}: {exc}")
-                break
+        # 1. Load existing disk cache if present
+        try:
+            if cache_path.exists():
+                cached_data = json.loads(cache_path.read_text(encoding="utf-8"))
+                if isinstance(cached_data, list):
+                    for candle in cached_data:
+                        if isinstance(candle, (list, tuple)) and len(candle) >= 6 and candle[0] is not None:
+                            collected[int(candle[0])] = list(candle)
+        except Exception as e:
+            print(f"[DATA] Note: could not load candle cache for {symbol} ({e})")
 
-            if not batch:
-                break
+        now_ms = int(time.time() * 1000)
+        page_limit = min(1000, total_bars)
 
-            for candle in batch:
-                if candle and candle[0] is not None:
-                    collected[int(candle[0])] = candle
+        if collected:
+            latest_cached_ts = max(collected.keys())
+            since = latest_cached_ts + tf_ms
+        else:
+            since = now_ms - (total_bars * tf_ms)
 
-            newest_ts = int(batch[-1][0])
-            next_since = newest_ts + tf_ms
-            if len(collected) >= total_bars or next_since >= int(time.time() * 1000):
-                break
-            if next_since <= since:
-                break
-            since = next_since
+        if since < now_ms:
+            max_requests = max(2, (total_bars // page_limit) + 3)
+            for _ in range(max_requests):
+                try:
+                    batch = await self.execution.fetch_ohlcv(
+                        symbol=symbol, timeframe=timeframe, limit=page_limit, since=since
+                    )
+                except TypeError:
+                    batch = await self.execution.fetch_ohlcv(
+                        symbol=symbol, timeframe=timeframe, limit=page_limit
+                    )
+                except Exception as exc:
+                    print(f"[DATA] Paged fetch error for {symbol} {timeframe}: {exc}")
+                    break
+
+                if not batch:
+                    break
+
+                for candle in batch:
+                    if candle and candle[0] is not None:
+                        collected[int(candle[0])] = list(candle)
+
+                newest_ts = int(batch[-1][0])
+                next_since = newest_ts + tf_ms
+                if len(collected) >= total_bars or next_since >= now_ms:
+                    break
+                if next_since <= since:
+                    break
+                since = next_since
 
         ordered = [collected[ts] for ts in sorted(collected.keys())]
-        return ordered[-total_bars:]
+        result = ordered[-total_bars:]
+
+        # 2. Persist updated candles back to disk cache
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps(result), encoding="utf-8")
+        except Exception as e:
+            print(f"[DATA] Note: could not save candle cache for {symbol} ({e})")
+
+        return result
 
     async def start(self):
         """
@@ -170,7 +206,7 @@ class RealTimeDataPipeline:
         RuntimeError to trigger clean rollback in change_execution_timeframe().
         """
         print(f"[DATA] Refreshing LTF candle caches for all symbols on {Config.LTF_TIMEFRAME}...")
-        target_bars = int(getattr(Config, 'LTF_HISTORY_BARS', 2000))
+        target_bars = self.get_target_ltf_bars(Config.LTF_TIMEFRAME)
         new_candles = {}
         failed_symbols = []
         lock = asyncio.Lock()

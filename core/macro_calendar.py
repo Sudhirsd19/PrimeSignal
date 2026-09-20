@@ -18,6 +18,44 @@ _IMPACT_RANK = {"low": 1, "medium": 2, "med": 2, "moderate": 2, "high": 3, "holi
 _MIN_IMPACT_RANK = {"low": 1, "medium": 2, "high": 3}
 _RELEVANT_CURRENCIES = ("USD", "US")
 
+_BUILTIN_2026_EVENTS: list[dict[str, Any]] = [
+    # US FOMC Rate Decisions (18:00 UTC)
+    {"title": "Fed Interest Rate Decision", "time": "2026-01-28T18:00:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "Fed Interest Rate Decision", "time": "2026-03-18T18:00:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "Fed Interest Rate Decision", "time": "2026-05-06T18:00:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "Fed Interest Rate Decision", "time": "2026-06-17T18:00:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "Fed Interest Rate Decision", "time": "2026-07-29T18:00:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "Fed Interest Rate Decision", "time": "2026-09-16T18:00:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "Fed Interest Rate Decision", "time": "2026-10-28T18:00:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "Fed Interest Rate Decision", "time": "2026-12-09T18:00:00+00:00", "impact": "high", "currency": "USD"},
+    # US CPI Releases (12:30 UTC)
+    {"title": "US CPI m/m", "time": "2026-01-14T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "US CPI m/m", "time": "2026-02-11T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "US CPI m/m", "time": "2026-03-11T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "US CPI m/m", "time": "2026-04-15T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "US CPI m/m", "time": "2026-05-13T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "US CPI m/m", "time": "2026-06-10T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "US CPI m/m", "time": "2026-07-15T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "US CPI m/m", "time": "2026-08-12T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "US CPI m/m", "time": "2026-09-16T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "US CPI m/m", "time": "2026-10-14T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "US CPI m/m", "time": "2026-11-12T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "US CPI m/m", "time": "2026-12-09T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    # US Non-Farm Payrolls (NFP) (12:30 UTC)
+    {"title": "Non-Farm Employment Change", "time": "2026-01-09T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "Non-Farm Employment Change", "time": "2026-02-06T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "Non-Farm Employment Change", "time": "2026-03-06T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "Non-Farm Employment Change", "time": "2026-04-03T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "Non-Farm Employment Change", "time": "2026-05-08T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "Non-Farm Employment Change", "time": "2026-06-05T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "Non-Farm Employment Change", "time": "2026-07-02T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "Non-Farm Employment Change", "time": "2026-08-07T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "Non-Farm Employment Change", "time": "2026-09-04T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "Non-Farm Employment Change", "time": "2026-10-02T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "Non-Farm Employment Change", "time": "2026-11-06T12:30:00+00:00", "impact": "high", "currency": "USD"},
+    {"title": "Non-Farm Employment Change", "time": "2026-12-04T12:30:00+00:00", "impact": "high", "currency": "USD"},
+]
+
 class MacroNewsCalendar:
     LOCAL_OVERLAY_PATH = Path("data/macro_calendar.json")
     CACHE_PATH = Path("data/macro_calendar_cache.json")
@@ -73,7 +111,7 @@ class MacroNewsCalendar:
             self.last_error = f"overlay load failed: {exc}"
 
     def _load_cache(self):
-        if self.source == "LOCAL_OVERLAY": return
+        if self.source in ("LOCAL_OVERLAY", "LIVE_FEED", "BACKUP_FEED"): return
         try:
             if self.cache_path.exists():
                 payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
@@ -86,41 +124,100 @@ class MacroNewsCalendar:
                         self.source = "DISK_CACHE"
                         self.last_refresh = fetched_at
                     else:
-                        self.last_error = "disk cache expired"
+                        self.events = parsed
+                        self.source = "STALE_DISK_CACHE"
+                        self.last_refresh = fetched_at
+                        self.last_error = "disk cache expired but preserved as offline fallback"
         except (OSError, json.JSONDecodeError) as exc:
             self.last_error = f"cache load failed: {exc}"
 
+    def _load_builtin_schedule(self):
+        if not self.events:
+            parsed = self._parse_feed(_BUILTIN_2026_EVENTS)
+            if parsed:
+                self.events = parsed
+                self.source = "BUILTIN_SCHEDULE"
+                self.last_refresh = time.time()
+                self.last_error = None
+
+    async def _fetch_from_endpoint(self, session, url: str) -> Optional[list[dict[str, Any]]]:
+        if not url: return None
+        try:
+            async with session.get(url, headers={"User-Agent": "PrimeSignal/2.7"}) as resp:
+                if resp.status == 200:
+                    raw = await resp.json(content_type=None)
+                    parsed = self._parse_feed(raw)
+                    if parsed:
+                        return parsed
+        except Exception:
+            return None
+        return None
+
     async def refresh(self, force: bool = False) -> bool:
         url = str(getattr(Config, "ECONOMIC_CALENDAR_URL", "") or "").strip()
-        if not url:
-            self.last_error = "economic calendar URL is not configured"
+        backup_url = str(getattr(Config, "ECONOMIC_CALENDAR_BACKUP_URL", "") or "").strip()
+        if not url and not backup_url:
+            if not self.events:
+                self._load_builtin_schedule()
+            if self.events:
+                return True
+            self.last_error = "economic calendar URLs not configured and no cache"
             return False
+
         if self.source == "LOCAL_OVERLAY" and not force: return True
         ttl = max(60, int(getattr(Config, "ECONOMIC_CALENDAR_CACHE_MINS", 30)) * 60)
-        if not force and self.events and (time.time() - self.last_refresh) < ttl: return True
+        if not force and self.events and self.source in ("LIVE_FEED", "BACKUP_FEED", "DISK_CACHE") and (time.time() - self.last_refresh) < ttl:
+            return True
+
         try:
             import aiohttp
             timeout = aiohttp.ClientTimeout(total=8.0)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url, headers={"User-Agent": "PrimeSignal/2.7"}) as resp:
-                    if resp.status != 200:
-                        self.last_error = f"calendar feed HTTP {resp.status}"
-                        return False
-                    raw = await resp.json(content_type=None)
-            parsed = self._parse_feed(raw)
-            if not parsed:
-                self.last_error = "calendar feed returned no parsable events"
-                return False
-            self.events, self.source, self.last_refresh, self.last_error = parsed, "LIVE_FEED", time.time(), None
-            try:
-                self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-                self.cache_path.write_text(json.dumps({"fetched_at": self.last_refresh, "source_url": url, "events": [{**e, "time": e["time"].isoformat()} for e in self.events]}, indent=2), encoding="utf-8")
-            except OSError as exc:
-                self.last_error = f"cache write failed: {exc}"
-            return True
+                # 1. Try Primary Feed
+                parsed = await self._fetch_from_endpoint(session, url)
+                if parsed:
+                    self.events, self.source, self.last_refresh, self.last_error = parsed, "LIVE_FEED", time.time(), None
+                    try:
+                        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+                        self.cache_path.write_text(json.dumps({"fetched_at": self.last_refresh, "source_url": url, "events": [{**e, "time": e["time"].isoformat()} for e in self.events]}, indent=2), encoding="utf-8")
+                    except OSError as exc:
+                        self.last_error = f"cache write failed: {exc}"
+                    return True
+
+                # 2. Try Backup Feed (Secondary Redundancy)
+                if backup_url:
+                    parsed_backup = await self._fetch_from_endpoint(session, backup_url)
+                    if parsed_backup:
+                        self.events, self.source, self.last_refresh, self.last_error = parsed_backup, "BACKUP_FEED", time.time(), None
+                        try:
+                            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+                            self.cache_path.write_text(json.dumps({"fetched_at": self.last_refresh, "source_url": backup_url, "events": [{**e, "time": e["time"].isoformat()} for e in self.events]}, indent=2), encoding="utf-8")
+                        except OSError as exc:
+                            self.last_error = f"cache write failed: {exc}"
+                        return True
+
+            # 3. Fallback to Disk Cache or Built-in Schedule if network feeds failed
+            if self.events and self.source in ("DISK_CACHE", "STALE_DISK_CACHE", "LOCAL_OVERLAY"):
+                self.last_error = "network feeds failed; using disk cache fallback"
+                return True
+
+            self._load_cache()
+            if self.events:
+                self.last_error = "network feeds failed; using disk cache fallback"
+                return True
+
+            self._load_builtin_schedule()
+            if self.events:
+                self.last_error = "network feeds failed; using builtin schedule fallback"
+                return True
+
+            self.last_error = "calendar feed and fallbacks returned no parsable events"
+            return False
         except Exception as exc:
             self.last_error = f"{type(exc).__name__}: {exc}"
-            return False
+            if not self.events:
+                self._load_builtin_schedule()
+            return bool(self.events)
 
     def _min_impact_rank(self):
         return _MIN_IMPACT_RANK.get(str(getattr(Config, "NEWS_MIN_IMPACT", "high")).strip().lower(), 3)

@@ -1558,6 +1558,16 @@ class PrimeSignalBot:
                     ctx.filled_qty = filled_amount
                     ctx.fill_avg_price = fill_price
 
+                    # Slippage tracking and dynamic SL re-anchoring to preserve exact planned R:R
+                    planned_sl_dist = abs(entry_price - sl)
+                    slippage_pct = (fill_price - entry_price) / entry_price if entry_price > 0 else 0.0
+                    if abs(slippage_pct) > 0.0001:
+                        add_log_message(f"[{symbol}] ⚡ BUY Fill Slippage: {slippage_pct*100:+.3f}% (Expected: {entry_price:.4f}, Filled: {fill_price:.4f})")
+                    if planned_sl_dist > 0:
+                        min_sl_dist = fill_price * float(getattr(Config, 'MIN_SL_PCT', 0.005))
+                        effective_sl_dist = max(planned_sl_dist, min_sl_dist)
+                        sl = round(fill_price - effective_sl_dist, 4)
+
                     is_partial = filled_amount < (pos_size - 1e-6)
                     if is_partial:
                         ctx.remaining_qty = max(0.0, pos_size - filled_amount)
@@ -1782,6 +1792,16 @@ class PrimeSignalBot:
                     fill_price = float(order.get('average') or order.get('price') or order.get('avg_price') or entry_price) if isinstance(order, dict) else float(getattr(order, 'average_fill_price', None) or getattr(order, 'price', None) or entry_price)
                     ctx.filled_qty = filled_amount
                     ctx.fill_avg_price = fill_price
+
+                    # Slippage tracking and dynamic SL re-anchoring to preserve exact planned R:R
+                    planned_sl_dist = abs(sl - entry_price)
+                    slippage_pct = (entry_price - fill_price) / entry_price if entry_price > 0 else 0.0
+                    if abs(slippage_pct) > 0.0001:
+                        add_log_message(f"[{symbol}] ⚡ SELL Fill Slippage: {slippage_pct*100:+.3f}% (Expected: {entry_price:.4f}, Filled: {fill_price:.4f})")
+                    if planned_sl_dist > 0:
+                        min_sl_dist = fill_price * float(getattr(Config, 'MIN_SL_PCT', 0.005))
+                        effective_sl_dist = max(planned_sl_dist, min_sl_dist)
+                        sl = round(fill_price + effective_sl_dist, 4)
 
                     is_partial = filled_amount < (pos_size - 1e-6)
                     if is_partial:

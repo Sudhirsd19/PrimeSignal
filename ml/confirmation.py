@@ -189,8 +189,11 @@ class MLSignalConfirmator:
                 print("WARNING: Too few clean data rows after feature extraction.")
                 return False
 
-            print(f"[ML] Training GradientBoosting model on {len(X)} samples...")
-            self.model.fit(X, y)
+            print(f"[ML] Training GradientBoosting model on {len(X)} samples with balanced class sample weights...")
+            from sklearn.utils.class_weight import compute_sample_weight
+            from sklearn.metrics import balanced_accuracy_score
+            sample_weights = compute_sample_weight('balanced', y)
+            self.model.fit(X, y, sample_weight=sample_weights)
             self.is_trained = True
 
             # FIX-4: Print class balance so skewed training data is immediately visible
@@ -205,30 +208,34 @@ class MLSignalConfirmator:
                 print(f"[ML] [!] IMBALANCED: Short-win {bear_pct:.1f}% is skewed. Model may be biased.")
 
             # FIX-C: TimeSeriesSplit cross-validation to detect overfitting.
-            # Uses 5 temporal folds so later folds always test on data the model hasn't seen.
-            # AUC >= 0.60 = model has real edge. AUC <= 0.55 = near-random, increase data.
-            # NOTE: multi_class='ovr' required because we now use 3-class labels {0, 1, 2}
+            # Uses temporal folds with balanced sample weighting per fold.
             try:
-                from sklearn.model_selection import TimeSeriesSplit, cross_val_score
+                from sklearn.model_selection import TimeSeriesSplit
                 if len(X) >= 100:
                     lookahead = int(getattr(Config, 'ML_LABEL_LOOKAHEAD', 20))
-                    # Ensure each split has sufficient samples to avoid single-class folds
                     n_splits = min(5, max(2, (len(X) - lookahead) // 80))
                     tscv = TimeSeriesSplit(n_splits=n_splits, gap=lookahead)
-                    # FIX-D: Use standard 'accuracy' or balanced_accuracy for CV to avoid the ValueError: 
-                    # "Number of classes in y_true not equal to the number of columns in 'y_score'"
-                    # which happens during TimeSeriesSplit when a small fold is entirely missing class 0, 1, or 2.
-                    cv_scores = cross_val_score(
-                        GradientBoostingClassifier(
+                    valid_scores = []
+                    for train_idx, val_idx in tscv.split(X, y):
+                        y_tr = y.iloc[train_idx]
+                        if len(np.unique(y_tr)) < 2:
+                            continue
+                        X_tr, X_v = X.iloc[train_idx], X.iloc[val_idx]
+                        y_v = y.iloc[val_idx]
+                        fold_weights = compute_sample_weight('balanced', y_tr)
+                        fold_clf = GradientBoostingClassifier(
                             n_estimators=self.model.n_estimators,
                             max_depth=self.model.max_depth,
                             learning_rate=self.model.learning_rate,
                             subsample=self.model.subsample,
                             random_state=42
-                        ),
-                        X, y, cv=tscv, scoring='balanced_accuracy', n_jobs=-1
-                    )
-                    valid_scores = [s for s in cv_scores if not (np.isnan(s) if isinstance(s, (float, np.floating)) else False)]
+                        )
+                        fold_clf.fit(X_tr, y_tr, sample_weight=fold_weights)
+                        preds = fold_clf.predict(X_v)
+                        score = balanced_accuracy_score(y_v, preds)
+                        if not (np.isnan(score) if isinstance(score, (float, np.floating)) else False):
+                            valid_scores.append(float(score))
+
                     min_required_folds = max(2, tscv.n_splits // 2)
                     if len(valid_scores) >= min_required_folds:
                         mean_auc = float(np.mean(valid_scores))
@@ -236,8 +243,6 @@ class MLSignalConfirmator:
                     else:
                         mean_auc = 0.5
                         std_auc  = 0.0
-                    # H-07 FIX: report the metric that is actually computed.
-                    # This is TimeSeriesSplit BALANCED ACCURACY, not AUC.
                     self.cv_score = float(mean_auc)
                     self.cv_folds = int(len(valid_scores))
                     floor = float(getattr(Config, 'ML_MIN_CV_ACCURACY', 0.55))

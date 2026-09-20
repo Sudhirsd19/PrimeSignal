@@ -114,6 +114,10 @@ class Config:
         "ECONOMIC_CALENDAR_URL",
         "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
     )
+    ECONOMIC_CALENDAR_BACKUP_URL = os.getenv(
+        "ECONOMIC_CALENDAR_BACKUP_URL",
+        "https://raw.githubusercontent.com/datasets/economic-events-calendar/main/calendar.json",
+    )
     ECONOMIC_CALENDAR_CACHE_MINS = int(os.getenv("ECONOMIC_CALENDAR_CACHE_MINS", "30"))
     NEWS_BLACKOUT_BEFORE_MIN = int(os.getenv("NEWS_BLACKOUT_BEFORE_MIN", "15"))
     NEWS_BLACKOUT_AFTER_MIN = int(os.getenv("NEWS_BLACKOUT_AFTER_MIN", "20"))
@@ -174,6 +178,8 @@ class Config:
     POST_EXIT_COOLDOWN_MINUTES = int(os.getenv("POST_EXIT_COOLDOWN_MINUTES", "15"))  # M-05 FIX: Was hardcoded in main.py
     MAX_SLIPPAGE_PCT = float(os.getenv("MAX_SLIPPAGE_PCT", "0.004"))
     MAX_TP_SLIPPAGE_PCT = float(os.getenv("MAX_TP_SLIPPAGE_PCT", "0.008")) # 0.8% max slippage tolerance on TP orders
+    MAX_BID_ASK_SPREAD_PCT = float(os.getenv("MAX_BID_ASK_SPREAD_PCT", "0.0035")) # 0.35% max spread before aborting entry
+    RATE_LIMIT_COOLDOWN_SECS = float(os.getenv("RATE_LIMIT_COOLDOWN_SECS", "60.0")) # 60s backoff cooldown on 429/418
     FEE_RATE = float(os.getenv("FEE_RATE", "0.00075"))
     MAX_PORTFOLIO_RISK_PCT = float(os.getenv("MAX_PORTFOLIO_RISK_PCT", "6.0"))    # Total portfolio risk cap (%)
     
@@ -183,7 +189,12 @@ class Config:
     
     # Machine Learning configurations
     ML_CONFIRMATION_THRESHOLD = float(os.getenv("ML_CONFIRMATION_THRESHOLD", "0.60"))
-    ML_TRAIN_BARS = int(float(os.getenv("ML_TRAIN_BARS", "25")))  # C-04 FIX: int(float()) to handle decimal env strings
+    ML_LABEL_SL_PCT = float(os.getenv("ML_LABEL_SL_PCT", "-0.005"))
+    ML_LABEL_TP_PCT = float(os.getenv("ML_LABEL_TP_PCT", "0.006"))
+    ML_LABEL_LOOKAHEAD = int(os.getenv("ML_LABEL_LOOKAHEAD", "20"))
+    ML_LABEL_TP_AUTO = os.getenv("ML_LABEL_TP_AUTO", "True").lower() in ("true", "1", "yes")
+    ML_LABEL_DYNAMIC_ATR = os.getenv("ML_LABEL_DYNAMIC_ATR", "False").lower() in ("true", "1", "yes")
+    ML_LABEL_ATR_MULT = float(os.getenv("ML_LABEL_ATR_MULT", "1.5"))
     # ML_GATE_MODE controls whether the model actually filters entries:
     #   'auto' (default) -> gate entries only when the model proved real edge in
     #                       time-series cross-validation, otherwise only scale risk
@@ -193,8 +204,9 @@ class Config:
     ML_GATE_MODE = os.getenv("ML_GATE_MODE", "auto").strip().lower()
     ML_MIN_CV_ACCURACY = float(os.getenv("ML_MIN_CV_ACCURACY", "0.55"))
     # LTF bars fetched at warm-up. The ML model needs 2000+ bars for a stable fit;
-    # the pipeline paginates past Binance's 1000-bar per-request limit.
+    # on low timeframes (1m/5m), deep 10,000-bar history is fetched and disk-cached.
     LTF_HISTORY_BARS = int(os.getenv("LTF_HISTORY_BARS", "2000"))
+    LTF_HISTORY_BARS_DEEP = int(os.getenv("LTF_HISTORY_BARS_DEEP", "10000"))
     
     # Test Mode config
     TEST_MODE = os.getenv("TEST_MODE", "False").lower() in ("true", "1", "yes")

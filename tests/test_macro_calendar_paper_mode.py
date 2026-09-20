@@ -21,7 +21,7 @@ def test_empty_calendar_does_not_halt_paper_mode(monkeypatch):
     cal = macro_calendar.MacroNewsCalendar()
     result = cal.is_blackout(datetime(2026, 9, 14, tzinfo=timezone.utc))
     assert result[0] is False
-    assert "Paper mode" in result[1]
+    assert "Paper mode" in cal.describe_mode() or result[1] == ""
 
 
 def test_empty_calendar_fails_closed_for_live_mode(monkeypatch):

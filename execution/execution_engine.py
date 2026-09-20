@@ -18,6 +18,9 @@ from execution.execution_result import (
 
 
 class ExecutionEngine:
+    rate_limited_until: float = 0.0
+    rate_limit_reason: str = ""
+
     def __init__(self, intent_journal_path=None):
         is_futures = Config.EXCHANGE_TYPE == 'futures'
 
@@ -62,6 +65,8 @@ class ExecutionEngine:
         self._tickers_cache = {}
         self._tickers_cache_time = 0.0
         self._futures_initialized_symbols: set[str] = set()
+        self.rate_limited_until: float = 0.0
+        self.rate_limit_reason: str = ""
         self.intent_journal = ExecutionIntentJournal(intent_journal_path)
         if self.coindcx_client:
             self.coindcx_client.intent_journal = cast(Any, self.intent_journal)
@@ -315,6 +320,18 @@ class ExecutionEngine:
         if symbol is None:
             symbol = Config.SYMBOL
 
+        if time.time() < self.rate_limited_until:
+            rem = self.rate_limited_until - time.time()
+            print(f"[EXECUTION] 🛑 Order aborted: Exchange rate limit cooldown active ({rem:.1f}s remaining).")
+            return ExecutionResult(
+                state=ExecutionState.NOT_SUBMITTED,
+                requested_qty=float(amount or 0.0),
+                client_order_id=client_order_id,
+                intent_id=intent_id,
+                venue="BINANCE",
+                error=f"rate limit cooldown active ({self.rate_limit_reason})",
+            )
+
         try:
             intent_id, client_order_id = self.prepare_order_intent(
                 symbol=symbol,
@@ -354,6 +371,81 @@ class ExecutionEngine:
                 )
                 self.intent_journal.result(result)
                 return result
+
+        # 1. Pre-trade Slippage & Order Book Spread checks (enforced for ALL venues)
+        # Protective exits (SL, EMERGENCY, FLATTEN) bypass slippage/spread checks so risk-reducing closures never get blocked.
+        # Normal market ENTRY orders and explicit Take-Profit (TP, TP1, TP2) orders enforce boundaries.
+        venue_name = "COINDCX" if self.coindcx_client else "BINANCE"
+        is_tp_exit = is_exit_order and order_role.upper() in ("TP", "TP1", "TP2")
+        should_check_slippage = (order_type.upper() == "MARKET") and (not is_exit_order or is_tp_exit)
+        effective_max_slippage = getattr(Config, 'MAX_TP_SLIPPAGE_PCT', 0.008) if is_exit_order else max_slippage_pct
+
+        if should_check_slippage:
+            ticker = await self.execute_with_retry(self.public_client.fetch_ticker, symbol)
+            if not ticker:
+                print(f"[EXECUTION] Order aborted: Unable to fetch live price ticker for slippage check ({order_role}).")
+                result = ExecutionResult(
+                    state=ExecutionState.NOT_SUBMITTED,
+                    requested_qty=float(amount),
+                    client_order_id=client_order_id,
+                    intent_id=intent_id,
+                    venue=venue_name,
+                    error="ticker unavailable",
+                )
+                self.intent_journal.result(result)
+                return result
+
+            current_price = ticker['last']
+
+            # Pre-trade order book spread shock defense (only for non-protective entry orders)
+            if not is_exit_order and ticker.get('bid') and ticker.get('ask'):
+                bid = float(ticker['bid'])
+                ask = float(ticker['ask'])
+                if bid > 0 and ask > bid:
+                    spread_pct = (ask - bid) / bid
+                    max_spread = float(getattr(Config, 'MAX_BID_ASK_SPREAD_PCT', 0.0035))
+                    if spread_pct > max_spread:
+                        print(f"[EXECUTION] Order aborted: Order book spread ({spread_pct*100:.3f}%) exceeds safety limit ({max_spread*100:.3f}%).")
+                        result = ExecutionResult(
+                            state=ExecutionState.NOT_SUBMITTED,
+                            requested_qty=float(amount),
+                            client_order_id=client_order_id,
+                            intent_id=intent_id,
+                            venue=venue_name,
+                            error=f"spread too wide: {spread_pct*100:.3f}% > {max_spread*100:.3f}%",
+                        )
+                        self.intent_journal.result(result)
+                        return result
+
+            if price is not None:
+                if side.upper() == "BUY":
+                    slippage = (current_price - price) / price
+                    if slippage > effective_max_slippage:
+                        print(f"[EXECUTION] Order aborted: Slippage ({slippage*100:.2f}%) exceeds max ({effective_max_slippage*100:.2f}%).")
+                        result = ExecutionResult(
+                            state=ExecutionState.NOT_SUBMITTED,
+                            requested_qty=float(amount),
+                            client_order_id=client_order_id,
+                            intent_id=intent_id,
+                            venue=venue_name,
+                            error="slippage limit exceeded",
+                        )
+                        self.intent_journal.result(result)
+                        return result
+                elif side.upper() == "SELL":
+                    slippage = (price - current_price) / price
+                    if slippage > effective_max_slippage:
+                        print(f"[EXECUTION] Order aborted: Slippage ({slippage*100:.2f}%) exceeds max ({effective_max_slippage*100:.2f}%).")
+                        result = ExecutionResult(
+                            state=ExecutionState.NOT_SUBMITTED,
+                            requested_qty=float(amount),
+                            client_order_id=client_order_id,
+                            intent_id=intent_id,
+                            venue=venue_name,
+                            error="slippage limit exceeded",
+                        )
+                        self.intent_journal.result(result)
+                        return result
 
         if self.coindcx_client:
             coindcx_symbol = symbol
@@ -410,60 +502,6 @@ class ExecutionEngine:
                     return result
         except Exception as e:
             print(f"[EXECUTION] WARNING: Could not check minimum order size ({e}). Proceeding anyway.")
-
-        # 1. Slippage check:
-        # Protective exits (SL, EMERGENCY, FLATTEN) and default exit orders without an explicit TP role
-        # bypass slippage check so risk-reducing closures never get blocked.
-        # Normal market ENTRY orders and explicit Take-Profit (TP, TP1, TP2) orders enforce slippage boundaries.
-        is_tp_exit = is_exit_order and order_role.upper() in ("TP", "TP1", "TP2")
-        should_check_slippage = (order_type.upper() == "MARKET") and (not is_exit_order or is_tp_exit)
-        effective_max_slippage = getattr(Config, 'MAX_TP_SLIPPAGE_PCT', 0.008) if is_exit_order else max_slippage_pct
-
-        if should_check_slippage:
-            ticker = await self.execute_with_retry(self.public_client.fetch_ticker, symbol)
-            if not ticker:
-                print(f"[EXECUTION] Order aborted: Unable to fetch live price ticker for slippage check ({order_role}).")
-                result = ExecutionResult(
-                    state=ExecutionState.NOT_SUBMITTED,
-                    requested_qty=float(amount),
-                    client_order_id=client_order_id,
-                    intent_id=intent_id,
-                    venue="BINANCE",
-                    error="ticker unavailable",
-                )
-                self.intent_journal.result(result)
-                return result
-
-            current_price = ticker['last']
-            if price is not None:
-                if side.upper() == "BUY":
-                    slippage = (current_price - price) / price
-                    if slippage > effective_max_slippage:
-                        print(f"[EXECUTION] Order aborted: Slippage ({slippage*100:.2f}%) exceeds max ({effective_max_slippage*100:.2f}%).")
-                        result = ExecutionResult(
-                            state=ExecutionState.NOT_SUBMITTED,
-                            requested_qty=float(amount),
-                            client_order_id=client_order_id,
-                            intent_id=intent_id,
-                            venue="BINANCE",
-                            error="slippage limit exceeded",
-                        )
-                        self.intent_journal.result(result)
-                        return result
-                elif side.upper() == "SELL":
-                    slippage = (price - current_price) / price
-                    if slippage > effective_max_slippage:
-                        print(f"[EXECUTION] Order aborted: Slippage ({slippage*100:.2f}%) exceeds max ({effective_max_slippage*100:.2f}%).")
-                        result = ExecutionResult(
-                            state=ExecutionState.NOT_SUBMITTED,
-                            requested_qty=float(amount),
-                            client_order_id=client_order_id,
-                            intent_id=intent_id,
-                            venue="BINANCE",
-                            error="slippage limit exceeded",
-                        )
-                        self.intent_journal.result(result)
-                        return result
 
         params: dict[str, Any] = {'clientOrderId': client_order_id}
         if is_exit_order and Config.EXCHANGE_TYPE == 'futures':
@@ -581,8 +619,13 @@ class ExecutionEngine:
 
     async def execute_with_retry(self, func, *args, retries=3, delay=1.0, **kwargs):
         """
-        Executes a CCXT call with exponential backoff retry logic.
+        Executes a CCXT call with exponential backoff and 429/418 anti-ban circuit breaker.
         """
+        if time.time() < self.rate_limited_until:
+            rem = self.rate_limited_until - time.time()
+            print(f"[EXECUTION] 🛑 Exchange call paused: Rate limit cooldown active ({self.rate_limit_reason}). {rem:.1f}s remaining.")
+            raise ccxt.RateLimitExceeded(f"Rate limited: {self.rate_limit_reason}")
+
         for attempt in range(1, retries + 1):
             try:
                 if inspect.iscoroutinefunction(func):
@@ -603,6 +646,25 @@ class ExecutionEngine:
                 print(f"[EXECUTION] Trade failed (Invalid Order): {e}")
                 break
             except (ccxt.NetworkError, ccxt.RateLimitExceeded, ccxt.RequestTimeout) as e:
+                err_str = str(e).lower()
+                is_rate_limit = (
+                    isinstance(e, ccxt.RateLimitExceeded) or
+                    "429" in err_str or
+                    "418" in err_str or
+                    "-1003" in err_str or
+                    "too many requests" in err_str or
+                    "ip banned" in err_str or
+                    "rate limit" in err_str
+                )
+                if is_rate_limit:
+                    import random
+                    cooldown = float(getattr(Config, "RATE_LIMIT_COOLDOWN_SECS", 60.0)) + random.uniform(0.5, 3.0)
+                    self.rate_limited_until = time.time() + cooldown
+                    self.rate_limit_reason = f"Exchange rate limit/IP ban warning: {e}"
+                    print(f"[EXECUTION CRITICAL] 🚨 Exchange Rate Limit / IP Ban shock detected: {e}")
+                    print(f"[EXECUTION] 🛑 Activating {cooldown:.1f}s backoff circuit breaker. Halting rapid retries to protect IP.")
+                    raise ccxt.RateLimitExceeded(self.rate_limit_reason)
+
                 if attempt == retries:
                     print(f"[EXECUTION] API failed after {retries} attempts. Final Error: {e}")
                     raise ccxt.NetworkError(f"API Failed completely: {e}") # Force exception
