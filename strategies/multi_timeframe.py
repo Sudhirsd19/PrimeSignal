@@ -136,9 +136,9 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             htf_trend = 'BULLISH'
         elif latest_htf_close < latest_htf_ema_50 < latest_htf_ema_200:
             htf_trend = 'BEARISH'
-        elif relaxed and latest_htf_close > latest_htf_ema_50:
+        elif relaxed and latest_htf_close > latest_htf_ema_50 and latest_htf_close > latest_htf_ema_200:
             htf_trend = 'BULLISH'
-        elif relaxed and latest_htf_close < latest_htf_ema_50:
+        elif relaxed and latest_htf_close < latest_htf_ema_50 and latest_htf_close < latest_htf_ema_200:
             htf_trend = 'BEARISH'
         else:
             htf_trend = 'NEUTRAL'
@@ -329,6 +329,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         active_bearish_ob  = None
         
         def is_zone_active(zone):
+            if zone.get('invalidated', False): return False
             if not zone['mitigated']: return True
             if relaxed and zone.get('partially_mitigated', False): return True
             return False
@@ -359,20 +360,9 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                     latest_bearish_choch = idx
 
         def is_zone_structurally_valid(zone, zone_type):
-            """Check if a zone hasn't been invalidated by a counter-BOS after its creation."""
-            zone_ts = zone.get('timestamp')
-            if zone_ts is None:
-                return True  # Can't validate, assume valid
-            # For bullish zones: invalidated if a bearish BOS occurred AFTER the zone was created
-            if zone_type == 'BULLISH' and latest_bearish_bos_idx is not None:
-                bos_time = ltf_df.index[latest_bearish_bos_idx]
-                if bos_time > zone_ts:
-                    return False
-            # For bearish zones: invalidated if a bullish BOS occurred AFTER the zone was created
-            if zone_type == 'BEARISH' and latest_bullish_bos_idx is not None:
-                bos_time = ltf_df.index[latest_bullish_bos_idx]
-                if bos_time > zone_ts:
-                    return False
+            """Check if a zone hasn't been breached beyond its distal boundary."""
+            if zone.get('invalidated', False):
+                return False
             return True
 
         # 1. Search HTF Institutional Zones (with LTF structural cross-validation — AUD-H3 fix)
@@ -529,8 +519,8 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             vwap_pass = curr_vwap >= prev_vwap
             metadata['debug_checks']['vwap'] = 'PASS' if vwap_pass else 'FAIL'
 
-            # Micro-BOS: Reversal candle confirming buyers took control
-            micro_bos = (ltf_df.iloc[target_idx - 1]['close'] > ltf_df.iloc[target_idx - 1]['open']) and (ltf_df.iloc[target_idx - 1]['close'] > ltf_df.iloc[target_idx - 2]['high'])
+            # Micro-BOS: Reversal candle confirming buyers took control on current candle
+            micro_bos = (trigger_close > trigger_open) and (trigger_close > ltf_df.iloc[target_idx - 1]['high'])
             
             # RSI Divergence confluence
             rsi_div_bonus = 0
@@ -592,6 +582,12 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 elif relaxed and trigger_pass and curr_rsi < 68 and score >= (score_thresh - 1.0):
                     valid_entry = True
 
+            # Candle confirmation filter: ensure setup candle shows buyer commitment (green or hammer wick >= 50%)
+            candle_bullish = (trigger_close > trigger_open) or (candle_range > 0 and ((min(trigger_open, trigger_close) - trigger_low) / candle_range >= 0.50))
+            if valid_entry and not candle_bullish:
+                valid_entry = False
+                metadata['reason'] = "Rejected: Setup candle is bearish/dumping (no bullish confirmation)"
+
             # Anti-Exhaustion Filter: Prevent buying the top of an exhausted impulse (RSI >= 65 strict / 68 relaxed)
             max_rsi_long = 65.0 if not relaxed else 68.0
             if valid_entry and curr_rsi >= max_rsi_long:
@@ -621,15 +617,16 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 
                 # Structural invalidation SL: tighter of OB boundary or 1.5x ATR
                 stop_loss = max(ob_sl, atr_sl) if ob_sl > 0 else atr_sl
-                # FIX-2: Minimum SL raised 0.3% → 0.5% so TP1 at 1.0R gives ≥0.45% net after round-trip fees (~0.15%).
-                # At 0.3% SL, TP1 = 0.36% gross; after fees effective profit ≈ 0.21% — barely viable.
-                stop_loss = min(stop_loss, curr_price * (1 - 0.005))
-                stop_loss = max(stop_loss, curr_price * (1 - 0.025))
+                # Minimum SL distance widened to 1.2% so it does not get shaken out by normal 15m crypto noise
+                min_sl_dist = getattr(Config, 'MIN_SL_PCT', 0.012)
+                max_sl_dist = getattr(Config, 'MAX_SL_PCT', 0.025)
+                stop_loss = min(stop_loss, curr_price * (1 - min_sl_dist))
+                stop_loss = max(stop_loss, curr_price * (1 - max_sl_dist))
 
                 risk        = max(curr_price - stop_loss, 1e-9)
                 fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
-                tp1_mult    = regime_diag.get('tp1_mult', getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0))
-                tp2_mult    = regime_diag.get('tp2_mult', getattr(Config, 'RISK_REWARD_RATIO', 2.0))
+                tp1_mult    = regime_diag.get('tp1_mult', getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5))
+                tp2_mult    = regime_diag.get('tp2_mult', getattr(Config, 'RISK_REWARD_RATIO', 2.5))
                 take_profit_1r = curr_price + (risk * tp1_mult) + fee_adj
                 take_profit_2r = curr_price + (risk * tp2_mult) + fee_adj
                 take_profit_3r = curr_price + (risk * 4.0) + fee_adj
@@ -755,8 +752,8 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             vwap_pass = curr_vwap <= prev_vwap
             metadata['debug_checks']['vwap'] = 'PASS' if vwap_pass else 'FAIL'
 
-            # Micro-BOS: Reversal candle confirming sellers took control
-            micro_bos = (ltf_df.iloc[target_idx - 1]['close'] < ltf_df.iloc[target_idx - 1]['open']) and (ltf_df.iloc[target_idx - 1]['close'] < ltf_df.iloc[target_idx - 2]['low'])
+            # Micro-BOS: Reversal candle confirming sellers took control on current candle
+            micro_bos = (trigger_close < trigger_open) and (trigger_close < ltf_df.iloc[target_idx - 1]['low'])
             
             # RSI Divergence confluence
             rsi_div_bonus = 0
@@ -818,6 +815,12 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 elif relaxed and trigger_pass and curr_rsi > 32 and score >= (score_thresh - 1.0):
                     valid_entry = True
 
+            # Candle confirmation filter: ensure setup candle shows seller commitment (red or shooting star wick >= 50%)
+            candle_bearish = (trigger_close < trigger_open) or (candle_range > 0 and ((trigger_high - max(trigger_open, trigger_close)) / candle_range >= 0.50))
+            if valid_entry and not candle_bearish:
+                valid_entry = False
+                metadata['reason'] = "Rejected: Setup candle is bullish/pumping (no bearish confirmation)"
+
             # Anti-Exhaustion Filter: Prevent shorting the bottom of an oversold dump (RSI <= 35 strict / 32 relaxed)
             min_rsi_short = 35.0 if not relaxed else 32.0
             if valid_entry and curr_rsi <= min_rsi_short:
@@ -842,15 +845,16 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 
                 # Structural invalidation SL: tighter of OB boundary or 1.5x ATR
                 stop_loss = min(ob_sl, atr_sl) if (entry_type in ["OB", "FVG"] or (entry_type is not None and entry_type.startswith("SWEEP"))) else atr_sl
-                # FIX-3: Minimum SL raised 0.3% → 0.5% so TP1 at 1.0R gives ≥0.45% net after round-trip fees (~0.15%).
-                # At 0.3% SL, TP1 = 0.36% gross; after fees effective profit ≈ 0.21% — barely viable.
-                stop_loss = max(stop_loss, curr_price * (1 + 0.005))
-                stop_loss = min(stop_loss, curr_price * (1 + 0.025))
+                # Minimum SL distance widened to 1.2% so it does not get shaken out by normal 15m crypto noise
+                min_sl_dist = getattr(Config, 'MIN_SL_PCT', 0.012)
+                max_sl_dist = getattr(Config, 'MAX_SL_PCT', 0.025)
+                stop_loss = max(stop_loss, curr_price * (1 + min_sl_dist))
+                stop_loss = min(stop_loss, curr_price * (1 + max_sl_dist))
 
                 risk        = max(stop_loss - curr_price, 1e-9)
                 fee_adj     = curr_price * getattr(Config, 'FEE_RATE', 0.00075) * 2.0
-                tp1_mult    = regime_diag.get('tp1_mult', getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0))
-                tp2_mult    = regime_diag.get('tp2_mult', getattr(Config, 'RISK_REWARD_RATIO', 2.0))
+                tp1_mult    = regime_diag.get('tp1_mult', getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5))
+                tp2_mult    = regime_diag.get('tp2_mult', getattr(Config, 'RISK_REWARD_RATIO', 2.5))
                 take_profit_1r = curr_price - (risk * tp1_mult) - fee_adj
                 take_profit_2r = curr_price - (risk * tp2_mult) - fee_adj
                 take_profit_3r = curr_price - (risk * 4.0) - fee_adj

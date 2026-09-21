@@ -70,10 +70,13 @@ class Config:
     MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "6"))
     TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015")) # Deprecated in favor of ATR
     TRAILING_ATR_MULT = float(os.getenv("TRAILING_ATR_MULT", "1.5"))
-    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "0.55")) # Early Breakeven Lock activation at +0.55R
-    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.0")) # TP1 Target: 1.0R
-    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.0")) # TP2 Target: 2.0R
-    TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "0.65")) # 65% profit booking at TP1 (1.0R) target
+    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.2")) # Breakeven Lock activation at +1.2R (prevents whipsaw choke)
+    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.5")) # TP1 Target: 1.5R
+    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.5")) # TP2 Target: 2.5R
+    ENABLE_RELAXED_MODE = os.getenv("ENABLE_RELAXED_MODE", "False").lower() in ("true", "1", "yes") # Strict macro-aligned setups by default
+    MIN_SL_PCT = float(os.getenv("MIN_SL_PCT", "0.012")) # Minimum 1.2% SL distance for crypto noise
+    MAX_SL_PCT = float(os.getenv("MAX_SL_PCT", "0.025")) # Maximum 2.5% SL distance
+    TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "0.65")) # 65% profit booking at TP1 (1.5R) target
     # Fraction of the REMAINING position booked at TP2. Was read by main.py but
     # missing from Config, so it silently always used 0.65 (P2-3 FIX).
     TP2_REMAINING_SCALE_PCT = float(os.getenv("TP2_REMAINING_SCALE_PCT", "0.65")) # 65% of remainder at TP2

@@ -1017,7 +1017,7 @@ class PrimeSignalBot:
         relaxed_used = False
         
         # Dual-Pass Execution
-        if signal == "HOLD":
+        if signal == "HOLD" and getattr(Config, 'ENABLE_RELAXED_MODE', False):
             open_count, _, _, _ = await self.get_open_positions_info()
                 
             if open_count < 2 and (time.time() - self.global_last_trade_time) >= 20 * 60 and time.time() > self.global_pause_until:
@@ -1640,8 +1640,8 @@ class PrimeSignalBot:
                     self.partial_tp_taken[symbol] = False
                     self.tp2_taken[symbol] = False
                     r_amount = abs(sl - fill_price)
-                    tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0)
-                    tp2_mult = getattr(Config, 'RISK_REWARD_RATIO', 2.0)
+                    tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)
+                    tp2_mult = getattr(Config, 'RISK_REWARD_RATIO', 2.5)
                     self.take_profit_1r[symbol] = float(fill_price + (tp1_mult * r_amount) + fee_adj)
                     self.take_profit_2r[symbol] = float(fill_price + (tp2_mult * r_amount) + fee_adj)
                     self.take_profit[symbol] = float(fill_price + (4.0 * r_amount) + fee_adj)
@@ -1875,8 +1875,8 @@ class PrimeSignalBot:
                     self.partial_tp_taken[symbol] = False
                     self.tp2_taken[symbol] = False
                     r_amount = abs(sl - fill_price)
-                    tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0)
-                    tp2_mult = getattr(Config, 'RISK_REWARD_RATIO', 2.0)
+                    tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)
+                    tp2_mult = getattr(Config, 'RISK_REWARD_RATIO', 2.5)
                     self.take_profit_1r[symbol] = float(fill_price - (tp1_mult * r_amount) - fee_adj)
                     self.take_profit_2r[symbol] = float(fill_price - (tp2_mult * r_amount) - fee_adj)
                     self.take_profit[symbol] = float(fill_price - (4.0 * r_amount) - fee_adj)
@@ -2083,12 +2083,12 @@ class PrimeSignalBot:
                         
                         if self.position_side[symbol] == "LONG":
                             self.highest_price_reached[symbol] = max(self.highest_price_reached[symbol], curr_price)
-                            fee_adj = self.entry_price[symbol] * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0); r_dist = (self.take_profit_1r[symbol] - self.entry_price[symbol] - fee_adj) / tp1_mult if self.position_side[symbol] == 'LONG' else (self.entry_price[symbol] - self.take_profit_1r[symbol] - fee_adj) / tp1_mult; r_dist = r_dist if r_dist > 0 else abs(self.entry_price[symbol] - self.stop_loss[symbol])
+                            fee_adj = self.entry_price[symbol] * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5); r_dist = (self.take_profit_1r[symbol] - self.entry_price[symbol] - fee_adj) / tp1_mult if self.position_side[symbol] == 'LONG' else (self.entry_price[symbol] - self.take_profit_1r[symbol] - fee_adj) / tp1_mult; r_dist = r_dist if r_dist > 0 else abs(self.entry_price[symbol] - self.stop_loss[symbol])
                             
                             # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven
                             fee_buffer_pct = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
                             fee_offset = self.entry_price[symbol] * fee_buffer_pct
-                            tsl_activation = getattr(Config, 'TSL_ACTIVATION_R', 0.55)
+                            tsl_activation = getattr(Config, 'TSL_ACTIVATION_R', 1.2)
                             min_required_profit = max(tsl_activation * r_dist, fee_offset * 1.5)
                             
                             # Only activate Breakeven after TP1 profit is secured OR price has reached full activation threshold
@@ -2394,12 +2394,12 @@ class PrimeSignalBot:
                                 
                         elif self.position_side[symbol] == "SHORT":
                             self.lowest_price_reached[symbol] = min(self.lowest_price_reached[symbol], curr_price)
-                            fee_adj = self.entry_price[symbol] * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0); r_dist = (self.take_profit_1r[symbol] - self.entry_price[symbol] - fee_adj) / tp1_mult if self.position_side[symbol] == 'LONG' else (self.entry_price[symbol] - self.take_profit_1r[symbol] - fee_adj) / tp1_mult; r_dist = r_dist if r_dist > 0 else abs(self.entry_price[symbol] - self.stop_loss[symbol])
+                            fee_adj = self.entry_price[symbol] * getattr(Config, 'FEE_RATE', 0.00075) * 2.0; tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5); r_dist = (self.take_profit_1r[symbol] - self.entry_price[symbol] - fee_adj) / tp1_mult if self.position_side[symbol] == 'LONG' else (self.entry_price[symbol] - self.take_profit_1r[symbol] - fee_adj) / tp1_mult; r_dist = r_dist if r_dist > 0 else abs(self.entry_price[symbol] - self.stop_loss[symbol])
                             
                             # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven
                             fee_buffer_pct = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
                             fee_offset = self.entry_price[symbol] * fee_buffer_pct
-                            tsl_activation = getattr(Config, 'TSL_ACTIVATION_R', 0.55)
+                            tsl_activation = getattr(Config, 'TSL_ACTIVATION_R', 1.2)
                             min_required_profit = max(tsl_activation * r_dist, fee_offset * 1.5)
                             
                             # Only activate Breakeven after TP1 profit is secured OR price has reached full activation threshold

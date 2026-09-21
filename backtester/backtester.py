@@ -109,7 +109,7 @@ class BacktestEngine:
         self.trades = []
         self.equity_curve = []
         self.balance = float(initial_balance)
-        self.relaxed_enabled = True
+        self.relaxed_enabled = bool(getattr(Config, 'ENABLE_RELAXED_MODE', False))
 
         htf_df = prepare_dataframe(htf_candles) if not isinstance(htf_candles, pd.DataFrame) else htf_candles
         ltf_df = prepare_dataframe(ltf_candles) if not isinstance(ltf_candles, pd.DataFrame) else ltf_candles
@@ -125,7 +125,7 @@ class BacktestEngine:
         tp1_scale = float(getattr(Config, 'TP1_SCALE_OUT_PCT', 0.65))
         tp2_scale = float(getattr(Config, 'TP2_REMAINING_SCALE_PCT', 0.65))
         be_buffer = float(getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030))
-        tsl_activation_r = float(getattr(Config, 'TSL_ACTIVATION_R', 0.55))
+        tsl_activation_r = float(getattr(Config, 'TSL_ACTIVATION_R', 1.2))
         trail_mult = float(getattr(Config, 'TRAILING_ATR_MULT', 1.5))
         cooldown_secs = float(getattr(Config, 'COOLDOWN_MINUTES', 20)) * 60.0
         tp_exit_cooldown = float(getattr(Config, 'TP_EXIT_COOLDOWN_MINUTES', 25)) * 60.0
@@ -423,8 +423,8 @@ class BacktestEngine:
                 continue
 
             # ── targets (live geometry) ──────────────────────────────────────
-            tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.0))
-            tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.0))
+            tp1_mult = float(getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5))
+            tp2_mult = float(getattr(Config, 'RISK_REWARD_RATIO', 2.5))
             if self.ml is not None:
                 if ml_prob_dir > 0.65:
                     tp2_mult = 2.5
