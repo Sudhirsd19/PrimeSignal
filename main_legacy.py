@@ -1188,10 +1188,13 @@ class PrimeSignalBot:
                 DashboardState.ml_confidence = prob
             add_log_message(f"[{symbol}] ML confidence score: {prob:.2f} (raw bullish: {raw_prob:.2f})")
 
-            # H-03 FIX: the documented "ML Confirmation Filter" never actually ran —
-            # confirm_signal() was dead code and the model only nudged TP levels.
-            # Entries are now genuinely gated when the model is allowed to gate
-            # (ML_GATE_MODE='auto' arms it only after CV proves out-of-sample edge).
+            # Anti-Divergence Gate: Never trade against a trained ML model that actively opposes the signal (prob < 0.45)
+            min_prob_gate = float(getattr(Config, 'ML_MIN_PROB_GATE', 0.45))
+            if prob < min_prob_gate:
+                add_log_message(f"[{symbol}] ⛔ Entry blocked by ML Anti-Divergence Gate: Directional confidence {prob:.2f} < {min_prob_gate:.2f} opposes {signal}")
+                return
+
+            # H-03 FIX: Gated entries when model is allowed to gate (ML_GATE_MODE='auto' or 'gate')
             # No risk reservation exists yet at this point, so returning is safe.
             ml_model = self.ml_models[symbol]
             if ml_model.should_gate_entries():

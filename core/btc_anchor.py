@@ -133,12 +133,12 @@ class BTCAnchorEngine:
         ltf_rsi_idx = -2 if len(btc_ltf_df) >= 2 else -1
         btc_ltf_rsi = float(ltf_rsi_series.iloc[ltf_rsi_idx]) if not ltf_rsi_series.empty and not math.isnan(ltf_rsi_series.iloc[ltf_rsi_idx]) else 50.0
 
-        # Hard Divergence Filter
-        if signal == "BUY" and btc_htf_trend == "BEARISH" and btc_ltf_rsi < 42.0:
-            return False, f"BTC HTF Bearish Cascade (1h Downtrend + RSI {btc_ltf_rsi:.1f} < 42): Altcoin long blocked", 0.0
+        # Hard Macro Trend Filter: Never buy altcoins during a confirmed BTC 1h Downtrend
+        if signal == "BUY" and btc_htf_trend == "BEARISH":
+            return False, f"BTC HTF Downtrend (1h Trend: BEARISH, RSI: {btc_ltf_rsi:.1f}): Altcoin long blocked", 0.0
 
-        if signal == "SELL" and btc_htf_trend == "BULLISH" and btc_ltf_rsi > 58.0:
-            return False, f"BTC HTF Bullish Expansion (1h Uptrend + RSI {btc_ltf_rsi:.1f} > 58): Altcoin short blocked", 0.0
+        if signal == "SELL" and btc_htf_trend == "BULLISH":
+            return False, f"BTC HTF Uptrend (1h Trend: BULLISH, RSI: {btc_ltf_rsi:.1f}): Altcoin short blocked", 0.0
 
         # Confluence Score Boost for fully aligned trades
         if signal == "BUY" and btc_htf_trend == "BULLISH" and btc_ltf_rsi >= 50.0:

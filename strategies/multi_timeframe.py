@@ -464,31 +464,33 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 reason = f"Liquidity Sweep of Swing Low [{swing_low:.2f}]"
                 
             # Dynamic Pullback Setups (ATR-scaled bands instead of fixed ±0.15%)
-            if not in_zone:
-                # VWAP Dynamic Bounce
+            # Only active during confirmed TREND or strong_trend to prevent chop whipsaws
+            allow_dynamic_pullbacks = (strong_trend or market_regime == 'TREND')
+            if not in_zone and allow_dynamic_pullbacks:
+                # VWAP Dynamic Bounce: price in band AND closed on/above VWAP showing support
                 vwap_lo = curr_vwap - zone_half_band
                 vwap_hi = curr_vwap + zone_half_band
-                if in_bounds(curr_price, vwap_lo, vwap_hi):
+                if in_bounds(curr_price, vwap_lo, vwap_hi) and trigger_close >= curr_vwap:
                     in_zone = True
                     entry_type = "VWAP"
                     zone_bottom = vwap_lo
                     zone_top = vwap_hi
                     zone_ts = ltf_df.index[target_idx]
                     reason = f"Dynamic Setup: VWAP Bounce"
-                # EMA 21 / 50 Trend Pullback
+                # EMA 21 / 50 Trend Pullback: price in band AND closed on/above EMA
                 else:
                     ema21_lo = curr_long - zone_half_band
                     ema21_hi = curr_long + zone_half_band
                     ema50_lo = curr_ema_50 - zone_half_band
                     ema50_hi = curr_ema_50 + zone_half_band
-                    if in_bounds(curr_price, ema21_lo, ema21_hi):
+                    if in_bounds(curr_price, ema21_lo, ema21_hi) and trigger_close >= curr_long:
                         in_zone = True
                         entry_type = "EMA"
                         zone_bottom = ema21_lo
                         zone_top = ema21_hi
                         zone_ts = ltf_df.index[target_idx]
                         reason = f"Dynamic Setup: EMA 21 Pullback"
-                    elif in_bounds(curr_price, ema50_lo, ema50_hi):
+                    elif in_bounds(curr_price, ema50_lo, ema50_hi) and trigger_close >= curr_ema_50:
                         in_zone = True
                         entry_type = "EMA"
                         zone_bottom = ema50_lo
@@ -568,8 +570,12 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             
             # Multi-Trigger Valid Entry:
             # 1. Zone Setups (OB, FVG, SWEEP) with rejection trigger OR micro_bos
-            # 2. Dynamic Pullback Setups (EMA, VWAP) with trend alignment + trigger
+            # 2. Dynamic Pullback Setups (EMA, VWAP) with trend alignment + trigger + volume
             # All paths enforce regime-aware score_thresh (AUD-C1 fix)
+            avg_vol_14 = ltf_df['volume'].rolling(14).mean().iloc[target_idx] if len(ltf_df) >= 14 else 1.0
+            trigger_vol = ltf_df.iloc[target_idx]['volume'] if 'volume' in ltf_df.columns else 1.0
+            vol_confirmed = (trigger_vol >= 0.85 * avg_vol_14)
+            
             valid_entry = False
             if in_zone and (entry_type in ["OB", "FVG", "SWEEP"] or (entry_type is not None and entry_type.startswith("SWEEP"))):
                 if (micro_bos or trigger_pass or rsi_trigger) and (vwap_pass or strong_trend) and score >= score_thresh:
@@ -577,9 +583,9 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 elif relaxed and trigger_pass and score >= (score_thresh - 1.0):
                     valid_entry = True
             elif in_zone and entry_type in ["EMA", "VWAP"]:
-                if (micro_bos or trigger_pass) and (curr_rsi < 65 and vwap_pass) and score >= score_thresh:
+                if (micro_bos or trigger_pass) and (curr_rsi < 65 and vwap_pass) and vol_confirmed and (strong_trend or market_regime == 'TREND') and score >= score_thresh:
                     valid_entry = True
-                elif relaxed and trigger_pass and curr_rsi < 68 and score >= (score_thresh - 1.0):
+                elif relaxed and trigger_pass and curr_rsi < 68 and vol_confirmed and score >= (score_thresh - 1.0):
                     valid_entry = True
 
             # Candle confirmation filter: ensure setup candle shows buyer commitment (green or hammer wick >= 50%)
@@ -697,31 +703,33 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 reason = f"Liquidity Sweep of Swing High [{swing_high:.2f}]"
                 
             # Dynamic Pullback Setups (ATR-scaled bands instead of fixed ±0.15%)
-            if not in_zone:
-                # VWAP Dynamic Bounce
+            # Only active during confirmed TREND or strong_trend to prevent chop whipsaws
+            allow_dynamic_pullbacks = (strong_trend or market_regime == 'TREND')
+            if not in_zone and allow_dynamic_pullbacks:
+                # VWAP Dynamic Bounce: price in band AND closed on/below VWAP showing resistance
                 vwap_lo = curr_vwap - zone_half_band
                 vwap_hi = curr_vwap + zone_half_band
-                if in_bounds(curr_price, vwap_lo, vwap_hi):
+                if in_bounds(curr_price, vwap_lo, vwap_hi) and trigger_close <= curr_vwap:
                     in_zone = True
                     entry_type = "VWAP"
                     zone_bottom = vwap_lo
                     zone_top = vwap_hi
                     zone_ts = ltf_df.index[target_idx]
                     reason = f"Dynamic Setup: VWAP Bounce"
-                # EMA 21 / 50 Trend Pullback
+                # EMA 21 / 50 Trend Pullback: price in band AND closed on/below EMA
                 else:
                     ema21_lo = curr_long - zone_half_band
                     ema21_hi = curr_long + zone_half_band
                     ema50_lo = curr_ema_50 - zone_half_band
                     ema50_hi = curr_ema_50 + zone_half_band
-                    if in_bounds(curr_price, ema21_lo, ema21_hi):
+                    if in_bounds(curr_price, ema21_lo, ema21_hi) and trigger_close <= curr_long:
                         in_zone = True
                         entry_type = "EMA"
                         zone_bottom = ema21_lo
                         zone_top = ema21_hi
                         zone_ts = ltf_df.index[target_idx]
                         reason = f"Dynamic Setup: EMA 21 Pullback"
-                    elif in_bounds(curr_price, ema50_lo, ema50_hi):
+                    elif in_bounds(curr_price, ema50_lo, ema50_hi) and trigger_close <= curr_ema_50:
                         in_zone = True
                         entry_type = "EMA"
                         zone_bottom = ema50_lo
@@ -801,8 +809,12 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             
             # Multi-Trigger Valid Entry:
             # 1. Zone Setups (OB, FVG, SWEEP) with rejection trigger OR micro_bos
-            # 2. Dynamic Pullback Setups (EMA, VWAP) with trend alignment + trigger
+            # 2. Dynamic Pullback Setups (EMA, VWAP) with trend alignment + trigger + volume
             # All paths enforce regime-aware score_thresh (AUD-C1 fix)
+            avg_vol_14 = ltf_df['volume'].rolling(14).mean().iloc[target_idx] if len(ltf_df) >= 14 else 1.0
+            trigger_vol = ltf_df.iloc[target_idx]['volume'] if 'volume' in ltf_df.columns else 1.0
+            vol_confirmed = (trigger_vol >= 0.85 * avg_vol_14)
+
             valid_entry = False
             if in_zone and (entry_type in ["OB", "FVG", "SWEEP"] or (entry_type is not None and entry_type.startswith("SWEEP"))):
                 if (micro_bos or trigger_pass or rsi_trigger) and (vwap_pass or strong_trend) and score >= score_thresh:
@@ -810,9 +822,9 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 elif relaxed and trigger_pass and score >= (score_thresh - 1.0):
                     valid_entry = True
             elif in_zone and entry_type in ["EMA", "VWAP"]:
-                if (micro_bos or trigger_pass) and (curr_rsi > 35 and vwap_pass) and score >= score_thresh:
+                if (micro_bos or trigger_pass) and (curr_rsi > 35 and vwap_pass) and vol_confirmed and (strong_trend or market_regime == 'TREND') and score >= score_thresh:
                     valid_entry = True
-                elif relaxed and trigger_pass and curr_rsi > 32 and score >= (score_thresh - 1.0):
+                elif relaxed and trigger_pass and curr_rsi > 32 and vol_confirmed and score >= (score_thresh - 1.0):
                     valid_entry = True
 
             # Candle confirmation filter: ensure setup candle shows seller commitment (red or shooting star wick >= 50%)
