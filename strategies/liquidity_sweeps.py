@@ -24,7 +24,7 @@ class LiquiditySweepEngine:
 
     def __init__(
         self,
-        min_wick_ratio: float = 0.35,      # Rejection wick must be >= 35% of candle range
+        min_wick_ratio: float = 0.50,      # Rejection wick must be >= 50% of candle range (hammer/pinbar)
         buffer_pct: float = 0.0015,         # 0.15% buffer for SL placement
     ):
         self.min_wick_ratio = min_wick_ratio
@@ -115,72 +115,78 @@ class LiquiditySweepEngine:
         ash = levels['asian_high']
         asl = levels['asian_low']
 
-        # Evaluate the last completed candle (index -2) to prevent repainting
-        candle = data.iloc[-2]
-        c_open = float(candle['open'])
-        c_high = float(candle['high'])
-        c_low = float(candle['low'])
-        c_close = float(candle['close'])
-        c_range = max(1e-9, c_high - c_low)
+        # Check candidate candles (last closed bar iloc[-1] or prior closed bar iloc[-2])
+        candidate_candles = [data.iloc[-1]]
+        if len(data) >= 2:
+            candidate_candles.append(data.iloc[-2])
 
-        upper_wick = c_high - max(c_open, c_close)
-        lower_wick = min(c_open, c_close) - c_low
+        for candle in candidate_candles:
+            c_open = float(candle['open'])
+            c_high = float(candle['high'])
+            c_low = float(candle['low'])
+            c_close = float(candle['close'])
+            c_range = max(1e-9, c_high - c_low)
 
-        upper_wick_ratio = upper_wick / c_range
-        lower_wick_ratio = lower_wick / c_range
+            upper_wick = c_high - max(c_open, c_close)
+            lower_wick = min(c_open, c_close) - c_low
 
-        # ── 1. Bullish Liquidity Sweep (Sweep below PDL or Asian Low + Rejection) ──
-        target_low_level = None
-        level_type = None
+            upper_wick_ratio = upper_wick / c_range
+            lower_wick_ratio = lower_wick / c_range
 
-        if pdl > 0 and c_low < pdl and c_close > pdl:
-            target_low_level = pdl
-            level_type = "PDL"
-        elif asl > 0 and c_low < asl and c_close > asl:
-            target_low_level = asl
-            level_type = "ASIAN_LOW"
+            # ── 1. Bullish Liquidity Sweep (Sweep below PDL or Asian Low + Rejection) ──
+            target_low_level = None
+            level_type = None
 
-        if target_low_level and lower_wick_ratio >= self.min_wick_ratio:
-            sl_price = c_low * (1.0 - self.buffer_pct)
-            risk = abs(c_close - sl_price)
-            # Target range midpoint or PDH
-            tp_target = max(c_close + (2.5 * risk), pdh if pdh > c_close else c_close + (2.5 * risk))
-            return {
-                'is_setup': True,
-                'signal': 'BUY',
-                'sweep_level_type': level_type,
-                'sweep_level': target_low_level,
-                'stop_loss': round(sl_price, 4),
-                'suggested_tp': round(tp_target, 4),
-                'rejection_wick_ratio': round(lower_wick_ratio, 3),
-                'reason': f"Bullish Liquidity Purge: {level_type} swept @ {target_low_level:.2f} with {lower_wick_ratio*100:.1f}% lower rejection wick"
-            }
+            if pdl > 0 and c_low < pdl and c_close > pdl:
+                target_low_level = pdl
+                level_type = "PDL"
+            elif asl > 0 and c_low < asl and c_close > asl:
+                target_low_level = asl
+                level_type = "ASIAN_LOW"
 
-        # ── 2. Bearish Liquidity Sweep (Sweep above PDH or Asian High + Rejection) ──
-        target_high_level = None
-        high_level_type = None
+            # Require true rejection: strong lower wick (>= min_wick_ratio) AND candle is not a pure dumping red bar
+            is_bullish_sweep_candle = (c_close >= c_open) or (lower_wick_ratio >= 0.60)
+            if target_low_level and lower_wick_ratio >= self.min_wick_ratio and is_bullish_sweep_candle:
+                sl_price = c_low * (1.0 - self.buffer_pct)
+                risk = abs(c_close - sl_price)
+                # Target range midpoint or PDH
+                tp_target = max(c_close + (2.5 * risk), pdh if pdh > c_close else c_close + (2.5 * risk))
+                return {
+                    'is_setup': True,
+                    'signal': 'BUY',
+                    'sweep_level_type': level_type,
+                    'sweep_level': target_low_level,
+                    'stop_loss': round(sl_price, 4),
+                    'suggested_tp': round(tp_target, 4),
+                    'rejection_wick_ratio': round(lower_wick_ratio, 3),
+                    'reason': f"Bullish Liquidity Purge: {level_type} swept @ {target_low_level:.2f} with {lower_wick_ratio*100:.1f}% lower rejection wick"
+                }
 
-        if pdh > 0 and c_high > pdh and c_close < pdh:
-            target_high_level = pdh
-            high_level_type = "PDH"
-        elif ash > 0 and c_high > ash and c_close < ash:
-            target_high_level = ash
-            high_level_type = "ASIAN_HIGH"
+            # ── 2. Bearish Liquidity Sweep (Sweep above PDH or Asian High + Rejection) ──
+            target_high_level = None
+            high_level_type = None
 
-        if target_high_level and upper_wick_ratio >= self.min_wick_ratio:
-            sl_price = c_high * (1.0 + self.buffer_pct)
-            risk = abs(sl_price - c_close)
-            # Target range midpoint or PDL
-            tp_target = min(c_close - (2.5 * risk), pdl if pdl > 0 and pdl < c_close else c_close - (2.5 * risk))
-            return {
-                'is_setup': True,
-                'signal': 'SELL',
-                'sweep_level_type': high_level_type,
-                'sweep_level': target_high_level,
-                'stop_loss': round(sl_price, 4),
-                'suggested_tp': round(tp_target, 4),
-                'rejection_wick_ratio': round(upper_wick_ratio, 3),
-                'reason': f"Bearish Liquidity Purge: {high_level_type} swept @ {target_high_level:.2f} with {upper_wick_ratio*100:.1f}% upper rejection wick"
-            }
+            if pdh > 0 and c_high > pdh and c_close < pdh:
+                target_high_level = pdh
+                high_level_type = "PDH"
+            elif ash > 0 and c_high > ash and c_close < ash:
+                target_high_level = ash
+                high_level_type = "ASIAN_HIGH"
 
+            is_bearish_sweep_candle = (c_close <= c_open) or (upper_wick_ratio >= 0.60)
+            if target_high_level and upper_wick_ratio >= self.min_wick_ratio and is_bearish_sweep_candle:
+                sl_price = c_high * (1.0 + self.buffer_pct)
+                risk = abs(sl_price - c_close)
+                # Target range midpoint or PDL
+                tp_target = min(c_close - (2.5 * risk), pdl if (pdl > 0 and pdl < c_close) else c_close - (2.5 * risk))
+                return {
+                    'is_setup': True,
+                    'signal': 'SELL',
+                    'sweep_level_type': high_level_type,
+                    'sweep_level': target_high_level,
+                    'stop_loss': round(sl_price, 4),
+                    'suggested_tp': round(tp_target, 4),
+                    'rejection_wick_ratio': round(upper_wick_ratio, 3),
+                    'reason': f"Bearish Liquidity Purge: {high_level_type} swept @ {target_high_level:.2f} with {upper_wick_ratio*100:.1f}% upper rejection wick"
+                }
         return empty_res

@@ -515,7 +515,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             crossover_trigger = (prev_short <= prev_long) and (curr_short > curr_long)
             wick_trigger      = (candle_range > 0) and ((min(trigger_open, trigger_close) - trigger_low) / candle_range >= 0.65)
             engulfing_trigger = (trigger_close > trigger_open) and (ltf_df.iloc[target_idx - 1]['close'] < ltf_df.iloc[target_idx - 1]['open']) and (trigger_close > ltf_df.iloc[target_idx - 1]['open'])
-            trigger_pass      = rsi_trigger or crossover_trigger or wick_trigger or engulfing_trigger or (entry_type is not None and entry_type.startswith("SWEEP"))
+            trigger_pass      = rsi_trigger or crossover_trigger or wick_trigger or engulfing_trigger
             metadata['debug_checks']['trigger'] = 'PASS' if trigger_pass else 'FAIL'
 
             vwap_pass = curr_vwap >= prev_vwap
@@ -571,16 +571,23 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             # Multi-Trigger Valid Entry:
             # 1. Zone Setups (OB, FVG, SWEEP) with rejection trigger OR micro_bos
             # 2. Dynamic Pullback Setups (EMA, VWAP) with trend alignment + trigger + volume
+            # 3. Liquidity Level Sweeps (SWEEP_*) strictly require structural reversal (micro_bos / engulfing / wick)
             # All paths enforce regime-aware score_thresh (AUD-C1 fix)
             avg_vol_14 = ltf_df['volume'].rolling(14).mean().iloc[target_idx] if len(ltf_df) >= 14 else 1.0
             trigger_vol = ltf_df.iloc[target_idx]['volume'] if 'volume' in ltf_df.columns else 1.0
             vol_confirmed = (trigger_vol >= 0.85 * avg_vol_14)
             
             valid_entry = False
-            if in_zone and (entry_type in ["OB", "FVG", "SWEEP"] or (entry_type is not None and entry_type.startswith("SWEEP"))):
+            if in_zone and entry_type in ["OB", "FVG", "SWEEP"]:
                 if (micro_bos or trigger_pass or rsi_trigger) and (vwap_pass or strong_trend) and score >= score_thresh:
                     valid_entry = True
                 elif relaxed and trigger_pass and score >= (score_thresh - 1.0):
+                    valid_entry = True
+            elif in_zone and entry_type is not None and entry_type.startswith("SWEEP_"):
+                # Liquidity level sweeps (Asian/PDL) require explicit reversal confirmation (micro-BOS or engulfing or hammer wick)
+                if (micro_bos or engulfing_trigger or wick_trigger) and (vwap_pass or strong_trend) and score >= score_thresh:
+                    valid_entry = True
+                elif relaxed and (micro_bos or engulfing_trigger or wick_trigger) and score >= (score_thresh - 1.0):
                     valid_entry = True
             elif in_zone and entry_type in ["EMA", "VWAP"]:
                 if (micro_bos or trigger_pass) and (curr_rsi < 65 and vwap_pass) and vol_confirmed and (strong_trend or market_regime == 'TREND') and score >= score_thresh:
@@ -754,7 +761,7 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             crossover_trigger = (prev_short >= prev_long) and (curr_short < curr_long)
             wick_trigger      = (candle_range > 0) and ((trigger_high - max(trigger_open, trigger_close)) / candle_range >= 0.65)
             engulfing_trigger = (trigger_close < trigger_open) and (ltf_df.iloc[target_idx - 1]['close'] > ltf_df.iloc[target_idx - 1]['open']) and (trigger_close < ltf_df.iloc[target_idx - 1]['open'])
-            trigger_pass      = rsi_trigger or crossover_trigger or wick_trigger or engulfing_trigger or (entry_type is not None and entry_type.startswith("SWEEP"))
+            trigger_pass      = rsi_trigger or crossover_trigger or wick_trigger or engulfing_trigger
             metadata['debug_checks']['trigger'] = 'PASS' if trigger_pass else 'FAIL'
 
             vwap_pass = curr_vwap <= prev_vwap
@@ -810,16 +817,23 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             # Multi-Trigger Valid Entry:
             # 1. Zone Setups (OB, FVG, SWEEP) with rejection trigger OR micro_bos
             # 2. Dynamic Pullback Setups (EMA, VWAP) with trend alignment + trigger + volume
+            # 3. Liquidity Level Sweeps (SWEEP_*) strictly require structural reversal (micro_bos / engulfing / wick)
             # All paths enforce regime-aware score_thresh (AUD-C1 fix)
             avg_vol_14 = ltf_df['volume'].rolling(14).mean().iloc[target_idx] if len(ltf_df) >= 14 else 1.0
             trigger_vol = ltf_df.iloc[target_idx]['volume'] if 'volume' in ltf_df.columns else 1.0
             vol_confirmed = (trigger_vol >= 0.85 * avg_vol_14)
 
             valid_entry = False
-            if in_zone and (entry_type in ["OB", "FVG", "SWEEP"] or (entry_type is not None and entry_type.startswith("SWEEP"))):
+            if in_zone and entry_type in ["OB", "FVG", "SWEEP"]:
                 if (micro_bos or trigger_pass or rsi_trigger) and (vwap_pass or strong_trend) and score >= score_thresh:
                     valid_entry = True
                 elif relaxed and trigger_pass and score >= (score_thresh - 1.0):
+                    valid_entry = True
+            elif in_zone and entry_type is not None and entry_type.startswith("SWEEP_"):
+                # Liquidity level sweeps (Asian/PDH) require explicit reversal confirmation (micro-BOS or engulfing or shooting star wick)
+                if (micro_bos or engulfing_trigger or wick_trigger) and (vwap_pass or strong_trend) and score >= score_thresh:
+                    valid_entry = True
+                elif relaxed and (micro_bos or engulfing_trigger or wick_trigger) and score >= (score_thresh - 1.0):
                     valid_entry = True
             elif in_zone and entry_type in ["EMA", "VWAP"]:
                 if (micro_bos or trigger_pass) and (curr_rsi > 35 and vwap_pass) and vol_confirmed and (strong_trend or market_regime == 'TREND') and score >= score_thresh:
