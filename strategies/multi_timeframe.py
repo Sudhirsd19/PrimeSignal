@@ -150,6 +150,23 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             
         metadata['debug_checks']['trend'] = 'PASS'
 
+        # LTF Trend Alignment Gate: Block entries when LTF momentum is clearly
+        # against the HTF trend. This prevents buying into falling price action even
+        # when the HTF macro trend is bullish (root cause of ADA/DOGE/ETH losses).
+        _ltf_ema9_series = calculate_ema(ltf_df, Config.SHORT_EMA)
+        _ltf_ema21_series = calculate_ema(ltf_df, Config.LONG_EMA)
+        _ltf_ema50_series = calculate_ema(ltf_df, 50)
+        _ltf_ema9 = _ltf_ema9_series.iloc[target_idx]
+        _ltf_ema21 = _ltf_ema21_series.iloc[target_idx]
+        _ltf_ema50 = _ltf_ema50_series.iloc[target_idx]
+        _ltf_close = ltf_df['close'].iloc[target_idx]
+        if htf_trend == 'BULLISH' and _ltf_ema9 < _ltf_ema21 and _ltf_close < _ltf_ema50:
+            metadata['reason'] = f"LTF Trend Misalignment: EMA9({_ltf_ema9:.4f}) < EMA21({_ltf_ema21:.4f}), Price({_ltf_close:.4f}) < EMA50({_ltf_ema50:.4f})"
+            return "HOLD", metadata
+        elif htf_trend == 'BEARISH' and allow_short and _ltf_ema9 > _ltf_ema21 and _ltf_close > _ltf_ema50:
+            metadata['reason'] = f"LTF Trend Misalignment: EMA9({_ltf_ema9:.4f}) > EMA21({_ltf_ema21:.4f}), Price({_ltf_close:.4f}) > EMA50({_ltf_ema50:.4f})"
+            return "HOLD", metadata
+
         # Venue capability guard (C-01 FIX): never emit a setup the venue cannot hold.
         if htf_trend == 'BEARISH' and not allow_short:
             metadata['reason'] = "SHORT setups disabled (venue is spot / shorting unsupported)"

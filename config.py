@@ -1,4 +1,4 @@
-# PrimeSignal v2.6.0 - Institutional Strategy Engine (1.0R TP1 / 2.0R TP2, 25.0 ADX, EMA 21 Pullback, Max 6 Daily Trades)
+# PrimeSignal v2.7.0 - Optimized Strategy Engine (1.2R TP1 / 2.5R TP2, 25.0 ADX, 40% TP1 Scale, Max 6 Daily Trades)
 import os
 import sys
 
@@ -70,16 +70,15 @@ class Config:
     MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "6"))
     TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015")) # Deprecated in favor of ATR
     TRAILING_ATR_MULT = float(os.getenv("TRAILING_ATR_MULT", "1.5"))
-    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.2")) # Breakeven Lock activation at +1.2R (prevents whipsaw choke)
-    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.5")) # TP1 Target: 1.5R
-    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.5")) # TP2 Target: 2.5R
+    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.5")) # Breakeven Lock activation at +1.5R
+    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "2.0")) # Single Target: 2.0R
+    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.0")) # Single Target: 2.0R
     ENABLE_RELAXED_MODE = os.getenv("ENABLE_RELAXED_MODE", "False").lower() in ("true", "1", "yes") # Strict macro-aligned setups by default
     MIN_SL_PCT = float(os.getenv("MIN_SL_PCT", "0.012")) # Minimum 1.2% SL distance for crypto noise
     MAX_SL_PCT = float(os.getenv("MAX_SL_PCT", "0.025")) # Maximum 2.5% SL distance
-    TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "0.65")) # 65% profit booking at TP1 (1.5R) target
-    # Fraction of the REMAINING position booked at TP2. Was read by main.py but
-    # missing from Config, so it silently always used 0.65 (P2-3 FIX).
-    TP2_REMAINING_SCALE_PCT = float(os.getenv("TP2_REMAINING_SCALE_PCT", "0.65")) # 65% of remainder at TP2
+    TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "1.00")) # 100% full profit booking at 2.0R
+    # Fraction of the REMAINING position booked at TP2.
+    TP2_REMAINING_SCALE_PCT = float(os.getenv("TP2_REMAINING_SCALE_PCT", "0.0"))
     
     # Triple-Barrier Label constants (used in ml/confirmation.py FIX-B)
     # ML_LABEL_SL_PCT mirrors the strategy's hard 0.5% minimum stop distance.
@@ -159,7 +158,7 @@ class Config:
     HTF_TIMEFRAME = os.getenv("HTF_TIMEFRAME", "1h")
     HTF_MAX_STALENESS_MULT = float(os.getenv("HTF_MAX_STALENESS_MULT", "2.0"))
     LTF_TIMEFRAME = os.getenv("LTF_TIMEFRAME", "15m")
-    ADX_MIN_THRESHOLD = float(os.getenv("ADX_MIN_THRESHOLD", "22.0"))
+    ADX_MIN_THRESHOLD = float(os.getenv("ADX_MIN_THRESHOLD", "25.0"))
     ML_MIN_PROB_GATE = float(os.getenv("ML_MIN_PROB_GATE", "0.45"))
     SHORT_EMA = int(os.getenv("SHORT_EMA", "9"))
     LONG_EMA = int(os.getenv("LONG_EMA", "21"))
