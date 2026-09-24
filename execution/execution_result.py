@@ -261,7 +261,7 @@ class ExecutionIntentJournal:
         # exchange mutation is even considered. This closes the dangerous gap
         # where reconciliation had a fail-closed path but the live submit path
         # could still create an unprotected durable intent.
-        if str(order_role).upper() == "ENTRY":
+        if order_role.upper() == "ENTRY":
             try:
                 from config import Config
                 is_paper = bool(getattr(Config, "PAPER_TRADING", True))
