@@ -621,8 +621,33 @@ class PrimeSignalBot:
         DashboardState.take_profit = 0.0
         DashboardState.current_pnl_pct = 0.0
         DashboardState.current_pnl_usdt = 0.0
+        if hasattr(self, 'risk') and self.risk:
+            self.risk.reset_daily_equity(target_balance)
+        self._circuit_breaker_alert_sent = False
+        self._profit_lock_alert_sent = False
+        self._risk_halt_active = False
+        DashboardState.daily_profit_locked = False
+        DashboardState.daily_drawdown_pct = 0.0
+        DashboardState.signal_light = "GREEN"
+        DashboardState.signal_light_reason = "System Online - Scanning market for institutional SMC setups..."
         self.save_state()
         add_log_message(f"🔄 [ACCOUNT RESET] Virtual paper balance reset to ${target_balance:,.2f} USDT. Cooldown cleared, all 20 pairs actively scanning.")
+
+    def reset_sleep_mode(self):
+        """Resets the daily circuit breaker / sleep mode to current equity and unlocks scanning."""
+        current_eq = DashboardState.balance_usdt if (self.has_keys and not Config.PAPER_TRADING) else self.calculate_total_equity()
+        if hasattr(self, 'risk') and self.risk:
+            self.risk.reset_daily_equity(current_eq)
+        self._circuit_breaker_alert_sent = False
+        self._profit_lock_alert_sent = False
+        self._risk_halt_active = False
+        DashboardState.daily_profit_locked = False
+        DashboardState.daily_drawdown_pct = 0.0
+        DashboardState.signal_light = "GREEN"
+        DashboardState.signal_light_reason = "System Online - Scanning market for institutional SMC setups..."
+        self.save_state()
+        add_log_message(f"🔓 [SLEEP MODE RESET] Daily loss circuit breaker reset. Base equity set to {current_eq:.2f}. System Online.")
+        return True, f"Sleep mode reset successfully. Base equity set to {current_eq:.2f}."
 
     async def _daily_rollover_task(self):
         """Background task that runs automatically at 00:05 UTC to hot-swap trending coins."""
@@ -2041,6 +2066,9 @@ class PrimeSignalBot:
                             DashboardState.signal_light_reason = f"🚨 SLEEP MODE: Daily loss limit hit ({self.risk.current_drawdown_pct:.2f}% <= -{Config.MAX_DAILY_LOSS_PCT}%). No new entries until 00:00 IST."
                     else:
                         DashboardState.daily_profit_locked = False
+                        if DashboardState.signal_light == "RED":
+                            DashboardState.signal_light = "GREEN"
+                            DashboardState.signal_light_reason = "System Online - Scanning market for institutional SMC setups..."
 
                 # H-06 FIX: keep the economic calendar feed warm in the background.
                 if self._fast_scan_counter % 900 == 0:  # roughly every 15 minutes

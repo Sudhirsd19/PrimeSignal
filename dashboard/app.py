@@ -520,6 +520,18 @@ async def reset_account(req: Optional[ResetAccountRequest] = None):
         DashboardState.trades.clear()
         return {"status": "success", "message": f"Dashboard balance reset to {cur_symbol}{balance:,.2f} {cur_name}."}
 
+@app.post("/api/reset_sleep_mode", dependencies=[Depends(verify_dashboard_key)])
+async def reset_sleep_mode():
+    if bot_instance is not None:
+        ok, msg = bot_instance.reset_sleep_mode()
+        return {"status": "success", "message": msg}
+    else:
+        DashboardState.daily_profit_locked = False
+        DashboardState.daily_drawdown_pct = 0.0
+        DashboardState.signal_light = "GREEN"
+        DashboardState.signal_light_reason = "System Online - Scanning market for institutional SMC setups..."
+        return {"status": "success", "message": "Sleep mode reset on dashboard."}
+
 @app.post("/api/clear_analytics", dependencies=[Depends(verify_dashboard_key)])
 async def clear_analytics():
     """Clears in-memory dashboard trade analytics. Preserves on-disk forensic logs and operational limits."""
