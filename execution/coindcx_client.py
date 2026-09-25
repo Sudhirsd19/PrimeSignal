@@ -658,7 +658,8 @@ class CoinDCXClient:
                     client_order_id=client_order_id, intent_id=intent_id,
                 )
                 if existing_sl:
-                    print(f"[CoinDCX Native SL] Discovered existing Stop Loss order {existing_sl['id']} on exchange after timeout; adopting.")
+                    sl_id = getattr(existing_sl, 'exchange_order_id', None) or existing_sl.get('id')
+                    print(f"[CoinDCX Native SL] Discovered existing Stop Loss order {sl_id} on exchange after timeout; adopting.")
                     self.intent_journal.result(existing_sl)
                     return existing_sl
                 result = ExecutionResult(

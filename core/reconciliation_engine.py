@@ -630,14 +630,10 @@ class ReconciliationEngine:
                     ctx.native_sl_order_id = resolved_sl
                 if self.bot.in_position.get(symbol, False):
                     expected_size = float(self.bot.position_size.get(symbol, 0.0))
-                    if base_qty < (expected_size - 1e-5):
-                        print(f'[RECONCILIATION] [WARNING] Spot balance for {symbol} ({base_qty}) is less than expected bot size ({expected_size}). External transfer or manual sell? Quarantining.')
-                        ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Spot balance deficit detected')
-                        self.bot.save_state()
-                        continue
                     if ctx.native_sl_order_id and self.bot.has_keys and not Config.PAPER_TRADING:
                         sl_filled = await exec_engine.check_order_filled(symbol, ctx.native_sl_order_id)
                         if sl_filled:
+                            print(f'[RECONCILIATION] Native SL {ctx.native_sl_order_id} confirmed filled on exchange for {symbol}. Closing position.')
                             ctx.transition_to(OrderState.CLOSED, reason=f'Spot SL filled on exchange')
                             self.bot.in_position[symbol] = False
                             self.bot.position_side[symbol] = 'HOLD'
@@ -650,27 +646,40 @@ class ReconciliationEngine:
                             self.bot.take_profit_2r[symbol] = 0.0
                             self.bot.save_state()
                             ctx.native_sl_order_id = None
-                        else:
-                            exp_side = 'sell' if str(self.bot.position_side.get(symbol, 'LONG')).upper() == 'LONG' else 'buy'
-                            sl_status = await exec_engine.verify_order_active(
-                                symbol,
-                                ctx.native_sl_order_id,
-                                expected_side=exp_side,
-                                expected_qty=self.bot.position_size[symbol],
-                                expected_stop_price=self.bot.stop_loss[symbol]
-                            )
-                            if sl_status == 'UNKNOWN':
-                                ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='SL state UNKNOWN')
-                                self.bot.save_state()
-                            elif sl_status == 'INACTIVE':
-                                ctx.native_sl_order_id = None
-                                sl_order = await exec_engine.place_native_stop_loss(symbol, 'sell', self.bot.position_size[symbol], self.bot.stop_loss[symbol])
-                                if self._is_active_sl_order(sl_order):
-                                    ctx.native_sl_order_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
-                                    ctx.transition_to(OrderState.PROTECTED, reason='SL re-protected')
+                            continue
+
+                    if base_qty < (expected_size - 1e-5):
+                        if not self._should_skip_reconcile_close(ctx, symbol):
+                            print(f'[RECONCILIATION] [WARNING] Spot balance for {symbol} ({base_qty}) is less than expected bot size ({expected_size}). External transfer or manual sell? Quarantining.')
+                            ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Spot balance deficit detected')
+                            self.bot.save_state()
+                            continue
+
+                    if ctx.native_sl_order_id and self.bot.has_keys and not Config.PAPER_TRADING:
+                        exp_side = 'sell' if str(self.bot.position_side.get(symbol, 'LONG')).upper() == 'LONG' else 'buy'
+                        sl_status = await exec_engine.verify_order_active(
+                            symbol,
+                            ctx.native_sl_order_id,
+                            expected_side=exp_side,
+                            expected_qty=self.bot.position_size[symbol],
+                            expected_stop_price=self.bot.stop_loss[symbol]
+                        )
+                        if sl_status == 'UNKNOWN':
+                            ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='SL state UNKNOWN')
+                            self.bot.save_state()
+                        elif sl_status == 'INACTIVE':
+                            ctx.native_sl_order_id = None
+                            sl_order = await exec_engine.place_native_stop_loss(symbol, 'sell', self.bot.position_size[symbol], self.bot.stop_loss[symbol])
+                            if self._is_active_sl_order(sl_order):
+                                ctx.native_sl_order_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
+                                ctx.transition_to(OrderState.PROTECTED, reason='SL re-protected')
                             else:
-                                if ctx.state not in (OrderState.PROTECTED, OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.PARTIALLY_FILLED):
-                                    ctx.transition_to(OrderState.PROTECTED, reason='SL verified active')
+                                ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Failed to place replacement Native SL on spot')
+                                self.safe_mode_active = True
+                                self.bot.save_state()
+                        else:
+                            if ctx.state not in (OrderState.PROTECTED, OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.PARTIALLY_FILLED):
+                                ctx.transition_to(OrderState.PROTECTED, reason='SL verified active')
                     else:
                         if ctx.state not in (OrderState.PROTECTED, OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.PARTIALLY_FILLED):
                             ctx.transition_to(OrderState.PROTECTED, reason='Spot position active without Native SL')
@@ -744,11 +753,30 @@ class ReconciliationEngine:
 
             if self.bot.in_position.get(symbol, False):
                 expected_size = float(self.bot.position_size.get(symbol, 0.0))
+                if ctx.native_sl_order_id and self.bot.has_keys and not Config.PAPER_TRADING:
+                    sl_filled = await exec_engine.check_order_filled(symbol, ctx.native_sl_order_id)
+                    if sl_filled:
+                        print(f'[RECONCILIATION] CoinDCX Native SL {ctx.native_sl_order_id} confirmed filled for {symbol}. Closing position.')
+                        ctx.transition_to(OrderState.CLOSED, reason='CoinDCX Spot SL filled on exchange')
+                        self.bot.in_position[symbol] = False
+                        self.bot.position_side[symbol] = 'HOLD'
+                        self.bot.position_size[symbol] = 0.0
+                        await self._release_reserved_risk(ctx)
+                        self.bot.entry_price[symbol] = 0.0
+                        self.bot.stop_loss[symbol] = 0.0
+                        self.bot.take_profit[symbol] = 0.0
+                        self.bot.take_profit_1r[symbol] = 0.0
+                        self.bot.take_profit_2r[symbol] = 0.0
+                        self.bot.save_state()
+                        ctx.native_sl_order_id = None
+                        continue
+
                 if qty < (expected_size - 1e-5):
-                    print(f'[RECONCILIATION] [WARNING] CoinDCX Spot balance for {symbol} ({qty}) is less than expected bot size ({expected_size}). Quarantining.')
-                    ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='CoinDCX Spot balance deficit')
-                    self.bot.save_state()
-                    continue
+                    if not self._should_skip_reconcile_close(ctx, symbol):
+                        print(f'[RECONCILIATION] [WARNING] CoinDCX Spot balance for {symbol} ({qty}) is less than expected bot size ({expected_size}). Quarantining.')
+                        ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='CoinDCX Spot balance deficit')
+                        self.bot.save_state()
+                        continue
 
                 if ctx.native_sl_order_id and self.bot.has_keys and not Config.PAPER_TRADING:
                     exp_side = 'sell' if str(self.bot.position_side.get(symbol, 'LONG')).upper() == 'LONG' else 'buy'
@@ -768,6 +796,10 @@ class ReconciliationEngine:
                         if self._is_active_sl_order(sl_order):
                             ctx.native_sl_order_id = str(sl_order['id']) if isinstance(sl_order, dict) else str(sl_order.exchange_order_id)
                             ctx.transition_to(OrderState.PROTECTED, reason='CoinDCX SL re-protected')
+                        else:
+                            ctx.transition_to(OrderState.EXECUTION_UNKNOWN, reason='Failed to place replacement Native SL on CoinDCX spot')
+                            self.safe_mode_active = True
+                            self.bot.save_state()
                     else:
                         if ctx.state not in (OrderState.PROTECTED, OrderState.TP1_LOCKED, OrderState.TP2_LOCKED, OrderState.RUNNER_ACTIVE, OrderState.CLOSING, OrderState.EXIT_UNKNOWN, OrderState.PARTIALLY_FILLED):
                             ctx.transition_to(OrderState.PROTECTED, reason='CoinDCX SL verified active')

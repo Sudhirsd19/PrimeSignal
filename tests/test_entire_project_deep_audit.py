@@ -37,6 +37,7 @@ class EntireProjectDeepAuditTest(unittest.TestCase):
 
     def setUp(self):
         # Generate realistic 200-bar OHLCV data
+        np.random.seed(42)
         n = 200
         dates = pd.date_range("2026-01-01", periods=n, freq="15min")
         prices = 100.0 + np.cumsum(np.random.normal(0, 0.5, n))

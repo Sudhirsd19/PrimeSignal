@@ -351,7 +351,8 @@ class RealTimeDataPipeline:
                                         if backfilled:
                                             new_candles = [c for c in backfilled if c[0] > last_ts]
                                             self.ltf_candles[symbol].extend(new_candles)
-                                            self.ltf_candles[symbol] = self.ltf_candles[symbol][-500:]
+                                            max_bars = self.get_target_ltf_bars(Config.LTF_TIMEFRAME)
+                                            self.ltf_candles[symbol] = self.ltf_candles[symbol][-max_bars:]
                                     except Exception as e:
                                         print(f"[DATA] ⛔ Backfill failed on {symbol}: {e}. Skipping this candle to maintain continuous stream.")
                                         continue
@@ -418,7 +419,8 @@ class RealTimeDataPipeline:
                 cache_list.insert(0, new_candle)
             
         # Keep cache length bounded to prevent memory issues
-        if len(cache_list) > 1000:
+        max_cache_len = max(1000, self.get_target_ltf_bars(getattr(Config, 'LTF_TIMEFRAME', '15m')))
+        if len(cache_list) > max_cache_len:
             cache_list.pop(0)
 
     def _handle_callback_exception(self, task):
@@ -501,6 +503,7 @@ class RealTimeDataPipeline:
                 merged.append(c)
         merged.sort(key=lambda c: c[0])
         # Keep bounded
-        if len(merged) > 1000:
-            merged = merged[-1000:]
+        max_bars = max(1000, RealTimeDataPipeline.get_target_ltf_bars(getattr(Config, 'LTF_TIMEFRAME', '15m')))
+        if len(merged) > max_bars:
+            merged = merged[-max_bars:]
         return merged

@@ -377,57 +377,114 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                     latest_bearish_choch = idx
 
         def is_zone_structurally_valid(zone, zone_type):
-            """Check if a zone hasn't been breached beyond its distal boundary."""
+            """Check if a zone hasn't been breached or structurally invalidated by counter-BOS."""
             if zone.get('invalidated', False):
                 return False
+            zone_time = zone.get('timestamp')
+            if zone_time is not None:
+                try:
+                    if zone_type == 'BULLISH' and latest_bearish_bos_idx is not None:
+                        bos_time = ltf_df.index[latest_bearish_bos_idx]
+                        if bos_time > zone_time:
+                            return False
+                    elif zone_type == 'BEARISH' and latest_bullish_bos_idx is not None:
+                        bos_time = ltf_df.index[latest_bullish_bos_idx]
+                        if bos_time > zone_time:
+                            return False
+                except Exception:
+                    pass
             return True
 
-        # 1. Search HTF Institutional Zones (with LTF structural cross-validation — AUD-H3 fix)
+        # 1. Search HTF Institutional Zones that contain price, or record newest
+        newest_htf_bull_ob = None
+        newest_htf_bear_ob = None
         for idx in range(len(htf_df) - 2, max(0, len(htf_df) - 2 - Config.MAX_ZONE_AGE_CANDLES), -1):
             ob = htf_obs.iloc[idx]
-            if ob:
-                if ob['type'] == 'BULLISH' and is_zone_active(ob) and active_bullish_ob is None:
-                    if is_zone_structurally_valid(ob, 'BULLISH'):
+            if ob and is_zone_active(ob) and is_zone_structurally_valid(ob, ob['type']):
+                if ob['type'] == 'BULLISH':
+                    if in_bounds(curr_price, ob['bottom'], ob['top']):
                         active_bullish_ob = ob
-                elif ob['type'] == 'BEARISH' and is_zone_active(ob) and active_bearish_ob is None:
-                    if is_zone_structurally_valid(ob, 'BEARISH'):
+                        break
+                    elif newest_htf_bull_ob is None:
+                        newest_htf_bull_ob = ob
+                elif ob['type'] == 'BEARISH':
+                    if in_bounds(curr_price, ob['bottom'], ob['top']):
                         active_bearish_ob = ob
+                        break
+                    elif newest_htf_bear_ob is None:
+                        newest_htf_bear_ob = ob
 
-        # 2. Search LTF Zones if HTF not already found
+        # 2. Search LTF Zones: If price is inside an LTF zone, prioritize it over distant HTF zone
+        newest_ltf_bull_ob = None
+        newest_ltf_bear_ob = None
         for idx in range(len(ltf_df) - 2, max(0, len(ltf_df) - 2 - Config.MAX_ZONE_AGE_CANDLES), -1):
             ob = obs.iloc[idx]
-            if ob:
-                if ob['type'] == 'BULLISH' and is_zone_active(ob) and active_bullish_ob is None:
-                    if is_zone_structurally_valid(ob, 'BULLISH'):
-                        active_bullish_ob = ob
-                elif ob['type'] == 'BEARISH' and is_zone_active(ob) and active_bearish_ob is None:
-                    if is_zone_structurally_valid(ob, 'BEARISH'):
-                        active_bearish_ob = ob
+            if ob and is_zone_active(ob) and is_zone_structurally_valid(ob, ob['type']):
+                if ob['type'] == 'BULLISH':
+                    if in_bounds(curr_price, ob['bottom'], ob['top']):
+                        if active_bullish_ob is None:
+                            active_bullish_ob = ob
+                            break
+                    elif newest_ltf_bull_ob is None:
+                        newest_ltf_bull_ob = ob
+                elif ob['type'] == 'BEARISH':
+                    if in_bounds(curr_price, ob['bottom'], ob['top']):
+                        if active_bearish_ob is None:
+                            active_bearish_ob = ob
+                            break
+                    elif newest_ltf_bear_ob is None:
+                        newest_ltf_bear_ob = ob
+
+        if active_bullish_ob is None:
+            active_bullish_ob = newest_htf_bull_ob or newest_ltf_bull_ob
+        if active_bearish_ob is None:
+            active_bearish_ob = newest_htf_bear_ob or newest_ltf_bear_ob
 
         active_bullish_fvg = None
         active_bearish_fvg = None
 
-        # 1. Search HTF FVGs (with LTF structural cross-validation — AUD-H3 fix)
+        newest_htf_bull_fvg = None
+        newest_htf_bear_fvg = None
         for idx in range(len(htf_df) - 2, max(0, len(htf_df) - 2 - Config.MAX_ZONE_AGE_CANDLES), -1):
             fvg = htf_fvgs.iloc[idx]
-            if fvg:
-                if fvg['type'] == 'BULLISH' and is_zone_active(fvg) and active_bullish_fvg is None:
-                    if is_zone_structurally_valid(fvg, 'BULLISH'):
+            if fvg and is_zone_active(fvg) and is_zone_structurally_valid(fvg, fvg['type']):
+                if fvg['type'] == 'BULLISH':
+                    if in_bounds(curr_price, fvg['bottom'], fvg['top']):
                         active_bullish_fvg = fvg
-                elif fvg['type'] == 'BEARISH' and is_zone_active(fvg) and active_bearish_fvg is None:
-                    if is_zone_structurally_valid(fvg, 'BEARISH'):
+                        break
+                    elif newest_htf_bull_fvg is None:
+                        newest_htf_bull_fvg = fvg
+                elif fvg['type'] == 'BEARISH':
+                    if in_bounds(curr_price, fvg['bottom'], fvg['top']):
                         active_bearish_fvg = fvg
+                        break
+                    elif newest_htf_bear_fvg is None:
+                        newest_htf_bear_fvg = fvg
 
-        # 2. Search LTF FVGs
+        newest_ltf_bull_fvg = None
+        newest_ltf_bear_fvg = None
         for idx in range(len(ltf_df) - 2, max(0, len(ltf_df) - 2 - Config.MAX_ZONE_AGE_CANDLES), -1):
             fvg = fvgs.iloc[idx]
-            if fvg:
-                if fvg['type'] == 'BULLISH' and is_zone_active(fvg) and active_bullish_fvg is None:
-                    if is_zone_structurally_valid(fvg, 'BULLISH'):
-                        active_bullish_fvg = fvg
-                elif fvg['type'] == 'BEARISH' and is_zone_active(fvg) and active_bearish_fvg is None:
-                    if is_zone_structurally_valid(fvg, 'BEARISH'):
-                        active_bearish_fvg = fvg
+            if fvg and is_zone_active(fvg) and is_zone_structurally_valid(fvg, fvg['type']):
+                if fvg['type'] == 'BULLISH':
+                    if in_bounds(curr_price, fvg['bottom'], fvg['top']):
+                        if active_bullish_fvg is None:
+                            active_bullish_fvg = fvg
+                            break
+                    elif newest_ltf_bull_fvg is None:
+                        newest_ltf_bull_fvg = fvg
+                elif fvg['type'] == 'BEARISH':
+                    if in_bounds(curr_price, fvg['bottom'], fvg['top']):
+                        if active_bearish_fvg is None:
+                            active_bearish_fvg = fvg
+                            break
+                    elif newest_ltf_bear_fvg is None:
+                        newest_ltf_bear_fvg = fvg
+
+        if active_bullish_fvg is None:
+            active_bullish_fvg = newest_htf_bull_fvg or newest_ltf_bull_fvg
+        if active_bearish_fvg is None:
+            active_bearish_fvg = newest_htf_bear_fvg or newest_ltf_bear_fvg
 
         if htf_trend == 'BULLISH':
             in_zone = False
