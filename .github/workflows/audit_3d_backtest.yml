@@ -1,0 +1,167 @@
+name: PrimeSignal 3-day audit backtest
+
+on:
+  push:
+    branches:
+      - audit/3d-backtest-2026-09-25
+
+permissions:
+  contents: write
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact audit commit
+        uses: actions/checkout@v4
+        with:
+          ref: audit/3d-backtest-2026-09-25
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Fetch reproducible 30-day data for strategy warmup
+        run: python fetch_backtest_data.py --days 30
+
+      - name: Run exact recent 3-calendar-day evaluation
+        run: |
+          python - <<'PY'
+          import json, math, os
+          import pandas as pd
+
+          from config import Config
+          from strategies.multi_timeframe import MultiTimeframeSMCStrategy
+          from backtester.backtester import BacktestEngine
+
+          ROOT = os.getcwd()
+          with open("backtest_manifest.json", "r", encoding="utf-8") as f:
+              manifest = json.load(f)
+
+          end_ts = pd.Timestamp(manifest["window"]["end_utc"], tz="UTC")
+          start_ts = end_ts - pd.Timedelta(days=3)
+
+          results = []
+          for pair, meta in manifest["pairs"].items():
+              if meta.get("status") != "ok":
+                  continue
+              with open(meta["ltf_file"], "r", encoding="utf-8") as f:
+                  ltf = json.load(f)
+              with open(meta["htf_file"], "r", encoding="utf-8") as f:
+                  htf = json.load(f)
+
+              engine = BacktestEngine(
+                  strategy=MultiTimeframeSMCStrategy(),
+                  risk_manager=None,
+              )
+              res = engine.run(htf, ltf, initial_balance=1000.0)
+              if not res:
+                  continue
+
+              eq = pd.DataFrame(engine.equity_curve)
+              if not eq.empty:
+                  eq["timestamp"] = pd.to_datetime(eq["timestamp"], utc=True)
+                  eq = eq.sort_values("timestamp")
+                  pre = eq[eq["timestamp"] <= start_ts]
+                  post = eq[eq["timestamp"] <= end_ts]
+                  start_eq = float(pre.iloc[-1]["equity"]) if not pre.empty else 1000.0
+                  end_eq = float(post.iloc[-1]["equity"]) if not post.empty else float(eq.iloc[-1]["equity"])
+              else:
+                  start_eq = 1000.0
+                  end_eq = float(res["final_balance"])
+
+              target_trades = []
+              for t in res.get("trade_list", []):
+                  et = pd.Timestamp(t["entry_time"], tz="UTC") if not isinstance(t["entry_time"], pd.Timestamp) else t["entry_time"]
+                  xt = pd.Timestamp(t["exit_time"], tz="UTC") if not isinstance(t["exit_time"], pd.Timestamp) else t["exit_time"]
+                  if start_ts <= et < end_ts and xt <= end_ts:
+                      target_trades.append(t)
+
+              wins = sum(1 for t in target_trades if float(t.get("pnl_usdt", 0.0)) > 0)
+              losses = sum(1 for t in target_trades if float(t.get("pnl_usdt", 0.0)) < 0)
+              be = len(target_trades) - wins - losses
+              pnl = sum(float(t.get("pnl_usdt", 0.0)) for t in target_trades)
+              fees = sum(float(t.get("total_fees", 0.0)) for t in target_trades)
+              gp = sum(float(t.get("pnl_usdt", 0.0)) for t in target_trades if float(t.get("pnl_usdt", 0.0)) > 0)
+              gl = abs(sum(float(t.get("pnl_usdt", 0.0)) for t in target_trades if float(t.get("pnl_usdt", 0.0)) < 0))
+              pf = gp / gl if gl > 0 else (float("inf") if gp > 0 else 0.0)
+
+              results.append({
+                  "pair": pair,
+                  "start_equity": start_eq,
+                  "end_equity": end_eq,
+                  "equity_change": end_eq - start_eq,
+                  "equity_return_pct": ((end_eq - start_eq) / start_eq * 100.0) if start_eq else 0.0,
+                  "trades": len(target_trades),
+                  "wins": wins,
+                  "losses": losses,
+                  "breakevens": be,
+                  "win_rate": (wins / len(target_trades) * 100.0) if target_trades else 0.0,
+                  "net_pnl": pnl,
+                  "fees": fees,
+                  "profit_factor": pf,
+                  "full_window_trades": int(res.get("total_trades", 0)),
+                  "full_window_return_pct": float(res.get("total_return_pct", 0.0)),
+              })
+
+          df = pd.DataFrame(results)
+          total_start = float(df["start_equity"].sum()) if len(df) else 0.0
+          total_end = float(df["end_equity"].sum()) if len(df) else 0.0
+          total_pnl = float(df["net_pnl"].sum()) if len(df) else 0.0
+          total_trades = int(df["trades"].sum()) if len(df) else 0
+          total_wins = int(df["wins"].sum()) if len(df) else 0
+          total_losses = int(df["losses"].sum()) if len(df) else 0
+          total_be = int(df["breakevens"].sum()) if len(df) else 0
+          gross_p = float(df.loc[df["net_pnl"] > 0, "net_pnl"].sum()) if len(df) else 0.0
+          gross_l = abs(float(df.loc[df["net_pnl"] < 0, "net_pnl"].sum())) if len(df) else 0.0
+          portfolio_pf = gross_p / gross_l if gross_l > 0 else (float("inf") if gross_p > 0 else 0.0)
+
+          with open("three_day_backtest_result.txt", "w", encoding="utf-8") as out:
+              out.write("PrimeSignal — Exact Recent 3-Calendar-Day Backtest\n")
+              out.write("=" * 90 + "\n")
+              out.write(f"HEAD: 09bbbfb96423eb7869a1f7a9fb81d2e01b608e30\n")
+              out.write(f"Window UTC: {start_ts.isoformat()} -> {end_ts.isoformat()}\n")
+              out.write(f"Warmup: 30-day market history; evaluation metrics restricted to trades entered in the 3-day window and closed by window end.\n")
+              out.write(f"Config hash: {manifest.get('risk_config_hash','UNKNOWN')}\n")
+              out.write(f"Venue/type: {Config.TRADING_VENUE}/{Config.EXCHANGE_TYPE}; shorts={'ON' if Config.venue_supports_short() else 'OFF'}\n")
+              out.write(f"Fee per side: {Config.FEE_RATE*100:.4f}%\n")
+              out.write(f"Pairs with data: {len(df)} / {len(manifest.get('pairs',{}))}\n\n")
+              out.write("PORTFOLIO (sum of per-pair isolated 1000-USDT test accounts)\n")
+              out.write("-" * 90 + "\n")
+              out.write(f"Start equity : {total_start:,.2f}\n")
+              out.write(f"End equity   : {total_end:,.2f}\n")
+              out.write(f"Equity change: {total_end-total_start:+,.2f}\n")
+              out.write(f"Return       : {((total_end-total_start)/total_start*100.0) if total_start else 0.0:+.2f}%\n")
+              out.write(f"Trades       : {total_trades} ({total_wins}W / {total_losses}L / {total_be}BE)\n")
+              out.write(f"Win rate     : {(total_wins/total_trades*100.0) if total_trades else 0.0:.2f}%\n")
+              out.write(f"Profit factor: {('inf' if portfolio_pf == float('inf') else f'{portfolio_pf:.2f}')}\n")
+              out.write(f"Net trade PnL: {total_pnl:+,.2f} USDT\n")
+              out.write(f"Fees         : {float(df['fees'].sum()) if len(df) else 0.0:,.2f} USDT\n\n")
+              out.write("PAIR BREAKDOWN\n")
+              out.write("-" * 90 + "\n")
+              if len(df):
+                  for row in df.sort_values("net_pnl", ascending=False).itertuples(index=False):
+                      pf_s = "inf" if row.profit_factor == float("inf") else f"{row.profit_factor:.2f}"
+                      out.write(f"{row.pair:<12} trades={row.trades:>2} W/L/BE={row.wins}/{row.losses}/{row.breakevens} win={row.win_rate:>5.1f}% pnl={row.net_pnl:>+9.2f} PF={pf_s:>5} eqret={row.equity_return_pct:>+6.2f}%\n")
+              else:
+                  out.write("No closed trades entered during the 3-day window.\n")
+
+              out.write("\nIMPORTANT METHODOLOGY NOTE\n")
+              out.write("This is not a synthetic 3-day cold-start run. The strategy is replayed with 30 days of warmup so its 200 EMA/SMC/ML-adjacent context is available. The reported trade window is the final 3 complete UTC calendar days.\n")
+
+          print(open("three_day_backtest_result.txt", "r", encoding="utf-8").read())
+          PY
+
+      - name: Commit reproducible result to audit branch
+        run: |
+          git config user.name "PrimeSignal Audit"
+          git config user.email "actions@github.com"
+          git add backtest_manifest.json data/ three_day_backtest_result.txt
+          git commit -m "audit: record exact 3-day backtest result" || exit 0
+          git push origin HEAD:audit/3d-backtest-2026-09-25
