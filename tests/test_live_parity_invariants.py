@@ -61,10 +61,14 @@ def permissive_config():
         "ADX_MIN_THRESHOLD": Config.ADX_MIN_THRESHOLD,
         "ENABLE_WEEKEND_FILTER": Config.ENABLE_WEEKEND_FILTER,
         "ENABLE_BB_SQUEEZE_FILTER": Config.ENABLE_BB_SQUEEZE_FILTER,
+        "REQUIRE_EMA_STACK": getattr(Config, "REQUIRE_EMA_STACK", False),
+        "REQUIRE_VOLUME_CONFIRMATION": getattr(Config, "REQUIRE_VOLUME_CONFIRMATION", False),
     }
     Config.ADX_MIN_THRESHOLD = 8.0
     Config.ENABLE_WEEKEND_FILTER = False
     Config.ENABLE_BB_SQUEEZE_FILTER = False
+    Config.REQUIRE_EMA_STACK = False
+    Config.REQUIRE_VOLUME_CONFIRMATION = False
     return saved
 
 

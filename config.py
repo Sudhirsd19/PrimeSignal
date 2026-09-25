@@ -70,15 +70,18 @@ class Config:
     MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "6"))
     TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015")) # Deprecated in favor of ATR
     TRAILING_ATR_MULT = float(os.getenv("TRAILING_ATR_MULT", "1.5"))
-    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.5")) # Breakeven Lock activation at +1.5R
-    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "2.0")) # Single Target: 2.0R
-    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.0")) # Single Target: 2.0R
+    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.0")) # Breakeven Lock activation at +1.0R
+    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.4")) # Target 1: 1.4R (High Win-Rate 60%+)
+    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.2")) # Target 2: 2.2R (Remaining runner)
     ENABLE_RELAXED_MODE = os.getenv("ENABLE_RELAXED_MODE", "False").lower() in ("true", "1", "yes") # Strict macro-aligned setups by default
     MIN_SL_PCT = float(os.getenv("MIN_SL_PCT", "0.012")) # Minimum 1.2% SL distance for crypto noise
     MAX_SL_PCT = float(os.getenv("MAX_SL_PCT", "0.025")) # Maximum 2.5% SL distance
-    TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "1.00")) # 100% full profit booking at 2.0R
+    TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "0.65")) # 65% profit booking at TP1 (1.4R)
     # Fraction of the REMAINING position booked at TP2.
-    TP2_REMAINING_SCALE_PCT = float(os.getenv("TP2_REMAINING_SCALE_PCT", "0.0"))
+    TP2_REMAINING_SCALE_PCT = float(os.getenv("TP2_REMAINING_SCALE_PCT", "0.35")) # 35% booked at TP2 (2.2R)
+    MIN_VOLUME_SPIKE_MULT = float(os.getenv("MIN_VOLUME_SPIKE_MULT", "1.15")) # 1.15x 20-bar volume spike confirmation
+    REQUIRE_EMA_STACK = os.getenv("REQUIRE_EMA_STACK", "True").lower() in ("true", "1", "yes")
+    REQUIRE_VOLUME_CONFIRMATION = os.getenv("REQUIRE_VOLUME_CONFIRMATION", "True").lower() in ("true", "1", "yes")
     
     # Triple-Barrier Label constants (used in ml/confirmation.py FIX-B)
     # ML_LABEL_SL_PCT mirrors the strategy's hard 0.5% minimum stop distance.

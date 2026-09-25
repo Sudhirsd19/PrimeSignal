@@ -160,7 +160,14 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
         _ltf_ema21 = _ltf_ema21_series.iloc[target_idx]
         _ltf_ema50 = _ltf_ema50_series.iloc[target_idx]
         _ltf_close = ltf_df['close'].iloc[target_idx]
-        if htf_trend == 'BULLISH' and _ltf_ema9 < _ltf_ema21 and _ltf_close < _ltf_ema50:
+        if getattr(Config, 'REQUIRE_EMA_STACK', True) and not relaxed:
+            if htf_trend == 'BULLISH' and not (_ltf_close > _ltf_ema9 and _ltf_ema9 > _ltf_ema21):
+                metadata['reason'] = f"LTF EMA Stack Misalignment: Price({_ltf_close:.4f}) > EMA9({_ltf_ema9:.4f}) > EMA21({_ltf_ema21:.4f}) required"
+                return "HOLD", metadata
+            elif htf_trend == 'BEARISH' and allow_short and not (_ltf_close < _ltf_ema9 and _ltf_ema9 < _ltf_ema21):
+                metadata['reason'] = f"LTF EMA Stack Misalignment: Price({_ltf_close:.4f}) < EMA9({_ltf_ema9:.4f}) < EMA21({_ltf_ema21:.4f}) required"
+                return "HOLD", metadata
+        elif htf_trend == 'BULLISH' and _ltf_ema9 < _ltf_ema21 and _ltf_close < _ltf_ema50:
             metadata['reason'] = f"LTF Trend Misalignment: EMA9({_ltf_ema9:.4f}) < EMA21({_ltf_ema21:.4f}), Price({_ltf_close:.4f}) < EMA50({_ltf_ema50:.4f})"
             return "HOLD", metadata
         elif htf_trend == 'BEARISH' and allow_short and _ltf_ema9 > _ltf_ema21 and _ltf_close > _ltf_ema50:
@@ -675,6 +682,15 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
                 valid_entry = False
                 metadata['reason'] = "Rejected: Setup candle is bearish/dumping (no bullish confirmation)"
 
+            # Volume Spike Confirmation: Breakout candle must have volume >= min_vol_mult x 20-bar average
+            if valid_entry and not relaxed and getattr(Config, 'REQUIRE_VOLUME_CONFIRMATION', True):
+                avg_vol_20 = ltf_df['volume'].rolling(20).mean().iloc[target_idx] if ('volume' in ltf_df.columns and len(ltf_df) >= 20) else 1.0
+                trigger_vol = ltf_df.iloc[target_idx]['volume'] if 'volume' in ltf_df.columns else 1.0
+                min_vol_mult = float(getattr(Config, 'MIN_VOLUME_SPIKE_MULT', 1.15))
+                if 'volume' in ltf_df.columns and avg_vol_20 > 0 and trigger_vol < min_vol_mult * avg_vol_20:
+                    valid_entry = False
+                    metadata['reason'] = f"Rejected: Low volume spike ({trigger_vol:.1f} < {min_vol_mult:.2f}x 20-bar avg {avg_vol_20:.1f})"
+
             # Anti-Exhaustion Filter: Prevent buying the top of an exhausted impulse (RSI >= 65 strict / 68 relaxed)
             max_rsi_long = 65.0 if not relaxed else 68.0
             if valid_entry and curr_rsi >= max_rsi_long:
@@ -920,6 +936,15 @@ class MultiTimeframeSMCStrategy(BaseStrategy):
             if valid_entry and not candle_bearish:
                 valid_entry = False
                 metadata['reason'] = "Rejected: Setup candle is bullish/pumping (no bearish confirmation)"
+
+            # Volume Spike Confirmation: Breakdown candle must have volume >= min_vol_mult x 20-bar average
+            if valid_entry and not relaxed and getattr(Config, 'REQUIRE_VOLUME_CONFIRMATION', True):
+                avg_vol_20 = ltf_df['volume'].rolling(20).mean().iloc[target_idx] if ('volume' in ltf_df.columns and len(ltf_df) >= 20) else 1.0
+                trigger_vol = ltf_df.iloc[target_idx]['volume'] if 'volume' in ltf_df.columns else 1.0
+                min_vol_mult = float(getattr(Config, 'MIN_VOLUME_SPIKE_MULT', 1.15))
+                if 'volume' in ltf_df.columns and avg_vol_20 > 0 and trigger_vol < min_vol_mult * avg_vol_20:
+                    valid_entry = False
+                    metadata['reason'] = f"Rejected: Low volume spike ({trigger_vol:.1f} < {min_vol_mult:.2f}x 20-bar avg {avg_vol_20:.1f})"
 
             # Anti-Exhaustion Filter: Prevent shorting the bottom of an oversold dump (RSI <= 35 strict / 32 relaxed)
             min_rsi_short = 35.0 if not relaxed else 32.0
