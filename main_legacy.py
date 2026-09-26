@@ -2149,8 +2149,21 @@ class PrimeSignalBot:
                                             await self.exit_position(symbol, "STAGNANT_TIME_EXIT")
                                             continue
 
-                            # 2. ⚡ EARLY STRUCTURAL EXIT: Cut loss early if 15m structure breaks against LONG
-                            if getattr(Config, 'ENABLE_STRUCTURAL_EXIT', False) and not self.partial_tp_taken[symbol] and len(ltf_df) >= 3:
+                            # 2. ⚡ ADVERSE WHALE CONTAGION BREAKER (BTC Flash Dump Guard)
+                            if getattr(Config, 'ENABLE_WHALE_BREAKER', True) and symbol != "BTC/USDT" and not self.partial_tp_taken[symbol]:
+                                btc_ltf = self.pipeline.ltf_candles.get("BTC/USDT")
+                                is_adverse, btc_dump_reason = self.btc_anchor.check_adverse_btc_flow(
+                                    symbol, "LONG", btc_ltf, drop_threshold=getattr(Config, 'BTC_ADVERSE_DROP_THRESHOLD', 0.0035)
+                                )
+                                if is_adverse and curr_price < self.entry_price[symbol]:
+                                    unrealized_loss_r = (self.entry_price[symbol] - curr_price) / r_dist if r_dist > 0 else 0.0
+                                    add_log_message(f"[{symbol}] 🚨 WHALE CIRCUIT BREAKER: {btc_dump_reason}. Bailing out early at -{unrealized_loss_r:.2f}R to protect capital.")
+                                    await self.notifier.send_message(f"🚨 *WHALE CIRCUIT BREAKER ({symbol})*\n{btc_dump_reason}.\nActive LONG closed early at -{unrealized_loss_r:.2f}R to prevent catastrophic dump.")
+                                    await self.exit_position(symbol, "WHALE_CIRCUIT_BREAKER")
+                                    continue
+
+                            # 3. ⚡ EARLY STRUCTURAL EXIT: Cut loss early if 15m structure breaks against LONG
+                            if getattr(Config, 'ENABLE_STRUCTURAL_EXIT', True) and not self.partial_tp_taken[symbol] and len(ltf_df) >= 3:
                                 last_c = ltf_df.iloc[-1]
                                 prev_c = ltf_df.iloc[-2]
                                 ema_20 = calculate_ema(ltf_df, 20).iloc[-1] if len(ltf_df) >= 20 else 0.0
@@ -2460,7 +2473,20 @@ class PrimeSignalBot:
                                             await self.exit_position(symbol, "STAGNANT_TIME_EXIT")
                                             continue
 
-                            # 2. ⚡ EARLY STRUCTURAL EXIT: Cut loss early if 15m structure breaks against SHORT
+                            # 2. ⚡ ADVERSE WHALE CONTAGION BREAKER (BTC Flash Surge Guard)
+                            if getattr(Config, 'ENABLE_WHALE_BREAKER', True) and symbol != "BTC/USDT" and not self.partial_tp_taken[symbol]:
+                                btc_ltf = self.pipeline.ltf_candles.get("BTC/USDT")
+                                is_adverse, btc_pump_reason = self.btc_anchor.check_adverse_btc_flow(
+                                    symbol, "SHORT", btc_ltf, pump_threshold=getattr(Config, 'BTC_ADVERSE_PUMP_THRESHOLD', 0.0035)
+                                )
+                                if is_adverse and curr_price > self.entry_price[symbol]:
+                                    unrealized_loss_r = (curr_price - self.entry_price[symbol]) / r_dist if r_dist > 0 else 0.0
+                                    add_log_message(f"[{symbol}] 🚨 WHALE CIRCUIT BREAKER: {btc_pump_reason}. Bailing out early at -{unrealized_loss_r:.2f}R to protect capital.")
+                                    await self.notifier.send_message(f"🚨 *WHALE CIRCUIT BREAKER ({symbol})*\n{btc_pump_reason}.\nActive SHORT closed early at -{unrealized_loss_r:.2f}R to prevent catastrophic squeeze.")
+                                    await self.exit_position(symbol, "WHALE_CIRCUIT_BREAKER")
+                                    continue
+
+                            # 3. ⚡ EARLY STRUCTURAL EXIT: Cut loss early if 15m structure breaks against SHORT
                             if getattr(Config, 'ENABLE_STRUCTURAL_EXIT', True) and not self.partial_tp_taken[symbol] and len(ltf_df) >= 3:
                                 last_c = ltf_df.iloc[-1]
                                 prev_c = ltf_df.iloc[-2]

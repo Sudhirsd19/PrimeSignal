@@ -148,3 +148,45 @@ class BTCAnchorEngine:
             return True, f"Strong BTC Bearish Confluence (1h Trend: BEAR, RSI: {btc_ltf_rsi:.1f})", 0.5
 
         return True, f"BTC Neutral/Aligned (Trend: {btc_htf_trend}, RSI: {btc_ltf_rsi:.1f})", 0.0
+
+    def check_adverse_btc_flow(
+        self,
+        symbol: str,
+        side: str,
+        btc_ltf_data: Any,
+        drop_threshold: float = 0.0035,
+        pump_threshold: float = 0.0035,
+    ) -> Tuple[bool, str]:
+        """
+        Active Position Guard: Inspects intra-candle and recent closed candle BTC price action
+        to detect adverse whale moves that threaten open altcoin positions.
+        """
+        clean_sym = symbol.replace("/", "").replace("_", "").replace("-", "").upper()
+        if clean_sym.startswith("BTC") and not clean_sym.startswith("BTCST"):
+            return False, "Self-reference (BTC)"
+
+        if btc_ltf_data is None:
+            return False, "BTC LTF data unavailable"
+
+        btc_ltf_df = prepare_dataframe(btc_ltf_data) if isinstance(btc_ltf_data, list) else btc_ltf_data
+        if not isinstance(btc_ltf_df, pd.DataFrame) or len(btc_ltf_df) < 5:
+            return False, "Insufficient BTC LTF candles"
+
+        # Check current live candle and last closed candle
+        for idx in [-1, -2]:
+            if abs(idx) > len(btc_ltf_df):
+                continue
+            candle = btc_ltf_df.iloc[idx]
+            c_open = float(candle.get('open', 0.0))
+            c_close = float(candle.get('close', 0.0))
+            if c_open > 0:
+                ret = (c_close - c_open) / c_open
+                if side == "LONG" and ret <= -drop_threshold:
+                    pct = abs(ret) * 100.0
+                    return True, f"BTC Flash Whale Dump (-{pct:.2f}% in 15m)"
+                elif side == "SHORT" and ret >= pump_threshold:
+                    pct = ret * 100.0
+                    return True, f"BTC Flash Whale Surge (+{pct:.2f}% in 15m)"
+
+        return False, "BTC stable"
+

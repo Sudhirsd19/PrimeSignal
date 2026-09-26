@@ -100,8 +100,14 @@ class Config:
     STAGNANT_MAX_R_DISTANCE = float(os.getenv("STAGNANT_MAX_R_DISTANCE", "0.25")) # exit if within ±0.25R
     
     # 2. Early Structural Invalidation Exit
-    ENABLE_STRUCTURAL_EXIT = os.getenv("ENABLE_STRUCTURAL_EXIT", "False").lower() in ("true", "1", "yes") # Disabled by default to avoid stop-hunt panic exits
+    ENABLE_STRUCTURAL_EXIT = os.getenv("ENABLE_STRUCTURAL_EXIT", "True").lower() in ("true", "1", "yes")
     EARLY_EXIT_MAX_LOSS_R = float(os.getenv("EARLY_EXIT_MAX_LOSS_R", "0.45")) # Cut trade at max -0.45R instead of full -1.0R
+    
+    # 2b. Adverse Whale Contagion / Toxic Flow Circuit Breaker
+    ENABLE_WHALE_BREAKER = os.getenv("ENABLE_WHALE_BREAKER", "True").lower() in ("true", "1", "yes")
+    BTC_ADVERSE_DROP_THRESHOLD = float(os.getenv("BTC_ADVERSE_DROP_THRESHOLD", "0.0035")) # 0.35% drop in 15m
+    BTC_ADVERSE_PUMP_THRESHOLD = float(os.getenv("BTC_ADVERSE_PUMP_THRESHOLD", "0.0035")) # 0.35% pump in 15m
+
     
     # 3. Funding Rate & Crowded Sentiment Filter
     ENABLE_FUNDING_RATE_FILTER = os.getenv("ENABLE_FUNDING_RATE_FILTER", "True").lower() in ("true", "1", "yes")
