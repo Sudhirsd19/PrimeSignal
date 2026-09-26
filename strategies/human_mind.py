@@ -121,7 +121,7 @@ class HumanMindScalperStrategy(BaseStrategy):
         body = abs(curr_c - curr_o)
         lower_wick = min(curr_c, curr_o) - curr_l
         upper_wick = curr_h - max(curr_c, curr_o)
-        is_volume_confirmed = curr_v >= (curr_vol_ma * 1.20)
+        is_volume_confirmed = curr_v >= (curr_vol_ma * 1.25)
 
         # Volume Delta approximation: closed position relative to candle range
         candle_range = max(curr_h - curr_l, 1e-9)
@@ -175,7 +175,7 @@ class HumanMindScalperStrategy(BaseStrategy):
             metadata['debug_checks']['pullback'] = 'PASS'
 
             # RSI check (40 - 62)
-            if not (38.0 <= curr_rsi <= 63.0):
+            if not (40.0 <= curr_rsi <= 62.0):
                 metadata['reason'] = f"RSI out of bounds for Long entry ({curr_rsi:.1f})"
                 return "HOLD", metadata
 
@@ -189,7 +189,7 @@ class HumanMindScalperStrategy(BaseStrategy):
             metadata['debug_checks']['trigger'] = 'PASS'
 
             if not is_volume_confirmed:
-                metadata['reason'] = f"Insufficient volume confirmation ({curr_v:.1f} < {curr_vol_ma * 1.20:.1f})"
+                metadata['reason'] = f"Insufficient volume confirmation ({curr_v:.1f} < {curr_vol_ma * 1.25:.1f})"
                 return "HOLD", metadata
             metadata['debug_checks']['volume'] = 'PASS'
 
@@ -249,7 +249,7 @@ class HumanMindScalperStrategy(BaseStrategy):
             metadata['debug_checks']['pullback'] = 'PASS'
 
             # RSI check (38 - 60)
-            if not (37.0 <= curr_rsi <= 62.0):
+            if not (38.0 <= curr_rsi <= 60.0):
                 metadata['reason'] = f"RSI out of bounds for Short entry ({curr_rsi:.1f})"
                 return "HOLD", metadata
 
@@ -263,7 +263,7 @@ class HumanMindScalperStrategy(BaseStrategy):
             metadata['debug_checks']['trigger'] = 'PASS'
 
             if not is_volume_confirmed:
-                metadata['reason'] = f"Insufficient volume confirmation ({curr_v:.1f} < {curr_vol_ma * 1.20:.1f})"
+                metadata['reason'] = f"Insufficient volume confirmation ({curr_v:.1f} < {curr_vol_ma * 1.25:.1f})"
                 return "HOLD", metadata
             metadata['debug_checks']['volume'] = 'PASS'
 
