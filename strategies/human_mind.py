@@ -42,7 +42,8 @@ class HumanMindScalperStrategy(BaseStrategy):
             'score': 4.0,
             'regime_diag': {'regime': 'TREND', 'risk_mult': 1.0, 'bb_squeeze': False},
             'volume_delta': 0.0,
-            'debug_checks': {'trend': 'FAIL', 'pullback': 'FAIL', 'trigger': 'FAIL', 'volume': 'FAIL', 'delta': 'FAIL'}
+            'ltf_adx': 25.0,
+            'debug_checks': {'trend': 'FAIL', 'macro_200': 'FAIL', 'pullback': 'FAIL', 'trigger': 'FAIL', 'volume': 'FAIL', 'delta': 'FAIL', 'adx': 'FAIL'}
         }
 
         if htf_df is None or ltf_df is None or len(htf_df) < 55 or len(ltf_df) < 55:
@@ -58,7 +59,9 @@ class HumanMindScalperStrategy(BaseStrategy):
         # ── 1. HTF 1-Hour Trend ──
         htf_ema20 = htf_df['close'].ewm(span=20, adjust=False).mean()
         htf_ema50 = htf_df['close'].ewm(span=50, adjust=False).mean()
+        htf_ema200 = htf_df['close'].ewm(span=min(200, len(htf_df)), adjust=False).mean()
         htf_last_close = htf_df['close'].iloc[-1]
+        curr_htf_ema200 = htf_ema200.iloc[-1]
 
         if htf_ema20.iloc[-1] > htf_ema50.iloc[-1]:
             htf_trend = 'BULLISH'
@@ -126,8 +129,39 @@ class HumanMindScalperStrategy(BaseStrategy):
         curr_volume_delta = curr_v * (2.0 * close_pos - 1.0)
         metadata['volume_delta'] = curr_volume_delta
 
+        # ── ADX 14 Chop Filter ──
+        tr1 = ltf_high - ltf_low
+        tr2 = (ltf_high - ltf_close.shift()).abs()
+        tr3 = (ltf_low - ltf_close.shift()).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        atr_series = tr.ewm(alpha=1.0/14.0, adjust=False).mean()
+
+        up_move = ltf_high - ltf_high.shift()
+        down_move = ltf_low.shift() - ltf_low
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+
+        plus_di = 100 * (pd.Series(plus_dm, index=ltf_df.index).ewm(alpha=1.0/14.0, adjust=False).mean() / (atr_series + 1e-9))
+        minus_di = 100 * (pd.Series(minus_dm, index=ltf_df.index).ewm(alpha=1.0/14.0, adjust=False).mean() / (atr_series + 1e-9))
+        dx = 100 * ((plus_di - minus_di).abs() / (plus_di + minus_di + 1e-9))
+        adx_series = dx.ewm(alpha=1.0/14.0, adjust=False).mean()
+        curr_adx = float(adx_series.iloc[-1]) if not math.isnan(adx_series.iloc[-1]) else 25.0
+        metadata['ltf_adx'] = curr_adx
+
+        # Chop Filter: Reject horizontal chop where ADX < 22.0
+        if curr_adx < 22.0:
+            metadata['reason'] = f"Chop Filter: 15m ADX too low ({curr_adx:.1f} < 22.0) - Flat Market"
+            return "HOLD", metadata
+        metadata['debug_checks']['adx'] = 'PASS'
+
         # ── 3. LONG SETUP ──
         if htf_trend == 'BULLISH':
+            # 1H 200 EMA Macro Trend Guard: Only long when 1H close > 200 EMA
+            if htf_last_close < curr_htf_ema200:
+                metadata['reason'] = f"Long blocked: 1H price ({htf_last_close:.2f}) < 1H 200 EMA ({curr_htf_ema200:.2f}) - Macro Bearish"
+                return "HOLD", metadata
+            metadata['debug_checks']['macro_200'] = 'PASS'
+
             # Trend stack: 15m EMA 20 > EMA 50
             if not (curr_ema20 > curr_ema50):
                 metadata['reason'] = f"LTF not aligned with 1H: EMA20 ({curr_ema20:.4f}) <= EMA50 ({curr_ema50:.4f})"
@@ -198,10 +232,10 @@ class HumanMindScalperStrategy(BaseStrategy):
         # ── 4. SHORT SETUP ──
         elif htf_trend == 'BEARISH' and allow_short:
             # 1H 200 EMA Macro Alignment: Never short when price is above 1H 200 EMA!
-            htf_ema200 = htf_df['close'].ewm(span=min(200, len(htf_df)), adjust=False).mean()
-            if htf_last_close > htf_ema200.iloc[-1]:
-                metadata['reason'] = f"Short blocked: 1H price ({htf_last_close:.2f}) > 1H 200 EMA ({htf_ema200.iloc[-1]:.2f}) - Macro Bullish"
+            if htf_last_close > curr_htf_ema200:
+                metadata['reason'] = f"Short blocked: 1H price ({htf_last_close:.2f}) > 1H 200 EMA ({curr_htf_ema200:.2f}) - Macro Bullish"
                 return "HOLD", metadata
+            metadata['debug_checks']['macro_200'] = 'PASS'
 
             if not (curr_ema20 < curr_ema50):
                 metadata['reason'] = f"LTF not aligned with 1H: EMA20 ({curr_ema20:.4f}) >= EMA50 ({curr_ema50:.4f})"
