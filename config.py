@@ -46,6 +46,7 @@ class Config:
     SUPPORTED_SYMBOLS = [s.strip() for s in os.getenv("SUPPORTED_SYMBOLS", DEFAULT_25_PAIRS).split(",") if s.strip()]
     TRADE_AMOUNT = float(os.getenv("TRADE_AMOUNT", "0.001"))
     ENABLE_DYNAMIC_SCANNER = os.getenv("ENABLE_DYNAMIC_SCANNER", "False").lower() in ("true", "1", "yes")
+    ENABLE_SHORTS = os.getenv("ENABLE_SHORTS", "False").lower() in ("true", "1", "yes")
     STRATEGY_NAME = os.getenv("STRATEGY_NAME", "human_mind").lower()
     
     # ─── Per-Trade Risk Ladder ───
@@ -246,13 +247,9 @@ class Config:
     # ─── Venue / Instrument Capabilities ───
     @classmethod
     def venue_supports_short(cls) -> bool:
-        """True only when the configured venue can actually hold a short.
-
-        Spot venues (Binance spot, CoinDCX spot) cannot short. Emitting SELL
-        signals on those venues produced bare market sells of an asset the
-        account may not own, and a BUY stop-loss that opens a NEW long instead
-        of protecting the position (C-01 FIX).
-        """
+        """True only when the configured venue can actually hold a short and ENABLE_SHORTS is True."""
+        if not getattr(cls, 'ENABLE_SHORTS', False):
+            return False
         return str(getattr(cls, 'EXCHANGE_TYPE', 'spot')).lower() == 'futures'
 
     # ─── Canonical Risk Units ───
