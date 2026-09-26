@@ -34,9 +34,16 @@ class Config:
     USE_TESTNET = os.getenv("USE_TESTNET", "True").lower() in ("true", "1", "yes")
     DASHBOARD_SECRET = os.getenv("DASHBOARD_SECRET", "").strip()
     
-    # Product Settings (Top 8 High-Liquidity Institutional USDT Pairs)
+    # Product Settings (Top 25 High-Liquidity Institutional USDT Pairs)
     SYMBOL = os.getenv("SYMBOL", "BTC/USDT")
-    SUPPORTED_SYMBOLS = os.getenv("SUPPORTED_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,APT/USDT,FET/USDT,LINK/USDT,SUI/USDT").split(",")
+    DEFAULT_25_PAIRS = (
+        "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT,"
+        "SUI/USDT,NEAR/USDT,ENA/USDT,LINK/USDT,LTC/USDT,"
+        "WLD/USDT,TAO/USDT,ADA/USDT,ONDO/USDT,UNI/USDT,"
+        "APT/USDT,FET/USDT,AVAX/USDT,DOT/USDT,BNB/USDT,"
+        "TIA/USDT,INJ/USDT,SEI/USDT,ARB/USDT,OP/USDT"
+    )
+    SUPPORTED_SYMBOLS = [s.strip() for s in os.getenv("SUPPORTED_SYMBOLS", DEFAULT_25_PAIRS).split(",") if s.strip()]
     TRADE_AMOUNT = float(os.getenv("TRADE_AMOUNT", "0.001"))
     ENABLE_DYNAMIC_SCANNER = os.getenv("ENABLE_DYNAMIC_SCANNER", "False").lower() in ("true", "1", "yes")
     STRATEGY_NAME = os.getenv("STRATEGY_NAME", "human_mind").lower()
@@ -86,8 +93,8 @@ class Config:
     # ─── ULTIMATE SHIELD: 5 Advanced Institutional Protection Parameters ───
     # 1. Stagnation Killer (Time-based exit)
     ENABLE_TIME_STOP = os.getenv("ENABLE_TIME_STOP", "True").lower() in ("true", "1", "yes")
-    MAX_STAGNANT_CANDLES = int(os.getenv("MAX_STAGNANT_CANDLES", "24")) # 6 hours on 15m
-    STAGNANT_MAX_R_DISTANCE = float(os.getenv("STAGNANT_MAX_R_DISTANCE", "0.25")) # exit if within ±0.25R
+    MAX_STAGNANT_CANDLES = int(os.getenv("MAX_STAGNANT_CANDLES", "10")) # 2.5 hours on 15m (Auto-scratch stale trades before reversal)
+    STAGNANT_MAX_R_DISTANCE = float(os.getenv("STAGNANT_MAX_R_DISTANCE", "0.20")) # exit flat if within ±0.20R
     
     # 2. Early Structural Invalidation Exit
     ENABLE_STRUCTURAL_EXIT = os.getenv("ENABLE_STRUCTURAL_EXIT", "True").lower() in ("true", "1", "yes")
