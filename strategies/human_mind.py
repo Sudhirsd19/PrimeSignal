@@ -41,7 +41,8 @@ class HumanMindScalperStrategy(BaseStrategy):
             'mode': 'STRICT',
             'score': 4.0,
             'regime_diag': {'regime': 'TREND', 'risk_mult': 1.0, 'bb_squeeze': False},
-            'debug_checks': {'trend': 'FAIL', 'pullback': 'FAIL', 'trigger': 'FAIL', 'volume': 'FAIL'}
+            'volume_delta': 0.0,
+            'debug_checks': {'trend': 'FAIL', 'pullback': 'FAIL', 'trigger': 'FAIL', 'volume': 'FAIL', 'delta': 'FAIL'}
         }
 
         if htf_df is None or ltf_df is None or len(htf_df) < 55 or len(ltf_df) < 55:
@@ -119,6 +120,12 @@ class HumanMindScalperStrategy(BaseStrategy):
         upper_wick = curr_h - max(curr_c, curr_o)
         is_volume_confirmed = curr_v >= (curr_vol_ma * 1.20)
 
+        # Volume Delta approximation: closed position relative to candle range
+        candle_range = max(curr_h - curr_l, 1e-9)
+        close_pos = (curr_c - curr_l) / candle_range
+        curr_volume_delta = curr_v * (2.0 * close_pos - 1.0)
+        metadata['volume_delta'] = curr_volume_delta
+
         # ── 3. LONG SETUP ──
         if htf_trend == 'BULLISH':
             # Trend stack: 15m EMA 20 > EMA 50
@@ -152,15 +159,21 @@ class HumanMindScalperStrategy(BaseStrategy):
                 return "HOLD", metadata
             metadata['debug_checks']['volume'] = 'PASS'
 
+            # Volume Delta confirmation: Aggressive buyer dominance
+            if curr_volume_delta <= 0:
+                metadata['reason'] = f"Volume Delta not bullish (Net seller pressure: delta={curr_volume_delta:.1f})"
+                return "HOLD", metadata
+            metadata['debug_checks']['delta'] = 'PASS'
+
             # Valid Long setup!
             entry_p = curr_c
             # Stop loss just below pullback low with 0.3% buffer
             sl_p = min(curr_l, prev_l) * 0.997
             risk_d = entry_p - sl_p
 
-            # Clamp risk distance between 0.6% and 2.0%
-            if risk_d < (entry_p * 0.006):
-                sl_p = entry_p * 0.994
+            # Clamp risk distance between 0.7% and 2.0% (protect against wick hunting)
+            if risk_d < (entry_p * 0.007):
+                sl_p = entry_p * 0.993
                 risk_d = entry_p - sl_p
             elif risk_d > (entry_p * 0.020):
                 sl_p = entry_p * 0.980
@@ -179,11 +192,17 @@ class HumanMindScalperStrategy(BaseStrategy):
             metadata['tp2'] = tp2_p
             metadata['score'] = 4.5
             metadata['zone_id'] = f"HUMAN_LONG_{int(time.time())}"
-            metadata['reason'] = f"1H Bullish Trend + 15m Value Pullback ({'Hammer' if is_hammer else 'Engulfing'})"
+            metadata['reason'] = f"1H Bullish Trend + 15m Value Pullback ({'Hammer' if is_hammer else 'Engulfing'}) + VolDelta (+{curr_volume_delta:.0f})"
             return "BUY", metadata
 
         # ── 4. SHORT SETUP ──
         elif htf_trend == 'BEARISH' and allow_short:
+            # 1H 200 EMA Macro Alignment: Never short when price is above 1H 200 EMA!
+            htf_ema200 = htf_df['close'].ewm(span=min(200, len(htf_df)), adjust=False).mean()
+            if htf_last_close > htf_ema200.iloc[-1]:
+                metadata['reason'] = f"Short blocked: 1H price ({htf_last_close:.2f}) > 1H 200 EMA ({htf_ema200.iloc[-1]:.2f}) - Macro Bullish"
+                return "HOLD", metadata
+
             if not (curr_ema20 < curr_ema50):
                 metadata['reason'] = f"LTF not aligned with 1H: EMA20 ({curr_ema20:.4f}) >= EMA50 ({curr_ema50:.4f})"
                 return "HOLD", metadata
@@ -214,13 +233,20 @@ class HumanMindScalperStrategy(BaseStrategy):
                 return "HOLD", metadata
             metadata['debug_checks']['volume'] = 'PASS'
 
+            # Volume Delta confirmation: Aggressive seller dominance
+            if curr_volume_delta >= 0:
+                metadata['reason'] = f"Volume Delta not bearish (Net buyer pressure: delta={curr_volume_delta:.1f})"
+                return "HOLD", metadata
+            metadata['debug_checks']['delta'] = 'PASS'
+
             # Valid Short setup!
             entry_p = curr_c
             sl_p = max(curr_h, prev_h) * 1.003
             risk_d = sl_p - entry_p
 
-            if risk_d < (entry_p * 0.006):
-                sl_p = entry_p * 1.006
+            # Clamp risk distance between 0.7% and 2.0% (protect against wick hunting)
+            if risk_d < (entry_p * 0.007):
+                sl_p = entry_p * 1.007
                 risk_d = sl_p - entry_p
             elif risk_d > (entry_p * 0.020):
                 sl_p = entry_p * 1.020
@@ -239,7 +265,7 @@ class HumanMindScalperStrategy(BaseStrategy):
             metadata['tp2'] = tp2_p
             metadata['score'] = 4.5
             metadata['zone_id'] = f"HUMAN_SHORT_{int(time.time())}"
-            metadata['reason'] = f"1H Bearish Trend + 15m Value Pullback ({'ShootingStar' if is_shooting_star else 'BearishEngulfing'})"
+            metadata['reason'] = f"1H Bearish Trend + 15m Value Pullback ({'ShootingStar' if is_shooting_star else 'BearishEngulfing'}) + VolDelta ({curr_volume_delta:.0f})"
             return "SELL", metadata
 
         return "HOLD", metadata
