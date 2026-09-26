@@ -34,51 +34,41 @@ class Config:
     USE_TESTNET = os.getenv("USE_TESTNET", "True").lower() in ("true", "1", "yes")
     DASHBOARD_SECRET = os.getenv("DASHBOARD_SECRET", "").strip()
     
-    # Product Settings (Top 20 High-Liquidity Institutional USDT Pairs)
+    # Product Settings (Top 8 High-Liquidity Institutional USDT Pairs)
     SYMBOL = os.getenv("SYMBOL", "BTC/USDT")
-    SUPPORTED_SYMBOLS = os.getenv("SUPPORTED_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,DOGE/USDT,ADA/USDT,AVAX/USDT,SUI/USDT,LINK/USDT,DOT/USDT,NEAR/USDT,LTC/USDT,BCH/USDT,UNI/USDT,APT/USDT,ICP/USDT,TRX/USDT,ATOM/USDT,OP/USDT").split(",")
+    SUPPORTED_SYMBOLS = os.getenv("SUPPORTED_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,APT/USDT,FET/USDT,LINK/USDT,SUI/USDT").split(",")
     TRADE_AMOUNT = float(os.getenv("TRADE_AMOUNT", "0.001"))
     ENABLE_DYNAMIC_SCANNER = os.getenv("ENABLE_DYNAMIC_SCANNER", "False").lower() in ("true", "1", "yes")
+    STRATEGY_NAME = os.getenv("STRATEGY_NAME", "human_mind").lower()
     
     # ─── Per-Trade Risk Ladder ───
-    # RISK_PCT is the BASELINE per-trade risk (%). The strategy scales it by the
-    # setup-quality score, so the effective per-trade risk is always
-    #   RISK_PCT x {LOW_MULT, MID_MULT, HIGH_MULT}
-    # With the default RISK_PCT=1.0 the live ladder is 0.75% / 1.00% / 1.25%.
-    # Lower RISK_PCT to trade smaller; raise it to trade larger. This value now
-    # genuinely drives position sizing (it previously had no effect at all).
     RISK_PCT = float(os.getenv("RISK_PCT", "1.0"))
     RISK_TIER_LOW_MULT = float(os.getenv("RISK_TIER_LOW_MULT", "0.75"))
     RISK_TIER_MID_MULT = float(os.getenv("RISK_TIER_MID_MULT", "1.0"))
     RISK_TIER_HIGH_MULT = float(os.getenv("RISK_TIER_HIGH_MULT", "1.25"))
-    # Point 1 Fix: Explicit maximum dollar risk cap per single trade (0.0 = unconstrained, governed by RISK_PCT)
     MAX_SINGLE_TRADE_RISK_USDT = float(os.getenv("MAX_SINGLE_TRADE_RISK_USDT", "0.0"))
-    # Score thresholds that select each ladder tier
     RISK_TIER_MID_SCORE = float(os.getenv("RISK_TIER_MID_SCORE", "3.5"))
     RISK_TIER_HIGH_SCORE = float(os.getenv("RISK_TIER_HIGH_SCORE", "4.5"))
-    MAX_TRADE_ALLOCATION_PCT = float(os.getenv("MAX_TRADE_ALLOCATION_PCT", "0.35")) # Max 35% of total wallet equity per trade
-    DYNAMIC_BE_BUFFER_PCT = float(os.getenv("DYNAMIC_BE_BUFFER_PCT", "0.0030")) # Dynamic Roundtrip Fee (0.20%) + Slippage Buffer (0.10%)
-    MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "2.0"))
-    # Daily Profit Lock: Auto-pause after reaching daily profit target to protect gains
+    MAX_TRADE_ALLOCATION_PCT = float(os.getenv("MAX_TRADE_ALLOCATION_PCT", "0.45")) # Max 45% margin allocation per trade
+    DYNAMIC_BE_BUFFER_PCT = float(os.getenv("DYNAMIC_BE_BUFFER_PCT", "0.0030"))
+    MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "5.0"))
     MAX_DAILY_PROFIT_PCT = float(os.getenv("MAX_DAILY_PROFIT_PCT", "10.0"))
     ENABLE_DAILY_PROFIT_LOCK = os.getenv("ENABLE_DAILY_PROFIT_LOCK", "True").lower() in ("true", "1", "yes")
-    # Dynamic Kelly Criterion Position Sizing
     ENABLE_KELLY_SIZING = os.getenv("ENABLE_KELLY_SIZING", "False").lower() in ("true", "1", "yes")
     KELLY_LOOKBACK_TRADES = int(os.getenv("KELLY_LOOKBACK_TRADES", "20"))
     CONSECUTIVE_LOSS_LIMIT = int(os.getenv("CONSECUTIVE_LOSS_LIMIT", "2"))
     MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "2"))
     MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "6"))
-    TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015")) # Deprecated in favor of ATR
+    TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015"))
     TRAILING_ATR_MULT = float(os.getenv("TRAILING_ATR_MULT", "1.5"))
-    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.0")) # Breakeven Lock activation at +1.0R
-    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.4")) # Target 1: 1.4R (High Win-Rate 60%+)
+    TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.0"))
+    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.3")) # Target 1: 1.3R (65%+ Win Rate)
     RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.2")) # Target 2: 2.2R (Remaining runner)
-    ENABLE_RELAXED_MODE = os.getenv("ENABLE_RELAXED_MODE", "False").lower() in ("true", "1", "yes") # Strict macro-aligned setups by default
-    MIN_SL_PCT = float(os.getenv("MIN_SL_PCT", "0.012")) # Minimum 1.2% SL distance for crypto noise
-    MAX_SL_PCT = float(os.getenv("MAX_SL_PCT", "0.025")) # Maximum 2.5% SL distance
-    TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "0.65")) # 65% profit booking at TP1 (1.4R)
-    # Fraction of the REMAINING position booked at TP2.
-    TP2_REMAINING_SCALE_PCT = float(os.getenv("TP2_REMAINING_SCALE_PCT", "0.35")) # 35% booked at TP2 (2.2R)
+    ENABLE_RELAXED_MODE = os.getenv("ENABLE_RELAXED_MODE", "False").lower() in ("true", "1", "yes")
+    MIN_SL_PCT = float(os.getenv("MIN_SL_PCT", "0.006"))
+    MAX_SL_PCT = float(os.getenv("MAX_SL_PCT", "0.020"))
+    TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "0.50")) # 50% profit booking at TP1 (1.3R)
+    TP2_REMAINING_SCALE_PCT = float(os.getenv("TP2_REMAINING_SCALE_PCT", "1.0")) # 100% of remaining booked at TP2 (2.2R)
     MIN_VOLUME_SPIKE_MULT = float(os.getenv("MIN_VOLUME_SPIKE_MULT", "1.15")) # 1.15x 20-bar volume spike confirmation
     REQUIRE_EMA_STACK = os.getenv("REQUIRE_EMA_STACK", "True").lower() in ("true", "1", "yes")
     REQUIRE_VOLUME_CONFIRMATION = os.getenv("REQUIRE_VOLUME_CONFIRMATION", "True").lower() in ("true", "1", "yes")
@@ -243,7 +233,7 @@ class Config:
     EXCHANGE_TYPE = os.getenv("EXCHANGE_TYPE", "spot").lower()
 
     # Futures-specific settings (only used when EXCHANGE_TYPE='futures')
-    FUTURES_LEVERAGE = int(os.getenv("FUTURES_LEVERAGE", "1"))
+    FUTURES_LEVERAGE = int(os.getenv("FUTURES_LEVERAGE", "3"))
     FUTURES_MARGIN_MODE = os.getenv("FUTURES_MARGIN_MODE", "isolated").lower()  # 'isolated' or 'cross'
 
     # ─── Venue / Instrument Capabilities ───

@@ -40,7 +40,7 @@ class AdversarialDebateCourtroom:
         if setup_type in ['OB', 'FVG', 'SWEEP'] or (isinstance(setup_type, str) and setup_type.startswith("SWEEP")):
             advocate_score += 20
             advocate_points.append(f"Institutional SMC {setup_type} zone confluence (+20pts)")
-        elif setup_type in ['EMA', 'VWAP']:
+        elif setup_type in ['EMA', 'VWAP', 'HUMAN_PULLBACK']:
             advocate_score += 20
             advocate_points.append(f"Dynamic Pullback ({setup_type}) confluence (+20pts)")
 
