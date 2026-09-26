@@ -35,6 +35,7 @@ def simulate_paper_entry(
     fee_rate: float,
     conversion_rate: float = 1.0,
     min_paper_cash: float = 1.0,
+    leverage: float = 1.0,
 ) -> Optional[PaperEntryResult]:
     """Return a fill and exact wallet debit, or ``None`` when not affordable.
 
@@ -46,13 +47,15 @@ def simulate_paper_entry(
     if side not in {"BUY", "SELL"}:
         raise ValueError("side must be BUY or SELL")
     values = (requested_qty, signal_price, balance_cash, current_equity_cash,
-              max_alloc_pct, slippage_pct, fee_rate, conversion_rate, min_paper_cash)
+              max_alloc_pct, slippage_pct, fee_rate, conversion_rate, min_paper_cash, leverage)
     if not all(isfinite(float(v)) for v in values):
         return None
-    if requested_qty <= 0 or signal_price <= 0 or balance_cash <= 0 or current_equity_cash <= 0:
+    if requested_qty <= 0 or signal_price <= 0 or balance_cash <= 0 or current_equity_cash <= 0 or leverage <= 0:
         return None
     if conversion_rate <= 0 or fee_rate < 0 or max_alloc_pct <= 0 or slippage_pct < 0 or min_paper_cash < 0:
         return None
+
+    lev = max(1.0, float(leverage))
 
     if side == "BUY":
         fill_price = signal_price * (1.0 + slippage_pct)
@@ -66,14 +69,15 @@ def simulate_paper_entry(
     if target_cash <= 0 or target_cash < min_paper_cash:
         return None
 
-    cash_per_unit = fill_price * conversion_rate * (1.0 + fee_rate)
+    cash_per_unit = ((fill_price / lev) + (fill_price * fee_rate)) * conversion_rate
     quantity = min(requested_qty, target_cash / cash_per_unit)
     if quantity <= 0 or not isfinite(quantity):
         return None
 
     notional_usdt = quantity * fill_price
+    margin_usdt = notional_usdt / lev
     fee_usdt = notional_usdt * fee_rate
-    cash_debit = (notional_usdt + fee_usdt) * conversion_rate
+    cash_debit = (margin_usdt + fee_usdt) * conversion_rate
     if cash_debit <= 0 or cash_debit > balance_cash + 1e-9 or cash_debit > max_cash + 1e-9:
         return None
 
@@ -92,26 +96,29 @@ def simulate_paper_exit(
     exit_price: float,
     fee_rate: float,
     conversion_rate: float = 1.0,
+    leverage: float = 1.0,
 ) -> PaperExitResult:
     """Return gross PnL, exit fee and exact wallet credit for a paper close."""
     side = str(side).upper()
     if side not in {"LONG", "SHORT"}:
         raise ValueError("side must be LONG or SHORT")
-    values = (quantity, entry_price, exit_price, fee_rate, conversion_rate)
+    values = (quantity, entry_price, exit_price, fee_rate, conversion_rate, leverage)
     if not all(isfinite(float(v)) for v in values):
         raise ValueError("paper exit inputs must be finite")
-    if quantity < 0 or entry_price <= 0 or exit_price <= 0 or fee_rate < 0 or conversion_rate <= 0:
+    if quantity < 0 or entry_price <= 0 or exit_price <= 0 or fee_rate < 0 or conversion_rate <= 0 or leverage <= 0:
         raise ValueError("invalid paper exit inputs")
+
+    lev = max(1.0, float(leverage))
 
     if side == "LONG":
         gross_pnl_usdt = quantity * (exit_price - entry_price)
-        gross_cash_return_usdt = quantity * exit_price
     else:
         gross_pnl_usdt = quantity * (entry_price - exit_price)
-        gross_cash_return_usdt = quantity * entry_price + gross_pnl_usdt
 
+    margin_released_usdt = (quantity * entry_price) / lev
     exit_fee_usdt = quantity * exit_price * fee_rate
-    cash_credit = (gross_cash_return_usdt - exit_fee_usdt) * conversion_rate
+    gross_cash_return_usdt = margin_released_usdt + gross_pnl_usdt
+    cash_credit = max(0.0, (gross_cash_return_usdt - exit_fee_usdt) * conversion_rate)
     return PaperExitResult(
         gross_pnl_usdt=float(gross_pnl_usdt),
         exit_fee_usdt=float(exit_fee_usdt),

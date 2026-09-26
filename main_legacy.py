@@ -876,15 +876,17 @@ class PrimeSignalBot:
 
         for sym in Config.SUPPORTED_SYMBOLS:
             if self.in_position.get(sym, False) and self.position_size.get(sym, 0) and self.position_size[sym] > 1e-7:
-                live_price = self.pipeline.latest_prices.get(sym, self.entry_price[sym])
+                live_price = self.pipeline.latest_prices.get(sym, self.entry_price.get(sym, 0.0))
                 live_p_adj = live_price * rate if is_inr else live_price
-                entry_p_adj = self.entry_price[sym] * rate if is_inr else self.entry_price[sym]
+                entry_p_adj = self.entry_price.get(sym, 0.0) * rate if is_inr else self.entry_price.get(sym, 0.0)
                 
                 margin_locked = (self.position_size[sym] * entry_p_adj) / lev
-                if self.position_side[sym] == "LONG":
+                if self.position_side.get(sym) == "LONG":
                     unrealized_pnl = self.position_size[sym] * (live_p_adj - entry_p_adj)
-                else:
+                elif self.position_side.get(sym) == "SHORT":
                     unrealized_pnl = self.position_size[sym] * (entry_p_adj - live_p_adj)
+                else:
+                    unrealized_pnl = 0.0
                 current_equity += (margin_locked + unrealized_pnl)
         return current_equity
 
@@ -1562,29 +1564,24 @@ class PrimeSignalBot:
                 else:
                     min_paper_cost = 50.0 if is_inr else 1.0
                     cur_sym = "₹" if is_inr else "$"
-                    max_alloc_pct = getattr(Config, 'MAX_TRADE_ALLOCATION_PCT', 0.45)
+                    max_alloc_pct = getattr(Config, 'MAX_TRADE_ALLOCATION_PCT', 0.35)
                     max_allowed_cost = current_equity * max_alloc_pct
-                    is_futures = getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures'
-                    lev = max(1.0, float(getattr(Config, 'FUTURES_LEVERAGE', 1.0))) if is_futures else 1.0
+                    entry_cost_equity_curr = pos_size * entry_price * (conversion_rate if is_inr else 1.0)
 
-                    notional_val = pos_size * entry_price * (conversion_rate if is_inr else 1.0)
-                    margin_cost = notional_val / lev
-
-                    if margin_cost > max_allowed_cost:
-                        margin_cost = max_allowed_cost
-                        pos_size = (margin_cost * lev) / (entry_price * (conversion_rate if is_inr else 1.0))
+                    if entry_cost_equity_curr > max_allowed_cost:
+                        pos_size = max_allowed_cost / (entry_price * (conversion_rate if is_inr else 1.0))
+                        entry_cost_equity_curr = max_allowed_cost
 
                     slippage_pct = getattr(Config, 'PAPER_SLIPPAGE_PCT', 0.0005)
                     sim_buy_fill = round(entry_price * (1.0 + slippage_pct), 4)
-                    if margin_cost <= self._dry_run_balance_usdt:
-                        self._dry_run_balance_usdt -= margin_cost
+                    if entry_cost_equity_curr <= self._dry_run_balance_usdt:
+                        self._dry_run_balance_usdt -= entry_cost_equity_curr
                         order = {'id': f'MOCK_BUY_{int(time.time()*1000)}', 'price': sim_buy_fill, 'average': sim_buy_fill, 'amount': pos_size, 'status': 'filled'}
                     elif self._dry_run_balance_usdt >= min_paper_cost:
                         usable_cash = min(self._dry_run_balance_usdt, self._dry_run_balance_usdt * max_alloc_pct)
                         if usable_cash < min_paper_cost:
                             usable_cash = self._dry_run_balance_usdt
-                        margin_cost = usable_cash
-                        pos_size = (margin_cost * lev) / (entry_price * (conversion_rate if is_inr else 1.0))
+                        pos_size = usable_cash / (entry_price * (conversion_rate if is_inr else 1.0))
                         self._dry_run_balance_usdt -= usable_cash
                         order = {'id': f'MOCK_BUY_{int(time.time()*1000)}', 'price': sim_buy_fill, 'average': sim_buy_fill, 'amount': pos_size, 'status': 'filled'}
                     else:
@@ -1802,29 +1799,24 @@ class PrimeSignalBot:
                 else:
                     min_paper_cost = 50.0 if is_inr else 1.0
                     cur_sym = "₹" if is_inr else "$"
-                    max_alloc_pct = getattr(Config, 'MAX_TRADE_ALLOCATION_PCT', 0.45)
+                    max_alloc_pct = getattr(Config, 'MAX_TRADE_ALLOCATION_PCT', 0.35)
                     max_allowed_cost = current_equity * max_alloc_pct
-                    is_futures = getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures'
-                    lev = max(1.0, float(getattr(Config, 'FUTURES_LEVERAGE', 1.0))) if is_futures else 1.0
+                    collateral_equity_curr = pos_size * entry_price * (conversion_rate if is_inr else 1.0)
 
-                    notional_val = pos_size * entry_price * (conversion_rate if is_inr else 1.0)
-                    margin_cost = notional_val / lev
-
-                    if margin_cost > max_allowed_cost:
-                        margin_cost = max_allowed_cost
-                        pos_size = (margin_cost * lev) / (entry_price * (conversion_rate if is_inr else 1.0))
+                    if collateral_equity_curr > max_allowed_cost:
+                        pos_size = max_allowed_cost / (entry_price * (conversion_rate if is_inr else 1.0))
+                        collateral_equity_curr = max_allowed_cost
 
                     slippage_pct = getattr(Config, 'PAPER_SLIPPAGE_PCT', 0.0005)
                     sim_sell_fill = round(entry_price * (1.0 - slippage_pct), 4)
-                    if margin_cost <= self._dry_run_balance_usdt:
-                        self._dry_run_balance_usdt -= margin_cost
+                    if collateral_equity_curr <= self._dry_run_balance_usdt:
+                        self._dry_run_balance_usdt -= collateral_equity_curr
                         order = {'id': f'MOCK_SELL_{int(time.time()*1000)}', 'price': sim_sell_fill, 'average': sim_sell_fill, 'amount': pos_size, 'status': 'filled'}
                     elif self._dry_run_balance_usdt >= min_paper_cost:
                         usable_cash = min(self._dry_run_balance_usdt, self._dry_run_balance_usdt * max_alloc_pct)
                         if usable_cash < min_paper_cost:
                             usable_cash = self._dry_run_balance_usdt
-                        margin_cost = usable_cash
-                        pos_size = (margin_cost * lev) / (entry_price * (conversion_rate if is_inr else 1.0))
+                        pos_size = usable_cash / (entry_price * (conversion_rate if is_inr else 1.0))
                         self._dry_run_balance_usdt -= usable_cash
                         order = {'id': f'MOCK_SELL_{int(time.time()*1000)}', 'price': sim_sell_fill, 'average': sim_sell_fill, 'amount': pos_size, 'status': 'filled'}
                     else:
@@ -2230,11 +2222,7 @@ class PrimeSignalBot:
                                         if not tp1_success and cancelled_spot_sl:
                                             await self._restore_spot_native_sl(symbol, 'LONG', self.position_size[symbol], self.stop_loss[symbol])
                                 else:
-                                    is_futures = getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures'
-                                    lev = max(1.0, float(getattr(Config, 'FUTURES_LEVERAGE', 1.0))) if is_futures else 1.0
-                                    tp1_margin = (tp1_size * self.entry_price[symbol] * (rate if is_inr else 1.0)) / lev
-                                    tp1_pnl = tp1_size * (curr_price - self.entry_price[symbol]) * (rate if is_inr else 1.0)
-                                    self._dry_run_balance_usdt += (tp1_margin + tp1_pnl)
+                                    self._dry_run_balance_usdt += tp1_size * curr_price * (rate if is_inr else 1.0)
                                     tp1_success = True
                                 if tp1_success:
                                     if self.has_keys and not Config.PAPER_TRADING:
@@ -2353,11 +2341,7 @@ class PrimeSignalBot:
                                         if not tp2_success and cancelled_spot_sl:
                                             await self._restore_spot_native_sl(symbol, 'LONG', self.position_size[symbol], self.stop_loss[symbol])
                                 else:
-                                    is_futures = getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures'
-                                    lev = max(1.0, float(getattr(Config, 'FUTURES_LEVERAGE', 1.0))) if is_futures else 1.0
-                                    tp2_margin = (tp2_size * self.entry_price[symbol] * (rate if is_inr else 1.0)) / lev
-                                    tp2_pnl = tp2_size * (curr_price - self.entry_price[symbol]) * (rate if is_inr else 1.0)
-                                    self._dry_run_balance_usdt += (tp2_margin + tp2_pnl)
+                                    self._dry_run_balance_usdt += tp2_size * curr_price * (rate if is_inr else 1.0)
                                     tp2_success = True
                                 if tp2_success:
                                     if self.has_keys and not Config.PAPER_TRADING:
@@ -2562,11 +2546,10 @@ class PrimeSignalBot:
                                         if not tp1_success and cancelled_spot_sl:
                                             await self._restore_spot_native_sl(symbol, 'SHORT', self.position_size[symbol], self.stop_loss[symbol])
                                 else:
-                                    is_futures = getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures'
-                                    lev = max(1.0, float(getattr(Config, 'FUTURES_LEVERAGE', 1.0))) if is_futures else 1.0
+                                    # Short TP cash return = entry_notional + (entry_notional - exit_notional) = profit + collateral
                                     tp1_pnl_usdt = tp1_size * (self.entry_price[symbol] - curr_price)
-                                    tp1_margin = (tp1_size * self.entry_price[symbol] * (rate if is_inr else 1.0)) / lev
-                                    self._dry_run_balance_usdt += tp1_margin + (tp1_pnl_usdt * (rate if is_inr else 1.0))
+                                    tp1_proceeds_usdt = tp1_size * self.entry_price[symbol] + tp1_pnl_usdt
+                                    self._dry_run_balance_usdt += tp1_proceeds_usdt * (rate if is_inr else 1.0)
                                     tp1_success = True
                                 if tp1_success:
                                     if self.has_keys and not Config.PAPER_TRADING:
@@ -2686,11 +2669,11 @@ class PrimeSignalBot:
                                         if not tp2_success and cancelled_spot_sl:
                                             await self._restore_spot_native_sl(symbol, 'SHORT', self.position_size[symbol], self.stop_loss[symbol])
                                 else:
-                                    is_futures = getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures'
-                                    lev = max(1.0, float(getattr(Config, 'FUTURES_LEVERAGE', 1.0))) if is_futures else 1.0
+                                    # C-03 FIX: Return collateral (entry_notional) + pnl only
+                                    # entry_notional was deducted at SELL entry; buying back at curr_price frees: entry_notional + (entry - curr) * size
                                     tp2_pnl = tp2_size * (self.entry_price[symbol] - curr_price)
-                                    tp2_margin = (tp2_size * self.entry_price[symbol] * (rate if is_inr else 1.0)) / lev
-                                    self._dry_run_balance_usdt += tp2_margin + (tp2_pnl * (rate if is_inr else 1.0))
+                                    tp2_proceeds_usdt = tp2_size * self.entry_price[symbol] + tp2_pnl
+                                    self._dry_run_balance_usdt += tp2_proceeds_usdt * (rate if is_inr else 1.0)
                                     tp2_success = True
                                 if tp2_success:
                                     if self.has_keys and not Config.PAPER_TRADING:
@@ -3083,21 +3066,23 @@ class PrimeSignalBot:
 
                 is_inr = self._is_inr_account()
                 rate = getattr(Config, 'USDT_INR_RATE', 85.0) if is_inr else 1.0
-                is_futures = getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures'
-                lev = max(1.0, float(getattr(Config, 'FUTURES_LEVERAGE', 1.0))) if is_futures else 1.0
-
                 if self.position_side[symbol] == "LONG":
                     pnl_pct = (exit_price - self.entry_price[symbol]) / self.entry_price[symbol] * 100.0
                     pnl_usdt = actual_exit * (exit_price - self.entry_price[symbol])
                     if not self.has_keys or Config.PAPER_TRADING:
-                        margin_released = (actual_exit * self.entry_price[symbol] * (rate if is_inr else 1.0)) / lev
-                        self._dry_run_balance_usdt += margin_released + (pnl_usdt * (rate if is_inr else 1.0))
+                        # Return cash proceeds from selling the asset at exit_price
+                        self._dry_run_balance_usdt += actual_exit * exit_price * (rate if is_inr else 1.0)
                 else:
                     pnl_pct = (self.entry_price[symbol] - exit_price) / self.entry_price[symbol] * 100.0
                     pnl_usdt = actual_exit * (self.entry_price[symbol] - exit_price)
                     if not self.has_keys or Config.PAPER_TRADING:
-                        margin_released = (actual_exit * self.entry_price[symbol] * (rate if is_inr else 1.0)) / lev
-                        self._dry_run_balance_usdt += margin_released + (pnl_usdt * (rate if is_inr else 1.0))
+                        # C-02 FIX: Return collateral + profit = entry_notional + pnl_usdt
+                        # But collateral was deducted at entry, so return the buy-back cost and the profit separately:
+                        # Cash back = (collateral freed) + pnl = entry_notional + (entry_notional - exit_notional) = wrong
+                        # Correct: collateral freed = entry_notional, cost to close = exit_notional
+                        # Net cash returned = entry_notional - exit_notional + entry_notional (collateral) = entry_notional + pnl_usdt
+                        # But entry_notional was already DEDUCTED, so re-add collateral + pnl:
+                        self._dry_run_balance_usdt += (actual_exit * self.entry_price[symbol] + pnl_usdt) * (rate if is_inr else 1.0)
 
                 # --- PROFIT-BASED LOGIC: Net fee deduction ---
                 exit_fee = actual_exit * exit_price * Config.FEE_RATE

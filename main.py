@@ -87,11 +87,12 @@ def _patch_source(text):
                         signal_price=entry_price,
                         balance_cash=self._dry_run_balance_usdt,
                         current_equity_cash=current_equity,
-                        max_alloc_pct=getattr(Config, 'MAX_TRADE_ALLOCATION_PCT', 0.35),
+                        max_alloc_pct=getattr(Config, 'MAX_TRADE_ALLOCATION_PCT', 0.45),
                         slippage_pct=getattr(Config, 'PAPER_SLIPPAGE_PCT', 0.0005),
                         fee_rate=getattr(Config, 'FEE_RATE', 0.00075),
                         conversion_rate=(conversion_rate if is_inr else 1.0),
                         min_paper_cash=min_paper_cost,
+                        leverage=(max(1.0, float(getattr(Config, 'FUTURES_LEVERAGE', 1.0))) if getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures' else 1.0),
                     )
                     if paper_entry is not None:
                         pos_size = paper_entry.quantity
@@ -136,11 +137,12 @@ def _patch_source(text):
                         signal_price=entry_price,
                         balance_cash=self._dry_run_balance_usdt,
                         current_equity_cash=current_equity,
-                        max_alloc_pct=getattr(Config, 'MAX_TRADE_ALLOCATION_PCT', 0.35),
+                        max_alloc_pct=getattr(Config, 'MAX_TRADE_ALLOCATION_PCT', 0.45),
                         slippage_pct=getattr(Config, 'PAPER_SLIPPAGE_PCT', 0.0005),
                         fee_rate=getattr(Config, 'FEE_RATE', 0.00075),
                         conversion_rate=(conversion_rate if is_inr else 1.0),
                         min_paper_cash=min_paper_cost,
+                        leverage=(max(1.0, float(getattr(Config, 'FUTURES_LEVERAGE', 1.0))) if getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures' else 1.0),
                     )
                     if paper_entry is not None:
                         pos_size = paper_entry.quantity
@@ -164,6 +166,7 @@ def _patch_source(text):
                                         exit_price=curr_price,
                                         fee_rate=getattr(Config, 'FEE_RATE', 0.00075),
                                         conversion_rate=(rate if is_inr else 1.0),
+                                        leverage=(max(1.0, float(getattr(Config, 'FUTURES_LEVERAGE', 1.0))) if getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures' else 1.0),
                                     )
                                     self._dry_run_balance_usdt += paper_tp1.cash_credit
                                     tp1_success = True
@@ -185,6 +188,7 @@ def _patch_source(text):
                                         exit_price=curr_price,
                                         fee_rate=getattr(Config, 'FEE_RATE', 0.00075),
                                         conversion_rate=(rate if is_inr else 1.0),
+                                        leverage=(max(1.0, float(getattr(Config, 'FUTURES_LEVERAGE', 1.0))) if getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures' else 1.0),
                                     )
                                     self._dry_run_balance_usdt += paper_tp1.cash_credit
                                     tp1_success = True
@@ -203,6 +207,7 @@ def _patch_source(text):
                                         exit_price=curr_price,
                                         fee_rate=getattr(Config, 'FEE_RATE', 0.00075),
                                         conversion_rate=(rate if is_inr else 1.0),
+                                        leverage=(max(1.0, float(getattr(Config, 'FUTURES_LEVERAGE', 1.0))) if getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures' else 1.0),
                                     )
                                     self._dry_run_balance_usdt += paper_tp2.cash_credit
                                     tp2_success = True
@@ -223,6 +228,7 @@ def _patch_source(text):
                             exit_price=exit_price,
                             fee_rate=getattr(Config, 'FEE_RATE', 0.00075),
                             conversion_rate=(rate if is_inr else 1.0),
+                            leverage=(max(1.0, float(getattr(Config, 'FUTURES_LEVERAGE', 1.0))) if getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures' else 1.0),
                         )
                         self._dry_run_balance_usdt += paper_exit.cash_credit
 '''
@@ -245,6 +251,7 @@ def _patch_source(text):
                             exit_price=exit_price,
                             fee_rate=getattr(Config, 'FEE_RATE', 0.00075),
                             conversion_rate=(rate if is_inr else 1.0),
+                            leverage=(max(1.0, float(getattr(Config, 'FUTURES_LEVERAGE', 1.0))) if getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures' else 1.0),
                         )
                         self._dry_run_balance_usdt += paper_exit.cash_credit
 '''

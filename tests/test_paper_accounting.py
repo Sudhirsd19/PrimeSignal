@@ -52,3 +52,20 @@ def test_entry_cash_debit_never_exceeds_allocation_cap():
     )
     assert result is not None
     assert result.cash_debit <= 350.0 + 1e-9
+
+
+def test_futures_3x_leverage_entry_and_exit():
+    # Buy 1 unit at 100 with 3x leverage -> notional 100, margin ~33.33 + fee
+    entry = simulate_paper_entry("BUY", 1.0, 100.0, 100.0, 100.0, 0.45, 0.0, 0.001, leverage=3.0)
+    assert entry is not None
+    assert entry.quantity == 1.0
+    # margin = 100/3 = 33.333333333333336, fee = 100 * 0.001 = 0.1
+    expected_debit = (100.0 / 3.0) + 0.1
+    assert abs(entry.cash_debit - expected_debit) < 1e-9
+
+    # Exit at 110 (win of +10 PnL) -> margin released (33.33) + 10 PnL - exit fee (0.11)
+    exit_win = simulate_paper_exit("LONG", 1.0, 100.0, 110.0, 0.001, leverage=3.0)
+    expected_credit = (100.0 / 3.0) + 10.0 - 0.11
+    assert abs(exit_win.cash_credit - expected_credit) < 1e-9
+    assert abs(exit_win.gross_pnl_usdt - 10.0) < 1e-9
+
