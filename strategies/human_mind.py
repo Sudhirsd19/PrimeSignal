@@ -4,8 +4,8 @@ HUMAN-MIND TREND-PULLBACK SCALPER STRATEGY
 Discretionary Human Trader Mimicry Engine:
 - 1-Hour HTF Dominant Trend Alignment (No counter-trend chop).
 - 15-Minute Value-Zone Pullback (Never chase green/red breakout tops).
-- Candlestick Reversal Trigger (Hammer, Shooting Star, Engulfing).
-- Volume Expansion Confirmation (> 1.20x 20-period MA).
+- Candlestick Reversal Trigger (Hammer, Shooting Star, Engulfing, Rebound).
+- Volume Expansion Confirmation (> 1.15x / 1.0x 20-period MA).
 - Scalper Profit Booking: TP1 at 1.3R (50%), Breakeven Lock, TP2 at 2.2R (50%).
 """
 
@@ -38,8 +38,8 @@ class HumanMindScalperStrategy(BaseStrategy):
             'active_bearish_ob_level': 0.0,
             'zone_id': None,
             'setup_type': 'HUMAN_PULLBACK',
-            'mode': 'STRICT',
-            'score': 4.0,
+            'mode': 'RELAXED' if relaxed else 'STRICT',
+            'score': 4.0 if relaxed else 4.5,
             'regime_diag': {'regime': 'TREND', 'risk_mult': 1.0, 'bb_squeeze': False},
             'volume_delta': 0.0,
             'ltf_adx': 25.0,
@@ -121,7 +121,10 @@ class HumanMindScalperStrategy(BaseStrategy):
         body = abs(curr_c - curr_o)
         lower_wick = min(curr_c, curr_o) - curr_l
         upper_wick = curr_h - max(curr_c, curr_o)
-        is_volume_confirmed = curr_v >= (curr_vol_ma * 1.25)
+        
+        # Volume expansion confirmation (1.15x for strict, 1.0x for relaxed)
+        vol_req_mult = 1.00 if relaxed else 1.15
+        is_volume_confirmed = curr_v >= (curr_vol_ma * vol_req_mult)
 
         # Volume Delta approximation: closed position relative to candle range
         candle_range = max(curr_h - curr_l, 1e-9)
@@ -148,9 +151,10 @@ class HumanMindScalperStrategy(BaseStrategy):
         curr_adx = float(adx_series.iloc[-1]) if not math.isnan(adx_series.iloc[-1]) else 25.0
         metadata['ltf_adx'] = curr_adx
 
-        # Chop Filter: Reject horizontal chop where ADX < 22.0
-        if curr_adx < 22.0:
-            metadata['reason'] = f"Chop Filter: 15m ADX too low ({curr_adx:.1f} < 22.0) - Flat Market"
+        # Chop Filter: Reject horizontal chop
+        adx_threshold = 20.0 if relaxed else 22.0
+        if curr_adx < adx_threshold:
+            metadata['reason'] = f"Chop Filter: 15m ADX too low ({curr_adx:.1f} < {adx_threshold:.1f}) - Flat Market"
             return "HOLD", metadata
         metadata['debug_checks']['adx'] = 'PASS'
 
@@ -168,44 +172,51 @@ class HumanMindScalperStrategy(BaseStrategy):
                 return "HOLD", metadata
 
             # Value-zone pullback: Low touched or probed near EMA 20/50
-            pullback_ok = (curr_l <= curr_ema20 * 1.002) and (curr_l >= curr_ema50 * 0.990)
+            pullback_upper = 1.005 if relaxed else 1.002
+            pullback_lower = 0.985 if relaxed else 0.990
+            pullback_ok = (curr_l <= curr_ema20 * pullback_upper) and (curr_l >= curr_ema50 * pullback_lower)
             if not pullback_ok:
                 metadata['reason'] = "Price not in value-zone pullback (EMA 20/50)"
                 return "HOLD", metadata
             metadata['debug_checks']['pullback'] = 'PASS'
 
-            # RSI check (40 - 62)
-            if not (40.0 <= curr_rsi <= 62.0):
-                metadata['reason'] = f"RSI out of bounds for Long entry ({curr_rsi:.1f})"
+            # RSI check (dynamic band)
+            rsi_min = 35.0 if relaxed else 38.0
+            rsi_max = 72.0 if relaxed else 68.0
+            if not (rsi_min <= curr_rsi <= rsi_max):
+                metadata['reason'] = f"RSI out of bounds for Long entry ({curr_rsi:.1f}) [Allowed: {rsi_min:.0f}-{rsi_max:.0f}]"
                 return "HOLD", metadata
 
-            # Trigger candle: Hammer (rejection) or Bullish Engulfing
-            is_hammer = (curr_c > curr_o) and (lower_wick >= 1.2 * max(body, 1e-6))
+            # Trigger candle: Hammer (rejection) or Bullish Engulfing or Bullish Rebound
+            is_hammer = (curr_c > curr_o) and (lower_wick >= 1.0 * max(body, 1e-6))
             is_engulfing = (curr_c > prev_h) and (prev_c < prev_o)
+            is_rebound = relaxed and (curr_c > curr_o) and (curr_c > curr_ema20) and (lower_wick >= 0.6 * max(body, 1e-6))
 
-            if not (is_hammer or is_engulfing):
-                metadata['reason'] = "Waiting for Bullish Trigger Candle (Hammer or Engulfing)"
+            if not (is_hammer or is_engulfing or is_rebound):
+                metadata['reason'] = "Waiting for Bullish Trigger Candle (Hammer, Engulfing, or Rebound)"
                 return "HOLD", metadata
             metadata['debug_checks']['trigger'] = 'PASS'
 
             if not is_volume_confirmed:
-                metadata['reason'] = f"Insufficient volume confirmation ({curr_v:.1f} < {curr_vol_ma * 1.25:.1f})"
+                metadata['reason'] = f"Insufficient volume confirmation ({curr_v:.1f} < {curr_vol_ma * vol_req_mult:.1f})"
                 return "HOLD", metadata
             metadata['debug_checks']['volume'] = 'PASS'
 
-            # Volume Delta confirmation: Aggressive buyer dominance
-            if curr_volume_delta <= 0:
+            # Volume Delta confirmation: Buyer dominance
+            if not relaxed and curr_volume_delta <= 0:
                 metadata['reason'] = f"Volume Delta not bullish (Net seller pressure: delta={curr_volume_delta:.1f})"
+                return "HOLD", metadata
+            elif relaxed and curr_volume_delta < -(curr_v * 0.35):
+                metadata['reason'] = f"Excessive adverse seller volume delta ({curr_volume_delta:.1f})"
                 return "HOLD", metadata
             metadata['debug_checks']['delta'] = 'PASS'
 
             # Valid Long setup!
             entry_p = curr_c
-            # Stop loss just below pullback low with 0.3% buffer
             sl_p = min(curr_l, prev_l) * 0.997
             risk_d = entry_p - sl_p
 
-            # Clamp risk distance between 0.7% and 2.0% (protect against wick hunting)
+            # Clamp risk distance between 0.7% and 2.0%
             if risk_d < (entry_p * 0.007):
                 sl_p = entry_p * 0.993
                 risk_d = entry_p - sl_p
@@ -224,9 +235,9 @@ class HumanMindScalperStrategy(BaseStrategy):
             metadata['take_profit_1r'] = tp1_p
             metadata['tp1'] = tp1_p
             metadata['tp2'] = tp2_p
-            metadata['score'] = 4.5
+            metadata['score'] = 4.0 if relaxed else 4.5
             metadata['zone_id'] = f"HUMAN_LONG_{int(time.time())}"
-            metadata['reason'] = f"1H Bullish Trend + 15m Value Pullback ({'Hammer' if is_hammer else 'Engulfing'}) + VolDelta (+{curr_volume_delta:.0f})"
+            metadata['reason'] = f"1H Bullish Trend + 15m Value Pullback ({'Hammer' if is_hammer else ('Engulfing' if is_engulfing else 'Rebound')}) + VolDelta (+{curr_volume_delta:.0f})"
             return "BUY", metadata
 
         # ── 4. SHORT SETUP ──
@@ -242,34 +253,42 @@ class HumanMindScalperStrategy(BaseStrategy):
                 return "HOLD", metadata
 
             # Value-zone pullback up to EMA 20/50
-            pullback_ok = (curr_h >= curr_ema20 * 0.998) and (curr_h <= curr_ema50 * 1.010)
+            pullback_lower = 0.995 if relaxed else 0.998
+            pullback_upper = 1.015 if relaxed else 1.010
+            pullback_ok = (curr_h >= curr_ema20 * pullback_lower) and (curr_h <= curr_ema50 * pullback_upper)
             if not pullback_ok:
                 metadata['reason'] = "Price not in value-zone pullback (EMA 20/50)"
                 return "HOLD", metadata
             metadata['debug_checks']['pullback'] = 'PASS'
 
-            # RSI check (38 - 60)
-            if not (38.0 <= curr_rsi <= 60.0):
-                metadata['reason'] = f"RSI out of bounds for Short entry ({curr_rsi:.1f})"
+            # RSI check (dynamic band)
+            rsi_min = 28.0 if relaxed else 32.0
+            rsi_max = 65.0 if relaxed else 62.0
+            if not (rsi_min <= curr_rsi <= rsi_max):
+                metadata['reason'] = f"RSI out of bounds for Short entry ({curr_rsi:.1f}) [Allowed: {rsi_min:.0f}-{rsi_max:.0f}]"
                 return "HOLD", metadata
 
-            # Trigger candle: Shooting star (upper rejection) or Bearish Engulfing
-            is_shooting_star = (curr_c < curr_o) and (upper_wick >= 1.2 * max(body, 1e-6))
+            # Trigger candle: Shooting star (upper rejection) or Bearish Engulfing or Bearish Rejection
+            is_shooting_star = (curr_c < curr_o) and (upper_wick >= 1.0 * max(body, 1e-6))
             is_bearish_engulfing = (curr_c < prev_l) and (prev_c > prev_o)
+            is_rejection = relaxed and (curr_c < curr_o) and (curr_c < curr_ema20) and (upper_wick >= 0.6 * max(body, 1e-6))
 
-            if not (is_shooting_star or is_bearish_engulfing):
-                metadata['reason'] = "Waiting for Bearish Trigger Candle (Shooting Star or Engulfing)"
+            if not (is_shooting_star or is_bearish_engulfing or is_rejection):
+                metadata['reason'] = "Waiting for Bearish Trigger Candle (Shooting Star, Engulfing, or Rejection)"
                 return "HOLD", metadata
             metadata['debug_checks']['trigger'] = 'PASS'
 
             if not is_volume_confirmed:
-                metadata['reason'] = f"Insufficient volume confirmation ({curr_v:.1f} < {curr_vol_ma * 1.25:.1f})"
+                metadata['reason'] = f"Insufficient volume confirmation ({curr_v:.1f} < {curr_vol_ma * vol_req_mult:.1f})"
                 return "HOLD", metadata
             metadata['debug_checks']['volume'] = 'PASS'
 
-            # Volume Delta confirmation: Aggressive seller dominance
-            if curr_volume_delta >= 0:
+            # Volume Delta confirmation: Seller dominance
+            if not relaxed and curr_volume_delta >= 0:
                 metadata['reason'] = f"Volume Delta not bearish (Net buyer pressure: delta={curr_volume_delta:.1f})"
+                return "HOLD", metadata
+            elif relaxed and curr_volume_delta > (curr_v * 0.35):
+                metadata['reason'] = f"Excessive adverse buyer volume delta ({curr_volume_delta:.1f})"
                 return "HOLD", metadata
             metadata['debug_checks']['delta'] = 'PASS'
 
@@ -278,7 +297,7 @@ class HumanMindScalperStrategy(BaseStrategy):
             sl_p = max(curr_h, prev_h) * 1.003
             risk_d = sl_p - entry_p
 
-            # Clamp risk distance between 0.7% and 2.0% (protect against wick hunting)
+            # Clamp risk distance between 0.7% and 2.0%
             if risk_d < (entry_p * 0.007):
                 sl_p = entry_p * 1.007
                 risk_d = sl_p - entry_p
@@ -297,9 +316,9 @@ class HumanMindScalperStrategy(BaseStrategy):
             metadata['take_profit_1r'] = tp1_p
             metadata['tp1'] = tp1_p
             metadata['tp2'] = tp2_p
-            metadata['score'] = 4.5
+            metadata['score'] = 4.0 if relaxed else 4.5
             metadata['zone_id'] = f"HUMAN_SHORT_{int(time.time())}"
-            metadata['reason'] = f"1H Bearish Trend + 15m Value Pullback ({'ShootingStar' if is_shooting_star else 'BearishEngulfing'}) + VolDelta ({curr_volume_delta:.0f})"
+            metadata['reason'] = f"1H Bearish Trend + 15m Value Pullback ({'ShootingStar' if is_shooting_star else ('BearishEngulfing' if is_bearish_engulfing else 'Rejection')}) + VolDelta ({curr_volume_delta:.0f})"
             return "SELL", metadata
 
         return "HOLD", metadata
