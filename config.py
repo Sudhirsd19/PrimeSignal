@@ -34,20 +34,19 @@ class Config:
     USE_TESTNET = os.getenv("USE_TESTNET", "True").lower() in ("true", "1", "yes")
     DASHBOARD_SECRET = os.getenv("DASHBOARD_SECRET", "").strip()
     
-    # Product Settings (Top 25 High-Liquidity Institutional USDT Pairs)
-    SYMBOL = os.getenv("SYMBOL", "BTC/USDT")
+    # Product Settings (Curated High-Conviction Institutional USDT Momentum Pairs)
+    SYMBOL = os.getenv("SYMBOL", "ETH/USDT")
     DEFAULT_25_PAIRS = (
-        "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT,"
-        "SUI/USDT,NEAR/USDT,ENA/USDT,LINK/USDT,LTC/USDT,"
-        "WLD/USDT,TAO/USDT,ADA/USDT,ONDO/USDT,UNI/USDT,"
-        "APT/USDT,FET/USDT,AVAX/USDT,DOT/USDT,BNB/USDT,"
-        "TIA/USDT,INJ/USDT,SEI/USDT,ARB/USDT,OP/USDT"
+        "DOGE/USDT,AVAX/USDT,OP/USDT,SEI/USDT,SUI/USDT,"
+        "FET/USDT,INJ/USDT,ETH/USDT,WLD/USDT,SOL/USDT,"
+        "LTC/USDT,LINK/USDT,APT/USDT,DOT/USDT,TIA/USDT"
     )
     SUPPORTED_SYMBOLS = [s.strip() for s in os.getenv("SUPPORTED_SYMBOLS", DEFAULT_25_PAIRS).split(",") if s.strip()]
     TRADE_AMOUNT = float(os.getenv("TRADE_AMOUNT", "0.001"))
     ENABLE_DYNAMIC_SCANNER = os.getenv("ENABLE_DYNAMIC_SCANNER", "False").lower() in ("true", "1", "yes")
     ENABLE_SHORTS = os.getenv("ENABLE_SHORTS", "False").lower() in ("true", "1", "yes")
     STRATEGY_NAME = os.getenv("STRATEGY_NAME", "human_mind").lower()
+    EARLY_BE_ACTIVATION_R = float(os.getenv("EARLY_BE_ACTIVATION_R", "0.80")) # Move SL to Breakeven at +0.8R
     
     # ─── Per-Trade Risk Ladder ───
     RISK_PCT = float(os.getenv("RISK_PCT", "1.0"))

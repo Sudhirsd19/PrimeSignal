@@ -282,10 +282,10 @@ class RiskManager:
             return stop_loss
         trailing_offset = curr_atr * Config.TRAILING_ATR_MULT
         if position_side.upper() == "LONG":
-            new_stop = extreme_price - trailing_offset
+            new_stop = max(extreme_price - trailing_offset, entry_price * 1.001)
             return new_stop if new_stop > stop_loss else stop_loss
         if position_side.upper() == "SHORT":
-            new_stop = extreme_price + trailing_offset
+            new_stop = min(extreme_price + trailing_offset, entry_price * 0.999)
             return new_stop if new_stop < stop_loss else stop_loss
         return stop_loss
 

@@ -2127,7 +2127,7 @@ class PrimeSignalBot:
                             # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven
                             fee_buffer_pct = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
                             fee_offset = self.entry_price[symbol] * fee_buffer_pct
-                            tsl_activation = getattr(Config, 'TSL_ACTIVATION_R', 1.2)
+                            tsl_activation = getattr(Config, 'EARLY_BE_ACTIVATION_R', getattr(Config, 'TSL_ACTIVATION_R', 0.8))
                             min_required_profit = max(tsl_activation * r_dist, fee_offset * 1.5)
                             
                             # Only activate Breakeven after TP1 profit is secured OR price has reached full activation threshold
@@ -2451,7 +2451,7 @@ class PrimeSignalBot:
                             # ZERO-RISK FREE-TRADE LOCK: Move SL to Breakeven
                             fee_buffer_pct = getattr(Config, 'DYNAMIC_BE_BUFFER_PCT', 0.0030)
                             fee_offset = self.entry_price[symbol] * fee_buffer_pct
-                            tsl_activation = getattr(Config, 'TSL_ACTIVATION_R', 1.2)
+                            tsl_activation = getattr(Config, 'EARLY_BE_ACTIVATION_R', getattr(Config, 'TSL_ACTIVATION_R', 0.8))
                             min_required_profit = max(tsl_activation * r_dist, fee_offset * 1.5)
                             
                             # Only activate Breakeven after TP1 profit is secured OR price has reached full activation threshold

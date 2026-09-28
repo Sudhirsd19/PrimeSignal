@@ -77,9 +77,9 @@ class HumanMindScalperStrategy(BaseStrategy):
 
         metadata['debug_checks']['trend'] = 'PASS'
 
-        # Check venue capability
-        if htf_trend == 'BEARISH' and not allow_short:
-            metadata['reason'] = "Shorts disabled by venue capabilities"
+        # Check venue capability and configuration policy
+        if htf_trend == 'BEARISH' and (not allow_short or not getattr(Config, 'ENABLE_SHORTS', False)):
+            metadata['reason'] = "Shorts disabled by policy (High-conviction Longs-only mode)"
             return "HOLD", metadata
 
         # ── 2. LTF 15m Indicators ──
@@ -241,7 +241,7 @@ class HumanMindScalperStrategy(BaseStrategy):
             return "BUY", metadata
 
         # ── 4. SHORT SETUP ──
-        elif htf_trend == 'BEARISH' and allow_short:
+        elif htf_trend == 'BEARISH' and allow_short and getattr(Config, 'ENABLE_SHORTS', False):
             # 1H 200 EMA Macro Alignment: Never short when price is above 1H 200 EMA!
             if htf_last_close > curr_htf_ema200:
                 metadata['reason'] = f"Short blocked: 1H price ({htf_last_close:.2f}) > 1H 200 EMA ({curr_htf_ema200:.2f}) - Macro Bullish"
