@@ -154,12 +154,14 @@ class BTCAnchorEngine:
         symbol: str,
         side: str,
         btc_ltf_data: Any,
-        drop_threshold: float = 0.0035,
-        pump_threshold: float = 0.0035,
+        drop_threshold: float = 0.010,
+        pump_threshold: float = 0.010,
     ) -> Tuple[bool, str]:
         """
-        Active Position Guard: Inspects intra-candle and recent closed candle BTC price action
-        to detect adverse whale moves that threaten open altcoin positions.
+        Active Position Guard: Inspects active BTC candle price action
+        to detect real macro flash dumps (>1.0%) that threaten open altcoin positions.
+        Only inspects the active live candle to prevent killing positions based on
+        pre-entry candles.
         """
         clean_sym = symbol.replace("/", "").replace("_", "").replace("-", "").upper()
         if clean_sym.startswith("BTC") and not clean_sym.startswith("BTCST"):
@@ -172,21 +174,18 @@ class BTCAnchorEngine:
         if not isinstance(btc_ltf_df, pd.DataFrame) or len(btc_ltf_df) < 5:
             return False, "Insufficient BTC LTF candles"
 
-        # Check current live candle and last closed candle
-        for idx in [-1, -2]:
-            if abs(idx) > len(btc_ltf_df):
-                continue
-            candle = btc_ltf_df.iloc[idx]
-            c_open = float(candle.get('open', 0.0))
-            c_close = float(candle.get('close', 0.0))
-            if c_open > 0:
-                ret = (c_close - c_open) / c_open
-                if side == "LONG" and ret <= -drop_threshold:
-                    pct = abs(ret) * 100.0
-                    return True, f"BTC Flash Whale Dump (-{pct:.2f}% in 15m)"
-                elif side == "SHORT" and ret >= pump_threshold:
-                    pct = ret * 100.0
-                    return True, f"BTC Flash Whale Surge (+{pct:.2f}% in 15m)"
+        # Check ONLY the active live candle (-1), never pre-entry candles
+        candle = btc_ltf_df.iloc[-1]
+        c_open = float(candle.get('open', 0.0))
+        c_close = float(candle.get('close', 0.0))
+        if c_open > 0:
+            ret = (c_close - c_open) / c_open
+            if side == "LONG" and ret <= -drop_threshold:
+                pct = abs(ret) * 100.0
+                return True, f"BTC Flash Whale Dump (-{pct:.2f}% in 15m)"
+            elif side == "SHORT" and ret >= pump_threshold:
+                pct = ret * 100.0
+                return True, f"BTC Flash Whale Surge (+{pct:.2f}% in 15m)"
 
         return False, "BTC stable"
 

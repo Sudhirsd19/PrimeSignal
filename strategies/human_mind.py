@@ -180,9 +180,16 @@ class HumanMindScalperStrategy(BaseStrategy):
                 return "HOLD", metadata
             metadata['debug_checks']['pullback'] = 'PASS'
 
+            # Overextension Guard: Entry close must not be stretched too far above EMA20 (value zone)
+            max_ema_stretch = 1.008 if relaxed else 1.005
+            if curr_c > curr_ema20 * max_ema_stretch:
+                metadata['reason'] = f"Price overextended from EMA20 ({curr_c:.4f} > {curr_ema20 * max_ema_stretch:.4f})"
+                return "HOLD", metadata
+            metadata['debug_checks']['stretch'] = 'PASS'
+
             # RSI check (dynamic band)
             rsi_min = 35.0 if relaxed else 38.0
-            rsi_max = 72.0 if relaxed else 68.0
+            rsi_max = 70.0 if relaxed else 65.0
             if not (rsi_min <= curr_rsi <= rsi_max):
                 metadata['reason'] = f"RSI out of bounds for Long entry ({curr_rsi:.1f}) [Allowed: {rsi_min:.0f}-{rsi_max:.0f}]"
                 return "HOLD", metadata
@@ -190,7 +197,7 @@ class HumanMindScalperStrategy(BaseStrategy):
             # Trigger candle: Hammer (rejection) or Bullish Engulfing or Bullish Rebound
             is_hammer = (curr_c > curr_o) and (lower_wick >= 1.0 * max(body, 1e-6))
             is_engulfing = (curr_c > prev_h) and (prev_c < prev_o)
-            is_rebound = relaxed and (curr_c > curr_o) and (curr_c > curr_ema20) and (lower_wick >= 0.6 * max(body, 1e-6))
+            is_rebound = relaxed and (curr_c > curr_o) and (curr_c > curr_ema20) and (lower_wick >= 0.8 * max(body, 1e-6)) and (lower_wick >= 0.0015 * curr_c)
 
             if not (is_hammer or is_engulfing or is_rebound):
                 metadata['reason'] = "Waiting for Bullish Trigger Candle (Hammer, Engulfing, or Rebound)"
@@ -202,26 +209,27 @@ class HumanMindScalperStrategy(BaseStrategy):
                 return "HOLD", metadata
             metadata['debug_checks']['volume'] = 'PASS'
 
-            # Volume Delta confirmation: Buyer dominance
-            if not relaxed and curr_volume_delta <= 0:
+            # Volume Delta confirmation: Buyer dominance (must be net positive)
+            if curr_volume_delta <= 0:
                 metadata['reason'] = f"Volume Delta not bullish (Net seller pressure: delta={curr_volume_delta:.1f})"
-                return "HOLD", metadata
-            elif relaxed and curr_volume_delta < -(curr_v * 0.35):
-                metadata['reason'] = f"Excessive adverse seller volume delta ({curr_volume_delta:.1f})"
                 return "HOLD", metadata
             metadata['debug_checks']['delta'] = 'PASS'
 
             # Valid Long setup!
             entry_p = curr_c
+            min_sl_pct = getattr(Config, 'MIN_SL_PCT', 0.015)
+            max_sl_pct = getattr(Config, 'MAX_SL_PCT', 0.025)
+
             sl_p = min(curr_l, prev_l) * 0.997
             risk_d = entry_p - sl_p
 
-            # Clamp risk distance between 0.7% and 2.0%
-            if risk_d < (entry_p * 0.007):
-                sl_p = entry_p * 0.993
+            # Clamp risk distance between MIN_SL_PCT (1.5%) and MAX_SL_PCT (2.5%)
+            # to survive 15m crypto wick volatility while maintaining institutional R:R
+            if risk_d < (entry_p * min_sl_pct):
+                sl_p = entry_p * (1.0 - min_sl_pct)
                 risk_d = entry_p - sl_p
-            elif risk_d > (entry_p * 0.020):
-                sl_p = entry_p * 0.980
+            elif risk_d > (entry_p * max_sl_pct):
+                sl_p = entry_p * (1.0 - max_sl_pct)
                 risk_d = entry_p - sl_p
 
             tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.3)
@@ -261,8 +269,15 @@ class HumanMindScalperStrategy(BaseStrategy):
                 return "HOLD", metadata
             metadata['debug_checks']['pullback'] = 'PASS'
 
+            # Overextension Guard: Entry close must not be stretched too far below EMA20 (value zone)
+            min_ema_stretch = 0.992 if relaxed else 0.995
+            if curr_c < curr_ema20 * min_ema_stretch:
+                metadata['reason'] = f"Price overextended below EMA20 ({curr_c:.4f} < {curr_ema20 * min_ema_stretch:.4f})"
+                return "HOLD", metadata
+            metadata['debug_checks']['stretch'] = 'PASS'
+
             # RSI check (dynamic band)
-            rsi_min = 28.0 if relaxed else 32.0
+            rsi_min = 30.0 if relaxed else 35.0
             rsi_max = 65.0 if relaxed else 62.0
             if not (rsi_min <= curr_rsi <= rsi_max):
                 metadata['reason'] = f"RSI out of bounds for Short entry ({curr_rsi:.1f}) [Allowed: {rsi_min:.0f}-{rsi_max:.0f}]"
@@ -271,7 +286,7 @@ class HumanMindScalperStrategy(BaseStrategy):
             # Trigger candle: Shooting star (upper rejection) or Bearish Engulfing or Bearish Rejection
             is_shooting_star = (curr_c < curr_o) and (upper_wick >= 1.0 * max(body, 1e-6))
             is_bearish_engulfing = (curr_c < prev_l) and (prev_c > prev_o)
-            is_rejection = relaxed and (curr_c < curr_o) and (curr_c < curr_ema20) and (upper_wick >= 0.6 * max(body, 1e-6))
+            is_rejection = relaxed and (curr_c < curr_o) and (curr_c < curr_ema20) and (upper_wick >= 0.8 * max(body, 1e-6)) and (upper_wick >= 0.0015 * curr_c)
 
             if not (is_shooting_star or is_bearish_engulfing or is_rejection):
                 metadata['reason'] = "Waiting for Bearish Trigger Candle (Shooting Star, Engulfing, or Rejection)"
@@ -283,26 +298,26 @@ class HumanMindScalperStrategy(BaseStrategy):
                 return "HOLD", metadata
             metadata['debug_checks']['volume'] = 'PASS'
 
-            # Volume Delta confirmation: Seller dominance
-            if not relaxed and curr_volume_delta >= 0:
+            # Volume Delta confirmation: Seller dominance (must be net negative)
+            if curr_volume_delta >= 0:
                 metadata['reason'] = f"Volume Delta not bearish (Net buyer pressure: delta={curr_volume_delta:.1f})"
-                return "HOLD", metadata
-            elif relaxed and curr_volume_delta > (curr_v * 0.35):
-                metadata['reason'] = f"Excessive adverse buyer volume delta ({curr_volume_delta:.1f})"
                 return "HOLD", metadata
             metadata['debug_checks']['delta'] = 'PASS'
 
             # Valid Short setup!
             entry_p = curr_c
+            min_sl_pct = getattr(Config, 'MIN_SL_PCT', 0.015)
+            max_sl_pct = getattr(Config, 'MAX_SL_PCT', 0.025)
+
             sl_p = max(curr_h, prev_h) * 1.003
             risk_d = sl_p - entry_p
 
-            # Clamp risk distance between 0.7% and 2.0%
-            if risk_d < (entry_p * 0.007):
-                sl_p = entry_p * 1.007
+            # Clamp risk distance between MIN_SL_PCT (1.5%) and MAX_SL_PCT (2.5%)
+            if risk_d < (entry_p * min_sl_pct):
+                sl_p = entry_p * (1.0 + min_sl_pct)
                 risk_d = sl_p - entry_p
-            elif risk_d > (entry_p * 0.020):
-                sl_p = entry_p * 1.020
+            elif risk_d > (entry_p * max_sl_pct):
+                sl_p = entry_p * (1.0 + max_sl_pct)
                 risk_d = sl_p - entry_p
 
             tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.3)

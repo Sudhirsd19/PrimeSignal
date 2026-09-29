@@ -46,7 +46,7 @@ class Config:
     ENABLE_DYNAMIC_SCANNER = os.getenv("ENABLE_DYNAMIC_SCANNER", "False").lower() in ("true", "1", "yes")
     ENABLE_SHORTS = os.getenv("ENABLE_SHORTS", "False").lower() in ("true", "1", "yes")
     STRATEGY_NAME = os.getenv("STRATEGY_NAME", "human_mind").lower()
-    EARLY_BE_ACTIVATION_R = float(os.getenv("EARLY_BE_ACTIVATION_R", "0.80")) # Move SL to Breakeven at +0.8R
+    EARLY_BE_ACTIVATION_R = float(os.getenv("EARLY_BE_ACTIVATION_R", "0.60")) # Move SL to Breakeven at +0.6R
     
     # ─── Per-Trade Risk Ladder ───
     RISK_PCT = float(os.getenv("RISK_PCT", "1.0"))
@@ -57,7 +57,7 @@ class Config:
     RISK_TIER_MID_SCORE = float(os.getenv("RISK_TIER_MID_SCORE", "3.5"))
     RISK_TIER_HIGH_SCORE = float(os.getenv("RISK_TIER_HIGH_SCORE", "4.5"))
     MAX_TRADE_ALLOCATION_PCT = float(os.getenv("MAX_TRADE_ALLOCATION_PCT", "0.45")) # Max 45% margin allocation per trade
-    DYNAMIC_BE_BUFFER_PCT = float(os.getenv("DYNAMIC_BE_BUFFER_PCT", "0.0030"))
+    DYNAMIC_BE_BUFFER_PCT = float(os.getenv("DYNAMIC_BE_BUFFER_PCT", "0.0015"))
     MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "5.0"))
     MAX_DAILY_PROFIT_PCT = float(os.getenv("MAX_DAILY_PROFIT_PCT", "10.0"))
     ENABLE_DAILY_PROFIT_LOCK = os.getenv("ENABLE_DAILY_PROFIT_LOCK", "True").lower() in ("true", "1", "yes")
@@ -72,8 +72,8 @@ class Config:
     MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.3")) # Target 1: 1.3R (65%+ Win Rate)
     RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.2")) # Target 2: 2.2R (Remaining runner)
     ENABLE_RELAXED_MODE = os.getenv("ENABLE_RELAXED_MODE", "False").lower() in ("true", "1", "yes")
-    MIN_SL_PCT = float(os.getenv("MIN_SL_PCT", "0.006"))
-    MAX_SL_PCT = float(os.getenv("MAX_SL_PCT", "0.020"))
+    MIN_SL_PCT = float(os.getenv("MIN_SL_PCT", "0.015"))
+    MAX_SL_PCT = float(os.getenv("MAX_SL_PCT", "0.025"))
     TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "0.50")) # 50% profit booking at TP1 (1.3R)
     TP2_REMAINING_SCALE_PCT = float(os.getenv("TP2_REMAINING_SCALE_PCT", "1.0")) # 100% of remaining booked at TP2 (2.2R)
     MIN_VOLUME_SPIKE_MULT = float(os.getenv("MIN_VOLUME_SPIKE_MULT", "1.15")) # 1.15x 20-bar volume spike confirmation
@@ -102,8 +102,8 @@ class Config:
     
     # 2b. Adverse Whale Contagion / Toxic Flow Circuit Breaker
     ENABLE_WHALE_BREAKER = os.getenv("ENABLE_WHALE_BREAKER", "True").lower() in ("true", "1", "yes")
-    BTC_ADVERSE_DROP_THRESHOLD = float(os.getenv("BTC_ADVERSE_DROP_THRESHOLD", "0.0035")) # 0.35% drop in 15m
-    BTC_ADVERSE_PUMP_THRESHOLD = float(os.getenv("BTC_ADVERSE_PUMP_THRESHOLD", "0.0035")) # 0.35% pump in 15m
+    BTC_ADVERSE_DROP_THRESHOLD = float(os.getenv("BTC_ADVERSE_DROP_THRESHOLD", "0.0100")) # 1.00% drop in 15m
+    BTC_ADVERSE_PUMP_THRESHOLD = float(os.getenv("BTC_ADVERSE_PUMP_THRESHOLD", "0.0100")) # 1.00% pump in 15m
 
     
     # 3. Funding Rate & Crowded Sentiment Filter
