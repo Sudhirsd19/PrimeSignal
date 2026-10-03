@@ -233,35 +233,40 @@ class TestPhase9BRemediation(unittest.IsolatedAsyncioTestCase):
 
     def test_aud_p9_02_inr_account_sizing_adheres_to_capital_cap(self):
         """Verify ₹2,000 and ₹10,000 INR account sizing respects 35% capital allocation cap."""
-        rm = RiskManager()
+        old_cap = getattr(Config, 'MAX_TRADE_ALLOCATION_PCT', 0.35)
+        try:
+            Config.MAX_TRADE_ALLOCATION_PCT = 0.35
+            rm = RiskManager()
 
-        # ₹2,000 INR account with BTC @ $80,000, SL @ $78,400, FX rate = 90.0 INR/USDT
-        # BTC in INR = 80,000 * 90 = 7,200,000 INR
-        # 35% cap of ₹2,000 = ₹700 INR
-        # Max BTC = 700 / 7,200,000 = 0.00009722 BTC
-        size_2k = rm.calculate_position_size(
-            account_equity=2000.0,
-            entry_price=80000.0,
-            stop_loss=78400.0,
-            quote_currency="USDT",
-            is_inr=True,
-            conversion_rate=90.0
-        )
-        notional_inr_2k = size_2k * (80000.0 * 90.0)
-        self.assertLessEqual(notional_inr_2k, 2000.0 * 0.35 + 0.01)
+            # ₹2,000 INR account with BTC @ $80,000, SL @ $78,400, FX rate = 90.0 INR/USDT
+            # BTC in INR = 80,000 * 90 = 7,200,000 INR
+            # 35% cap of ₹2,000 = ₹700 INR
+            # Max BTC = 700 / 7,200,000 = 0.00009722 BTC
+            size_2k = rm.calculate_position_size(
+                account_equity=2000.0,
+                entry_price=80000.0,
+                stop_loss=78400.0,
+                quote_currency="USDT",
+                is_inr=True,
+                conversion_rate=90.0
+            )
+            notional_inr_2k = size_2k * (80000.0 * 90.0)
+            self.assertLessEqual(notional_inr_2k, 2000.0 * 0.35 + 0.01)
 
-        # ₹10,000 INR account
-        # 35% cap of ₹10,000 = ₹3,500 INR
-        size_10k = rm.calculate_position_size(
-            account_equity=10000.0,
-            entry_price=80000.0,
-            stop_loss=78400.0,
-            quote_currency="USDT",
-            is_inr=True,
-            conversion_rate=90.0
-        )
-        notional_inr_10k = size_10k * (80000.0 * 90.0)
-        self.assertLessEqual(notional_inr_10k, 10000.0 * 0.35 + 0.01)
+            # ₹10,000 INR account
+            # 35% cap of ₹10,000 = ₹3,500 INR
+            size_10k = rm.calculate_position_size(
+                account_equity=10000.0,
+                entry_price=80000.0,
+                stop_loss=78400.0,
+                quote_currency="USDT",
+                is_inr=True,
+                conversion_rate=90.0
+            )
+            notional_inr_10k = size_10k * (80000.0 * 90.0)
+            self.assertLessEqual(notional_inr_10k, 10000.0 * 0.35 + 0.01)
+        finally:
+            Config.MAX_TRADE_ALLOCATION_PCT = old_cap
 
     # ─────────────────────────────────────────────────────────────────────────
     # AUD-P9-03: Invalid Stop Distance Must Fail Closed

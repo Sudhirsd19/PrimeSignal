@@ -28,13 +28,13 @@ class TestPhase8AdversarialRemediation(unittest.IsolatedAsyncioTestCase):
         Config.MAX_TRADE_ALLOCATION_PCT = 0.35
         Config.USDT_INR_RATE = 85.0
         Config.TRADING_VENUE = 'BINANCE'
-        Config.EXCHANGE_TYPE = 'futures'
+        Config.EXCHANGE_TYPE = 'spot'
 
     def tearDown(self):
         Config.PAPER_TRADING = True
         Config.COINDCX_TRADE_INR = False
         Config.TRADING_VENUE = 'BINANCE'
-        Config.EXCHANGE_TYPE = 'futures'
+        Config.EXCHANGE_TYPE = 'spot'
 
     # ──────────────────────────────────────────────────────────────────────────
     # AUD-P0-01: CURRENCY ISOLATION & SIZING TESTS

@@ -127,7 +127,10 @@ class PrimeSignalBot:
 
     def _sync_symbol_states(self):
         """Ensures all internal state dictionaries have keys for current Config.SUPPORTED_SYMBOLS."""
-        for sym in Config.SUPPORTED_SYMBOLS:
+        all_syms = set(Config.SUPPORTED_SYMBOLS)
+        if getattr(Config, 'SYMBOL', None):
+            all_syms.add(Config.SYMBOL)
+        for sym in all_syms:
             if sym not in getattr(self, 'in_position', {}):
                 self.ml_models[sym] = MLSignalConfirmator()
                 self.in_position[sym] = False
@@ -405,9 +408,14 @@ class PrimeSignalBot:
                 # Helper to safely load dict state, falling back to default if new symbols were added
                 def safe_load(key: str, default_val: Any) -> dict[str, Any]:
                     loaded_dict = state.get(key, {}) if isinstance(state, dict) else {}
+                    symbols = set(Config.SUPPORTED_SYMBOLS)
+                    if getattr(Config, 'SYMBOL', None):
+                        symbols.add(Config.SYMBOL)
+                    if isinstance(loaded_dict, dict):
+                        symbols.update(loaded_dict.keys())
                     if not isinstance(loaded_dict, dict):
-                        return {sym: default_val for sym in Config.SUPPORTED_SYMBOLS}
-                    return {sym: loaded_dict.get(sym, default_val) for sym in Config.SUPPORTED_SYMBOLS}
+                        return {sym: default_val for sym in symbols}
+                    return {sym: loaded_dict.get(sym, default_val) for sym in symbols}
 
                 self.in_position = {k: bool(v) for k, v in safe_load('in_position', False).items()}
                 self.position_side = {k: str(v) for k, v in safe_load('position_side', 'HOLD').items()}
@@ -433,6 +441,17 @@ class PrimeSignalBot:
                 self.current_trade_id = {k: str(v or '') for k, v in safe_load('current_trade_id', '').items()}
                 self.entry_fx_rate = {k: float(v or 0.0) for k, v in safe_load('entry_fx_rate', 0.0).items()}
                 self.accumulated_fees = {k: float(v or 0.0) for k, v in safe_load('accumulated_fees', 0.0).items()}
+
+                # Ensure locks and models exist for all loaded symbols
+                for sym in list(self.in_position.keys()):
+                    if sym not in getattr(self, '_candle_locks', {}):
+                        self._candle_locks[sym] = asyncio.Lock()
+                    if sym not in getattr(self, '_exit_locks', {}):
+                        self._exit_locks[sym] = asyncio.Lock()
+                    if sym not in getattr(self, '_pending_candle_evaluations', {}):
+                        self._pending_candle_evaluations[sym] = False
+                    if sym not in getattr(self, 'ml_models', {}):
+                        self.ml_models[sym] = MLSignalConfirmator()
                 
                 if isinstance(state, dict):
                     self.hourly_peak_equity = float(state.get('hourly_peak_equity', self._dry_run_balance_usdt))
@@ -871,7 +890,7 @@ class PrimeSignalBot:
         if rate <= 0:
             rate = 85.0
 
-        is_futures = getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures'
+        is_futures = (getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures') and (not is_inr)
         lev = max(1.0, float(getattr(Config, 'FUTURES_LEVERAGE', 1.0))) if is_futures else 1.0
 
         for sym in Config.SUPPORTED_SYMBOLS:
@@ -3046,17 +3065,62 @@ class PrimeSignalBot:
             if exit_price <= 0 or not exit_price:
                 exit_price = self.entry_price[symbol]
             add_log_message(f"[{symbol}] Exiting at price: {exit_price:.4f} (reason: {reason})")
+            order = None
             if self.has_keys and not Config.PAPER_TRADING:
                 side = 'buy' if self.position_side[symbol] == 'SHORT' else 'sell'
                 exit_role = "TP" if ("TAKE_PROFIT" in reason.upper() or "TP" in reason.upper()) else ("SL" if ("STOP_LOSS" in reason.upper() or "SL" in reason.upper()) else "EMERGENCY")
-                try:
-                    order = await self.execution.place_order(side, 'market', self.position_size[symbol], price=exit_price, is_exit_order=True, symbol=symbol, order_role=exit_role)
-                except Exception as e:
-                    add_log_message(f"[{symbol}] 🚨 Exception during exit execution: {e}. Transitioning to EXIT_UNKNOWN.")
-                    ctx.transition_to(OrderState.EXIT_UNKNOWN, reason=f"Exit NetworkError: {e}")
-                    order = None
-                    if hasattr(self, 'reconciliation'):
-                        asyncio.create_task(self.reconciliation._reconcile_live_broker_state())
+
+                # 1. Check if native SL was ALREADY executed on exchange
+                native_sl_already_filled = False
+                if ctx.native_sl_order_id:
+                    try:
+                        if await self.execution.check_order_filled(symbol, ctx.native_sl_order_id):
+                            native_sl_already_filled = True
+                            add_log_message(f"[{symbol}] 🎯 Native SL {ctx.native_sl_order_id} already executed on exchange.")
+                            order = {
+                                'id': ctx.native_sl_order_id,
+                                'price': self.stop_loss.get(symbol, exit_price),
+                                'average': self.stop_loss.get(symbol, exit_price),
+                                'amount': self.position_size[symbol],
+                                'filled': self.position_size[symbol],
+                                'status': 'filled'
+                            }
+                    except Exception as sl_chk_err:
+                        add_log_message(f"[{symbol}] Note: Error checking native SL fill status: {sl_chk_err}")
+
+                # 2. If not filled, on SPOT cancel native SL first to release locked balance
+                if not native_sl_already_filled:
+                    is_spot = (getattr(Config, 'EXCHANGE_TYPE', 'spot') != 'futures')
+                    if is_spot and ctx.native_sl_order_id:
+                        try:
+                            add_log_message(f"[{symbol}] Cancelling active spot SL {ctx.native_sl_order_id} to release balance for exit.")
+                            cancel_res = await self.execution.cancel_order_safe(symbol, ctx.native_sl_order_id)
+                            # Check if it was filled during cancellation race
+                            if await self.execution.check_order_filled(symbol, ctx.native_sl_order_id):
+                                native_sl_already_filled = True
+                                order = {
+                                    'id': ctx.native_sl_order_id,
+                                    'price': self.stop_loss.get(symbol, exit_price),
+                                    'average': self.stop_loss.get(symbol, exit_price),
+                                    'amount': self.position_size[symbol],
+                                    'filled': self.position_size[symbol],
+                                    'status': 'filled'
+                                }
+                            else:
+                                ctx.native_sl_order_id = None
+                        except Exception as c_err:
+                            add_log_message(f"[{symbol}] Warning cancelling spot SL before exit: {c_err}")
+
+                # 3. Place market exit order if native SL didn't already close position
+                if not native_sl_already_filled:
+                    try:
+                        order = await self.execution.place_order(side, 'market', self.position_size[symbol], price=exit_price, is_exit_order=True, symbol=symbol, order_role=exit_role)
+                    except Exception as e:
+                        add_log_message(f"[{symbol}] 🚨 Exception during exit execution: {e}. Transitioning to EXIT_UNKNOWN.")
+                        ctx.transition_to(OrderState.EXIT_UNKNOWN, reason=f"Exit NetworkError: {e}")
+                        order = None
+                        if hasattr(self, 'reconciliation'):
+                            asyncio.create_task(self.reconciliation._reconcile_live_broker_state())
             else:
                 order = {'id': 'MOCK_EXIT_ORDER_ID', 'price': exit_price, 'status': 'filled'}
                 

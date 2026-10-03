@@ -129,25 +129,28 @@ class ExecutionEngine:
         if sym in self._futures_initialized_symbols:
             return
         try:
-            await self.trade_client.load_markets()
+            if hasattr(self.trade_client, 'load_markets'):
+                await self.trade_client.load_markets()
             # Set margin mode (isolated / cross)
-            try:
-                await self.trade_client.set_margin_mode(Config.FUTURES_MARGIN_MODE, sym)
-                print(f"[FUTURES] Margin mode set to {Config.FUTURES_MARGIN_MODE.upper()} for {sym}")
-            except Exception as e:
-                err_msg = str(e).lower()
-                # Binance returns -4046 / "No need to change margin type" if already in desired mode
-                if "no need to change margin type" in err_msg or "-4046" in err_msg:
-                    print(f"[FUTURES] Margin mode already set to {Config.FUTURES_MARGIN_MODE.upper()} for {sym}")
-                else:
-                    raise RuntimeError(f"Failed to set futures margin mode to {Config.FUTURES_MARGIN_MODE} on {sym}: {e}")
+            if hasattr(self.trade_client, 'set_margin_mode'):
+                try:
+                    await self.trade_client.set_margin_mode(Config.FUTURES_MARGIN_MODE, sym)
+                    print(f"[FUTURES] Margin mode set to {Config.FUTURES_MARGIN_MODE.upper()} for {sym}")
+                except Exception as e:
+                    err_msg = str(e).lower()
+                    # Binance returns -4046 / "No need to change margin type" if already in desired mode
+                    if "no need to change margin type" in err_msg or "-4046" in err_msg:
+                        print(f"[FUTURES] Margin mode already set to {Config.FUTURES_MARGIN_MODE.upper()} for {sym}")
+                    else:
+                        raise RuntimeError(f"Failed to set futures margin mode to {Config.FUTURES_MARGIN_MODE} on {sym}: {e}")
 
             # Set leverage
-            try:
-                await self.trade_client.set_leverage(Config.FUTURES_LEVERAGE, sym)
-                print(f"[FUTURES] Leverage set to {Config.FUTURES_LEVERAGE}x for {sym}")
-            except Exception as e:
-                raise RuntimeError(f"Failed to set futures leverage to {Config.FUTURES_LEVERAGE}x on {sym}: {e}")
+            if hasattr(self.trade_client, 'set_leverage'):
+                try:
+                    await self.trade_client.set_leverage(Config.FUTURES_LEVERAGE, sym)
+                    print(f"[FUTURES] Leverage set to {Config.FUTURES_LEVERAGE}x for {sym}")
+                except Exception as e:
+                    raise RuntimeError(f"Failed to set futures leverage to {Config.FUTURES_LEVERAGE}x on {sym}: {e}")
 
             self._futures_initialized_symbols.add(sym)
         except Exception as e:

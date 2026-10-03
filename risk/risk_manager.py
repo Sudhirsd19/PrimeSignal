@@ -187,7 +187,7 @@ class RiskManager:
             return 0.0
 
         position_size = trade_risk / stop_distance
-        is_futures = getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures'
+        is_futures = (getattr(Config, 'EXCHANGE_TYPE', 'spot') == 'futures') and (not is_inr)
         leverage = getattr(Config, 'FUTURES_LEVERAGE', 1.0) if is_futures else 1.0
         max_alloc = getattr(Config, 'MAX_TRADE_ALLOCATION', getattr(Config, 'MAX_TRADE_ALLOCATION_PCT', 0.35))
         if max_alloc > 1.0:

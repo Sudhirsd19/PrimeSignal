@@ -147,13 +147,16 @@ class RiskLadderTests(unittest.TestCase):
 class VenueCapabilityTests(unittest.TestCase):
     def setUp(self):
         self.saved_type = Config.EXCHANGE_TYPE
+        self.saved_shorts = getattr(Config, 'ENABLE_SHORTS', False)
         self.saved = permissive_config()
 
     def tearDown(self):
         Config.EXCHANGE_TYPE = self.saved_type
+        Config.ENABLE_SHORTS = self.saved_shorts
         restore_config(self.saved)
 
     def test_venue_capability_flag(self):
+        Config.ENABLE_SHORTS = True
         Config.EXCHANGE_TYPE = "spot"
         self.assertFalse(Config.venue_supports_short())
         Config.EXCHANGE_TYPE = "futures"

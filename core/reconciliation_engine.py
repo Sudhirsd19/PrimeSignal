@@ -441,7 +441,19 @@ class ReconciliationEngine:
                 return
 
             pos_map = {p['symbol']: p for p in positions if isinstance(p, dict) and p.get('symbol')}
-            for symbol in Config.SUPPORTED_SYMBOLS:
+            symbols_to_check = list(Config.SUPPORTED_SYMBOLS)
+            if getattr(Config, 'SYMBOL', None) and Config.SYMBOL not in symbols_to_check:
+                symbols_to_check.append(Config.SYMBOL)
+            for p_sym in pos_map:
+                if p_sym not in symbols_to_check:
+                    symbols_to_check.append(p_sym)
+            for symbol in symbols_to_check:
+                if hasattr(self.bot, 'in_position') and symbol not in self.bot.in_position:
+                    self.bot.in_position[symbol] = False
+                    self.bot.position_size[symbol] = 0.0
+                    self.bot.position_side[symbol] = "HOLD"
+                    self.bot.stop_loss[symbol] = 0.0
+                    self.bot.entry_price[symbol] = 0.0
                 ctx = self.bot.order_state_machine.get_context(symbol)
                 exchange_pos = pos_map.get(symbol)
                 contracts = float(exchange_pos.get('contracts', 0.0)) if exchange_pos else 0.0
@@ -620,7 +632,16 @@ class ReconciliationEngine:
         else:
             balance = await exec_engine.execute_with_retry(exec_engine.trade_client.fetch_balance)
             total_bal = (balance or {}).get('total', {})
-            for symbol in Config.SUPPORTED_SYMBOLS:
+            spot_symbols = list(Config.SUPPORTED_SYMBOLS)
+            if getattr(Config, 'SYMBOL', None) and Config.SYMBOL not in spot_symbols:
+                spot_symbols.append(Config.SYMBOL)
+            for symbol in spot_symbols:
+                if hasattr(self.bot, 'in_position') and symbol not in self.bot.in_position:
+                    self.bot.in_position[symbol] = False
+                    self.bot.position_size[symbol] = 0.0
+                    self.bot.position_side[symbol] = "HOLD"
+                    self.bot.stop_loss[symbol] = 0.0
+                    self.bot.entry_price[symbol] = 0.0
                 base_asset = symbol.split('/')[0]
                 base_qty = float(total_bal.get(base_asset, 0.0))
                 ctx = self.bot.order_state_machine.get_context(symbol)
