@@ -232,8 +232,8 @@ class HumanMindScalperStrategy(BaseStrategy):
                 sl_p = entry_p * (1.0 - max_sl_pct)
                 risk_d = entry_p - sl_p
 
-            tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.3)
-            tp2_mult = getattr(Config, 'RISK_REWARD_RATIO', 2.2)
+            tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)
+            tp2_mult = getattr(Config, 'RISK_REWARD_RATIO', 2.8)
 
             tp1_p = entry_p + (tp1_mult * risk_d)
             tp2_p = entry_p + (tp2_mult * risk_d)
@@ -320,8 +320,8 @@ class HumanMindScalperStrategy(BaseStrategy):
                 sl_p = entry_p * (1.0 + max_sl_pct)
                 risk_d = sl_p - entry_p
 
-            tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.3)
-            tp2_mult = getattr(Config, 'RISK_REWARD_RATIO', 2.2)
+            tp1_mult = getattr(Config, 'MIN_RISK_REWARD_RATIO', 1.5)
+            tp2_mult = getattr(Config, 'RISK_REWARD_RATIO', 2.8)
 
             tp1_p = entry_p - (tp1_mult * risk_d)
             tp2_p = entry_p - (tp2_mult * risk_d)

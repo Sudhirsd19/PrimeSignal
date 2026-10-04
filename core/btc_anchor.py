@@ -25,10 +25,10 @@ class BTCAnchorEngine:
 
     def __init__(
         self,
-        flash_drop_threshold: float = 0.006,   # 0.6% single-candle drop
-        flash_pump_threshold: float = 0.006,   # 0.6% single-candle pump
-        rolling_3bar_drop_threshold: float = 0.010,  # 1.0% over 3 candles (45m)
-        rolling_3bar_pump_threshold: float = 0.010,  # 1.0% over 3 candles (45m)
+        flash_drop_threshold: float = 0.005,   # 0.5% single-candle drop (tighter flush guard)
+        flash_pump_threshold: float = 0.005,   # 0.5% single-candle pump
+        rolling_3bar_drop_threshold: float = 0.008,  # 0.8% over 3 candles (45m)
+        rolling_3bar_pump_threshold: float = 0.008,  # 0.8% over 3 candles (45m)
     ):
         self.flash_drop_threshold = flash_drop_threshold
         self.flash_pump_threshold = flash_pump_threshold
@@ -125,17 +125,19 @@ class BTCAnchorEngine:
 
                 if htf_close > htf_ema50 and htf_ema50 >= htf_ema200:
                     btc_htf_trend = "BULLISH"
-                elif htf_close < htf_ema50 and htf_ema50 <= htf_ema200:
+                elif htf_close < htf_ema50:
                     btc_htf_trend = "BEARISH"
+                else:
+                    btc_htf_trend = "NEUTRAL"
 
         # LTF RSI on last closed candle
         ltf_rsi_series = calculate_rsi(btc_ltf_df, 14)
         ltf_rsi_idx = -2 if len(btc_ltf_df) >= 2 else -1
         btc_ltf_rsi = float(ltf_rsi_series.iloc[ltf_rsi_idx]) if not ltf_rsi_series.empty and not math.isnan(ltf_rsi_series.iloc[ltf_rsi_idx]) else 50.0
 
-        # Hard Macro Trend Filter: Never buy altcoins during a confirmed BTC 1h Downtrend
-        if signal == "BUY" and btc_htf_trend == "BEARISH":
-            return False, f"BTC HTF Downtrend (1h Trend: BEARISH, RSI: {btc_ltf_rsi:.1f}): Altcoin long blocked", 0.0
+        # Hard Macro Trend Filter: Block Altcoin Longs if BTC 1h is below 50 EMA or in Downtrend
+        if signal == "BUY" and (btc_htf_trend == "BEARISH" or (btc_htf_data is not None and htf_close < htf_ema50)):
+            return False, f"BTC Below 1H EMA50 / HTF Downtrend (Trend: {btc_htf_trend}, RSI: {btc_ltf_rsi:.1f}): Altcoin long blocked", 0.0
 
         if signal == "SELL" and btc_htf_trend == "BULLISH":
             return False, f"BTC HTF Uptrend (1h Trend: BULLISH, RSI: {btc_ltf_rsi:.1f}): Altcoin short blocked", 0.0

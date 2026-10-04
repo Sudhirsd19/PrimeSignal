@@ -37,16 +37,15 @@ class Config:
     # Product Settings (Curated High-Conviction Institutional USDT Momentum Pairs)
     SYMBOL = os.getenv("SYMBOL", "ETH/USDT")
     DEFAULT_25_PAIRS = (
-        "DOGE/USDT,AVAX/USDT,OP/USDT,SEI/USDT,SUI/USDT,"
-        "FET/USDT,INJ/USDT,ETH/USDT,WLD/USDT,SOL/USDT,"
-        "LTC/USDT,LINK/USDT,APT/USDT,DOT/USDT,TIA/USDT"
+        "AVAX/USDT,DOGE/USDT,DOT/USDT,SUI/USDT,FET/USDT,"
+        "WLD/USDT,ETH/USDT,LINK/USDT,LTC/USDT,OP/USDT,SEI/USDT,NEAR/USDT"
     )
     SUPPORTED_SYMBOLS = [s.strip() for s in os.getenv("SUPPORTED_SYMBOLS", DEFAULT_25_PAIRS).split(",") if s.strip()]
     TRADE_AMOUNT = float(os.getenv("TRADE_AMOUNT", "0.001"))
     ENABLE_DYNAMIC_SCANNER = os.getenv("ENABLE_DYNAMIC_SCANNER", "False").lower() in ("true", "1", "yes")
     ENABLE_SHORTS = os.getenv("ENABLE_SHORTS", "False").lower() in ("true", "1", "yes")
     STRATEGY_NAME = os.getenv("STRATEGY_NAME", "human_mind").lower()
-    EARLY_BE_ACTIVATION_R = float(os.getenv("EARLY_BE_ACTIVATION_R", "0.60")) # Move SL to Breakeven at +0.6R
+    EARLY_BE_ACTIVATION_R = float(os.getenv("EARLY_BE_ACTIVATION_R", "1.05")) # Move SL to Breakeven after +1.05R (protect against choking)
     
     # ─── Per-Trade Risk Ladder ───
     RISK_PCT = float(os.getenv("RISK_PCT", "1.0"))
@@ -69,13 +68,13 @@ class Config:
     TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "0.015"))
     TRAILING_ATR_MULT = float(os.getenv("TRAILING_ATR_MULT", "1.5"))
     TSL_ACTIVATION_R = float(os.getenv("TSL_ACTIVATION_R", "1.0"))
-    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.3")) # Target 1: 1.3R (65%+ Win Rate)
-    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.2")) # Target 2: 2.2R (Remaining runner)
+    MIN_RISK_REWARD_RATIO = float(os.getenv("MIN_RISK_REWARD_RATIO", "1.5")) # Target 1: 1.5R (High positive expectancy)
+    RISK_REWARD_RATIO = float(os.getenv("RISK_REWARD_RATIO", "2.8")) # Target 2: 2.8R (Deep runner profit booking)
     ENABLE_RELAXED_MODE = os.getenv("ENABLE_RELAXED_MODE", "False").lower() in ("true", "1", "yes")
     MIN_SL_PCT = float(os.getenv("MIN_SL_PCT", "0.015"))
     MAX_SL_PCT = float(os.getenv("MAX_SL_PCT", "0.025"))
-    TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "0.50")) # 50% profit booking at TP1 (1.3R)
-    TP2_REMAINING_SCALE_PCT = float(os.getenv("TP2_REMAINING_SCALE_PCT", "1.0")) # 100% of remaining booked at TP2 (2.2R)
+    TP1_SCALE_OUT_PCT = float(os.getenv("TP1_SCALE_OUT_PCT", "0.40")) # 40% profit booking at TP1 (1.5R)
+    TP2_REMAINING_SCALE_PCT = float(os.getenv("TP2_REMAINING_SCALE_PCT", "1.0")) # 100% of remaining booked at TP2 (2.8R)
     MIN_VOLUME_SPIKE_MULT = float(os.getenv("MIN_VOLUME_SPIKE_MULT", "1.15")) # 1.15x 20-bar volume spike confirmation
     REQUIRE_EMA_STACK = os.getenv("REQUIRE_EMA_STACK", "True").lower() in ("true", "1", "yes")
     REQUIRE_VOLUME_CONFIRMATION = os.getenv("REQUIRE_VOLUME_CONFIRMATION", "True").lower() in ("true", "1", "yes")
